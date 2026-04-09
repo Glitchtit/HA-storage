@@ -1,0 +1,29 @@
+{
+  "name": "Storage",
+  "version": "0.1.0",
+  "slug": "ha_storage",
+  "description": "SQLite-backed central data store for the HA-apps ecosystem",
+  "url": "https://github.com/Glitchtit/HA-storage",
+  "arch": ["aarch64", "amd64", "armhf", "armv7", "i386"],
+  "startup": "system",
+  "boot": "auto",
+  "admin": false,
+  "panel_admin": false,
+  "hassio_api": false,
+  "ingress": true,
+  "ingress_port": 8099,
+  "init": false,
+  "panel_icon": "mdi:database",
+  "panel_title": "Storage",
+  "map": ["share:rw"],
+  "options": {
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.0-flash",
+    "debug": false
+  },
+  "schema": {
+    "gemini_api_key": "str",
+    "gemini_model": "str?",
+    "debug": "bool?"
+  }
+}
