@@ -44,7 +44,7 @@ export default function ShoppingList() {
       setUnits(unitRes.data);
       setRecipes(recRes.data);
     } catch (e) {
-      setError('Tietojen lataus epäonnistui');
+      setError('Failed to load data');
       console.error(e);
     } finally {
       setLoading(false);
@@ -104,7 +104,7 @@ export default function ShoppingList() {
       setShowForm(false);
       await fetchAll();
     } catch (e) {
-      setError('Lisäys epäonnistui');
+      setError('Failed to add item');
       console.error(e);
     } finally {
       setSubmitting(false);
@@ -116,7 +116,7 @@ export default function ShoppingList() {
       await updateShoppingItem(item.id, { done: !item.done });
       setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, done: !i.done } : i)));
     } catch (e) {
-      setError('Päivitys epäonnistui');
+      setError('Update failed');
       console.error(e);
     }
   };
@@ -126,7 +126,7 @@ export default function ShoppingList() {
       await deleteShoppingItem(id);
       setItems((prev) => prev.filter((i) => i.id !== id));
     } catch (e) {
-      setError('Poisto epäonnistui');
+      setError('Delete failed');
       console.error(e);
     }
   };
@@ -137,7 +137,7 @@ export default function ShoppingList() {
       await clearDoneShopping();
       setItems((prev) => prev.filter((i) => !i.done));
     } catch (e) {
-      setError('Tyhjennys epäonnistui');
+      setError('Failed to clear done items');
       console.error(e);
     }
   };
@@ -145,7 +145,7 @@ export default function ShoppingList() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+        <div className="animate-spin h-8 w-8 border-4 border-emerald-500 border-t-transparent rounded-full" />
       </div>
     );
   }
@@ -154,46 +154,46 @@ export default function ShoppingList() {
     <div className="max-w-2xl mx-auto">
       {/* Error banner */}
       {error && (
-        <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg flex items-center justify-between text-sm">
+        <div className="mb-4 p-3 bg-red-600/10 text-red-400 rounded-lg flex items-center justify-between text-sm">
           <span>{error}</span>
-          <button onClick={() => setError('')} className="ml-2 font-bold hover:text-red-900">✕</button>
+          <button onClick={() => setError('')} className="ml-2 font-bold hover:text-red-300">✕</button>
         </div>
       )}
 
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <h2 className="text-xl font-bold">🛒 Ostoslista</h2>
-        <span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+        <h2 className="text-xl font-bold">🛒 Shopping List</h2>
+        <span className="bg-emerald-600/20 text-emerald-400 text-xs font-semibold px-2 py-0.5 rounded-full">
           {items.length}
         </span>
         <div className="flex-1" />
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
         >
-          ➕ Lisää
+          ➕ Add
         </button>
         {doneCount > 0 && (
           <button
             onClick={handleClearDone}
-            className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+            className="px-3 py-1.5 text-sm bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition-colors"
           >
-            🧹 Tyhjennä valmiit ({doneCount})
+            🧹 Clear done ({doneCount})
           </button>
         )}
       </div>
 
       {/* Add item form */}
       {showForm && (
-        <form onSubmit={handleAdd} className="mb-6 p-4 bg-white border rounded-lg shadow-sm space-y-3">
-          <h3 className="font-semibold text-sm text-gray-700">Lisää tuote listalle</h3>
+        <form onSubmit={handleAdd} className="mb-6 p-4 bg-gray-800 border border-gray-700 rounded-xl shadow-lg space-y-3">
+          <h3 className="font-semibold text-sm text-gray-100">Add product to list</h3>
 
           {/* Product dropdown */}
           <div className="relative" ref={dropdownRef}>
-            <label className="block text-xs text-gray-500 mb-1">Tuote *</label>
+            <label className="block text-xs text-gray-400 mb-1">Product *</label>
             <input
               type="text"
-              placeholder="Hae tuotetta…"
+              placeholder="Search product…"
               value={productSearch}
               onChange={(e) => {
                 setProductSearch(e.target.value);
@@ -201,15 +201,15 @@ export default function ShoppingList() {
                 if (!e.target.value) setForm((f) => ({ ...f, product_id: '', unit_id: '' }));
               }}
               onFocus={() => setDropdownOpen(true)}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-400 outline-none"
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
             />
             {dropdownOpen && filteredProducts.length > 0 && (
-              <ul className="absolute z-10 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+              <ul className="absolute z-10 mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                 {filteredProducts.slice(0, 50).map((p) => (
                   <li
                     key={p.id}
                     onClick={() => selectProduct(p)}
-                    className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer"
+                    className="px-3 py-2 text-sm text-gray-100 hover:bg-gray-700 cursor-pointer"
                   >
                     {p.name}
                   </li>
@@ -221,7 +221,7 @@ export default function ShoppingList() {
           <div className="grid grid-cols-3 gap-3">
             {/* Amount */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Määrä</label>
+              <label className="block text-xs text-gray-400 mb-1">Amount</label>
               <input
                 type="number"
                 min="0"
@@ -229,30 +229,30 @@ export default function ShoppingList() {
                 placeholder="1"
                 value={form.amount}
                 onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-400 outline-none"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
               />
             </div>
 
             {/* Unit (read-only, auto from product) */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Yksikkö</label>
+              <label className="block text-xs text-gray-400 mb-1">Unit</label>
               <input
                 type="text"
                 readOnly
                 value={form.unit_id && unitMap[form.unit_id] ? unitMap[form.unit_id].name : '—'}
-                className="w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-400"
               />
             </div>
 
             {/* Note */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Huomio</label>
+              <label className="block text-xs text-gray-400 mb-1">Note</label>
               <input
                 type="text"
-                placeholder="Vapaaehtoinen"
+                placeholder="Optional"
                 value={form.note}
                 onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-400 outline-none"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
               />
             </div>
           </div>
@@ -261,16 +261,16 @@ export default function ShoppingList() {
             <button
               type="button"
               onClick={() => { setShowForm(false); setProductSearch(''); setForm({ product_id: '', amount: '', unit_id: '', note: '' }); }}
-              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800"
+              className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200"
             >
-              Peruuta
+              Cancel
             </button>
             <button
               type="submit"
               disabled={!form.product_id || submitting}
-              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {submitting ? 'Lisätään…' : 'Lisää'}
+              {submitting ? 'Adding…' : 'Add'}
             </button>
           </div>
         </form>
@@ -280,7 +280,7 @@ export default function ShoppingList() {
       {items.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <div className="text-5xl mb-3">🛒</div>
-          <p className="text-lg">Ostoslista on tyhjä</p>
+          <p className="text-lg">Shopping list is empty</p>
         </div>
       )}
 
@@ -305,7 +305,7 @@ export default function ShoppingList() {
       {doneItems.length > 0 && (
         <>
           <p className="text-xs text-gray-400 uppercase tracking-wide mb-1 mt-6">
-            Valmiit ({doneCount})
+            Done ({doneCount})
           </p>
           <ul className="space-y-1">
             {doneItems.map((item) => (
@@ -335,7 +335,7 @@ function ShoppingRow({ item, productMap, unitMap, recipeMap, onToggle, onDelete 
   return (
     <li
       className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
-        done ? 'bg-gray-50 border-gray-100' : 'bg-white border-gray-200 hover:border-gray-300'
+        done ? 'bg-gray-800/50 border-gray-700' : 'bg-gray-800 border-gray-700 hover:border-gray-600'
       }`}
     >
       {/* Checkbox */}
@@ -343,29 +343,29 @@ function ShoppingRow({ item, productMap, unitMap, recipeMap, onToggle, onDelete 
         type="checkbox"
         checked={!!done}
         onChange={() => onToggle(item)}
-        className="h-4 w-4 rounded text-blue-600 focus:ring-blue-400 cursor-pointer shrink-0"
+        className="h-4 w-4 rounded accent-emerald-500 focus:ring-emerald-500 cursor-pointer shrink-0"
       />
 
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-sm font-medium truncate ${done ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-            {product?.name ?? `Tuote #${item.product_id}`}
+          <span className={`text-sm font-medium truncate ${done ? 'line-through text-gray-500' : 'text-gray-100'}`}>
+            {product?.name ?? `Product #${item.product_id}`}
           </span>
 
-          <span className={`text-xs ${done ? 'text-gray-300' : 'text-gray-500'}`}>
+          <span className={`text-xs ${done ? 'text-gray-600' : 'text-gray-400'}`}>
             {item.amount ?? 1}{unit ? ` ${unit.name}` : ''}
           </span>
 
           {recipe && (
-            <span className="inline-flex items-center text-[11px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 leading-tight">
+            <span className="inline-flex items-center text-[11px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 leading-tight">
               🍽️ {recipe.name}
             </span>
           )}
         </div>
 
         {item.note && (
-          <p className={`text-xs mt-0.5 ${done ? 'text-gray-300' : 'text-gray-500'}`}>
+          <p className={`text-xs mt-0.5 ${done ? 'text-gray-600' : 'text-gray-400'}`}>
             {item.note}
           </p>
         )}
@@ -374,8 +374,8 @@ function ShoppingRow({ item, productMap, unitMap, recipeMap, onToggle, onDelete 
       {/* Delete */}
       <button
         onClick={() => onDelete(item.id)}
-        className="text-gray-300 hover:text-red-500 transition-colors shrink-0"
-        title="Poista"
+        className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
+        title="Delete"
       >
         🗑️
       </button>

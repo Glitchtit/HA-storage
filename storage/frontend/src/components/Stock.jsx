@@ -29,27 +29,27 @@ function daysUntil(iso) {
 
 function bbClass(iso) {
   const d = daysUntil(iso);
-  if (d < 0) return 'bg-red-100 text-red-800';
-  if (d <= 3) return 'bg-orange-100 text-orange-800';
-  if (d <= 7) return 'bg-yellow-50 text-yellow-800';
+  if (d < 0) return 'bg-red-500/20 text-red-400';
+  if (d <= 3) return 'bg-orange-500/20 text-orange-400';
+  if (d <= 7) return 'bg-yellow-500/20 text-yellow-400';
   return '';
 }
 
 function stockLevelClass(amount, min) {
-  if (min > 0 && amount < min) return 'text-red-600';
-  if (min > 0 && amount <= min * 1.25) return 'text-yellow-600';
-  return 'text-green-600';
+  if (min > 0 && amount < min) return 'text-red-400';
+  if (min > 0 && amount <= min * 1.25) return 'text-yellow-400';
+  return 'text-green-400';
 }
 
 /* ── Modal shell ─────────────────────────────────────────────────────────── */
 
 function Modal({ title, onClose, children }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <h3 className="font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+          <h3 className="font-semibold text-gray-100">{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
         </div>
         <div className="p-4">{children}</div>
       </div>
@@ -93,7 +93,7 @@ export default function Stock() {
       setProducts(pRes.data);
       setError('');
     } catch (e) {
-      setError('Varastotietojen lataus epäonnistui');
+      setError('Failed to load stock data');
       console.error(e);
     } finally {
       setLoading(false);
@@ -117,7 +117,7 @@ export default function Stock() {
   };
 
   const handleDeleteEntry = async (id) => {
-    if (!confirm('Poistetaanko varastomerkintä?')) return;
+    if (!confirm('Delete this stock entry?')) return;
     try {
       await deleteStockEntry(id);
       setEntries((prev) => prev.filter((e) => e.id !== id));
@@ -174,7 +174,7 @@ export default function Stock() {
         try { const { data } = await getProductStock(expanded); setEntries(data); } catch {}
       }
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Toiminto epäonnistui');
+      alert(err?.response?.data?.detail || 'Operation failed');
     } finally {
       setSubmitting(false);
     }
@@ -207,46 +207,46 @@ export default function Stock() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+        <div className="animate-spin h-8 w-8 border-4 border-emerald-500 border-t-transparent rounded-full" />
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {error && <div className="bg-red-50 text-red-700 px-4 py-2 rounded">{error}</div>}
+      {error && <div className="bg-red-500/20 text-red-400 px-4 py-2 rounded">{error}</div>}
 
       {/* ── Top bar ────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-2 items-center">
         <input
           type="text"
-          placeholder="🔍 Hae tuotetta…"
+          placeholder="🔍 Search products…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="border rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px] focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-500 rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px] focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
         <button
           onClick={() => openModal('add', null, null)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 transition-colors"
         >
-          ➕ Lisää varastoon
+          ➕ Add to Stock
         </button>
         <button
           onClick={() => openModal('transfer', null, null)}
-          className="bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
+          className="bg-gray-700 text-gray-300 px-4 py-2 rounded-xl text-sm font-medium hover:bg-gray-600 transition-colors"
         >
-          🔄 Siirrä
+          🔄 Transfer
         </button>
       </div>
 
       {/* ── Summary count ──────────────────────────────────────────────────── */}
       <p className="text-xs text-gray-400">
-        {filtered.length} tuotetta varastossa
+        {filtered.length} products in stock
       </p>
 
       {/* ── Product cards ──────────────────────────────────────────────────── */}
       {filtered.length === 0 && (
-        <p className="text-gray-400 text-center py-8">Ei tuloksia</p>
+        <p className="text-gray-400 text-center py-8">No results</p>
       )}
 
       <div className="space-y-2">
@@ -260,10 +260,10 @@ export default function Stock() {
           const isExpanded = expanded === pid;
 
           return (
-            <div key={pid} className="bg-white rounded-lg border shadow-sm">
+            <div key={pid} className="bg-gray-800 rounded-xl border border-gray-700 shadow">
               {/* ── Card row ───────────────────────────────────────────────── */}
               <div
-                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-700/50 transition-colors"
                 onClick={() => toggleExpand(pid)}
               >
                 {/* Thumbnail */}
@@ -275,24 +275,24 @@ export default function Stock() {
                     onError={(e) => { e.target.style.display = 'none'; }}
                   />
                 ) : (
-                  <div className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300 shrink-0">📦</div>
+                  <div className="w-10 h-10 rounded bg-gray-700 flex items-center justify-center text-gray-500 shrink-0">📦</div>
                 )}
 
                 {/* Name + badges */}
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm truncate">{pname}</p>
+                  <p className="font-medium text-sm truncate text-gray-100">{pname}</p>
                   <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                     <span className={`text-sm font-semibold ${stockLevelClass(amt, minStock)}`}>
                       {amt} {unitAbbr(item)}
                     </span>
                     {opened > 0 && (
-                      <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
-                        {opened} avattu
+                      <span className="text-xs bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded">
+                        {opened} opened
                       </span>
                     )}
                     {minStock > 0 && amt < minStock && (
-                      <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-medium">
-                        Minimi {minStock}
+                      <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-medium">
+                        Min {minStock}
                       </span>
                     )}
                   </div>
@@ -302,18 +302,18 @@ export default function Stock() {
                 <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <button
                     onClick={() => openModal('add', pid, pname)}
-                    className="p-1.5 rounded hover:bg-green-100 text-green-700 transition-colors"
-                    title="Lisää"
+                    className="p-1.5 rounded hover:bg-emerald-500/20 text-emerald-400 transition-colors"
+                    title="Add"
                   >➕</button>
                   <button
                     onClick={() => openModal('consume', pid, pname)}
-                    className="p-1.5 rounded hover:bg-orange-100 text-orange-700 transition-colors"
-                    title="Kuluta"
+                    className="p-1.5 rounded hover:bg-orange-500/20 text-orange-400 transition-colors"
+                    title="Consume"
                   >➖</button>
                   <button
                     onClick={() => openModal('open', pid, pname)}
-                    className="p-1.5 rounded hover:bg-blue-100 text-blue-700 transition-colors"
-                    title="Avaa"
+                    className="p-1.5 rounded hover:bg-blue-500/20 text-blue-400 transition-colors"
+                    title="Open"
                   >📂</button>
                 </div>
 
@@ -323,19 +323,19 @@ export default function Stock() {
 
               {/* ── Detail view ─────────────────────────────────────────────── */}
               {isExpanded && (
-                <div className="border-t px-4 py-3 bg-gray-50">
+                <div className="border-t border-gray-700 px-4 py-3 bg-gray-700/30">
                   {entries.length === 0 ? (
-                    <p className="text-sm text-gray-400">Ei varastomerkintöjä</p>
+                    <p className="text-sm text-gray-400">No stock entries</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="text-left text-xs text-gray-500 uppercase">
-                            <th className="pb-1 pr-3">Määrä</th>
-                            <th className="pb-1 pr-3">Avattu</th>
-                            <th className="pb-1 pr-3">Sijainti</th>
-                            <th className="pb-1 pr-3">Parasta ennen</th>
-                            <th className="pb-1 pr-3">Ostettu</th>
+                          <tr className="text-left text-xs text-gray-400 uppercase">
+                            <th className="pb-1 pr-3">Amount</th>
+                            <th className="pb-1 pr-3">Opened</th>
+                            <th className="pb-1 pr-3">Location</th>
+                            <th className="pb-1 pr-3">Best Before</th>
+                            <th className="pb-1 pr-3">Purchased</th>
                             <th className="pb-1"></th>
                           </tr>
                         </thead>
@@ -344,17 +344,17 @@ export default function Stock() {
                             const eu = unitMap[entry.unit_id];
                             const loc = locationMap[entry.location_id];
                             return (
-                              <tr key={entry.id} className={`border-t ${bbClass(entry.best_before_date)}`}>
-                                <td className="py-1.5 pr-3">{entry.amount} {eu?.abbreviation || eu?.name || ''}</td>
-                                <td className="py-1.5 pr-3">{entry.amount_opened || 0}</td>
-                                <td className="py-1.5 pr-3">{loc?.name || '–'}</td>
-                                <td className="py-1.5 pr-3">{fmtDate(entry.best_before_date)}</td>
-                                <td className="py-1.5 pr-3">{fmtDate(entry.purchased_date)}</td>
+                              <tr key={entry.id} className={`border-t border-gray-700 ${bbClass(entry.best_before_date)}`}>
+                                <td className="py-1.5 pr-3 text-gray-100">{entry.amount} {eu?.abbreviation || eu?.name || ''}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">{entry.amount_opened || 0}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">{loc?.name || '–'}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">{fmtDate(entry.best_before_date)}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">{fmtDate(entry.purchased_date)}</td>
                                 <td className="py-1.5 text-right">
                                   <button
                                     onClick={() => handleDeleteEntry(entry.id)}
                                     className="text-red-500 hover:text-red-700 text-xs"
-                                    title="Poista"
+                                    title="Delete"
                                   >🗑️</button>
                                 </td>
                               </tr>
@@ -373,18 +373,18 @@ export default function Stock() {
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {modal?.type === 'add' && (
-        <Modal title={modal.productName ? `Lisää – ${modal.productName}` : 'Lisää varastoon'} onClose={closeModal}>
+        <Modal title={modal.productName ? `Add – ${modal.productName}` : 'Add to Stock'} onClose={closeModal}>
           <form onSubmit={handleSubmit} className="space-y-3">
             {!modal.productId && (
               <label className="block">
-                <span className="text-sm text-gray-600">Tuote</span>
+                <span className="text-sm text-gray-400">Product</span>
                 <select
                   value={formProduct}
                   onChange={(e) => setFormProduct(e.target.value)}
                   required
-                  className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
-                  <option value="">Valitse tuote…</option>
+                  <option value="">Select product…</option>
                   {products.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
@@ -392,105 +392,105 @@ export default function Stock() {
               </label>
             )}
             <label className="block">
-              <span className="text-sm text-gray-600">Määrä</span>
+              <span className="text-sm text-gray-400">Amount</span>
               <input
                 type="number" min="0.01" step="any" value={formAmt}
                 onChange={(e) => setFormAmt(e.target.value)}
                 required
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </label>
             <label className="block">
-              <span className="text-sm text-gray-600">Sijainti</span>
+              <span className="text-sm text-gray-400">Location</span>
               <select
                 value={formLoc}
                 onChange={(e) => setFormLoc(e.target.value)}
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               >
-                <option value="">Oletussijainti</option>
+                <option value="">Default location</option>
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
               </select>
             </label>
             <label className="block">
-              <span className="text-sm text-gray-600">Parasta ennen</span>
+              <span className="text-sm text-gray-400">Best Before</span>
               <input
                 type="date" value={formBB}
                 onChange={(e) => setFormBB(e.target.value)}
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </label>
             <button
               type="submit" disabled={submitting}
-              className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              className="w-full bg-emerald-600 text-white py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
             >
-              {submitting ? 'Lisätään…' : 'Lisää'}
+              {submitting ? 'Adding…' : 'Add'}
             </button>
           </form>
         </Modal>
       )}
 
       {modal?.type === 'consume' && (
-        <Modal title={`Kuluta – ${modal.productName}`} onClose={closeModal}>
+        <Modal title={`Consume – ${modal.productName}`} onClose={closeModal}>
           <form onSubmit={handleSubmit} className="space-y-3">
             {(() => { const cs = currentStockForModal(); return cs ? (
-              <p className="text-sm text-gray-500">Varastossa: <span className="font-semibold">{cs.amount}</span></p>
+              <p className="text-sm text-gray-400">In stock: <span className="font-semibold">{cs.amount}</span></p>
             ) : null; })()}
             <label className="block">
-              <span className="text-sm text-gray-600">Määrä</span>
+              <span className="text-sm text-gray-400">Amount</span>
               <input
                 type="number" min="0.01" step="any" value={formAmt}
                 onChange={(e) => setFormAmt(e.target.value)}
                 required
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </label>
             <button
               type="submit" disabled={submitting}
-              className="w-full bg-orange-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-orange-700 disabled:opacity-50 transition-colors"
+              className="w-full bg-orange-600 text-white py-2 rounded-xl text-sm font-medium hover:bg-orange-700 disabled:opacity-50 transition-colors"
             >
-              {submitting ? 'Kulutetaan…' : 'Kuluta'}
+              {submitting ? 'Consuming…' : 'Consume'}
             </button>
           </form>
         </Modal>
       )}
 
       {modal?.type === 'open' && (
-        <Modal title={`Avaa – ${modal.productName}`} onClose={closeModal}>
+        <Modal title={`Open – ${modal.productName}`} onClose={closeModal}>
           <form onSubmit={handleSubmit} className="space-y-3">
             <label className="block">
-              <span className="text-sm text-gray-600">Määrä</span>
+              <span className="text-sm text-gray-400">Amount</span>
               <input
                 type="number" min="0.01" step="any" value={formAmt}
                 onChange={(e) => setFormAmt(e.target.value)}
                 required
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </label>
             <button
               type="submit" disabled={submitting}
-              className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              className="w-full bg-emerald-600 text-white py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
             >
-              {submitting ? 'Avataan…' : 'Avaa'}
+              {submitting ? 'Opening…' : 'Open'}
             </button>
           </form>
         </Modal>
       )}
 
       {modal?.type === 'transfer' && (
-        <Modal title={modal.productName ? `Siirrä – ${modal.productName}` : 'Siirrä tuote'} onClose={closeModal}>
+        <Modal title={modal.productName ? `Transfer – ${modal.productName}` : 'Transfer Product'} onClose={closeModal}>
           <form onSubmit={handleSubmit} className="space-y-3">
             {!modal.productId && (
               <label className="block">
-                <span className="text-sm text-gray-600">Tuote</span>
+                <span className="text-sm text-gray-400">Product</span>
                 <select
                   value={formProduct}
                   onChange={(e) => setFormProduct(e.target.value)}
                   required
-                  className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
-                  <option value="">Valitse tuote…</option>
+                  <option value="">Select product…</option>
                   {stock.map((s) => {
                     const sid = s.product_id ?? s.product?.id;
                     return <option key={sid} value={sid}>{s.product_name || s.product?.name}</option>;
@@ -499,37 +499,37 @@ export default function Stock() {
               </label>
             )}
             <label className="block">
-              <span className="text-sm text-gray-600">Määrä</span>
+              <span className="text-sm text-gray-400">Amount</span>
               <input
                 type="number" min="0.01" step="any" value={formAmt}
                 onChange={(e) => setFormAmt(e.target.value)}
                 required
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </label>
             <label className="block">
-              <span className="text-sm text-gray-600">Mistä</span>
+              <span className="text-sm text-gray-400">From</span>
               <select
                 value={formFromLoc}
                 onChange={(e) => setFormFromLoc(e.target.value)}
                 required
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               >
-                <option value="">Valitse sijainti…</option>
+                <option value="">Select location…</option>
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
               </select>
             </label>
             <label className="block">
-              <span className="text-sm text-gray-600">Minne</span>
+              <span className="text-sm text-gray-400">To</span>
               <select
                 value={formToLoc}
                 onChange={(e) => setFormToLoc(e.target.value)}
                 required
-                className="mt-1 block w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               >
-                <option value="">Valitse sijainti…</option>
+                <option value="">Select location…</option>
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
@@ -537,9 +537,9 @@ export default function Stock() {
             </label>
             <button
               type="submit" disabled={submitting}
-              className="w-full bg-gray-700 text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 transition-colors"
+              className="w-full bg-gray-600 text-white py-2 rounded-xl text-sm font-medium hover:bg-gray-500 disabled:opacity-50 transition-colors"
             >
-              {submitting ? 'Siirretään…' : 'Siirrä'}
+              {submitting ? 'Transferring…' : 'Transfer'}
             </button>
           </form>
         </Modal>
