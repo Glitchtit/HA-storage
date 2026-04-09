@@ -12,16 +12,16 @@ import BarcodeQueue from './components/BarcodeQueue';
 import Settings from './components/Settings';
 
 const TABS = [
-  { id: 'dashboard', label: '📊 Yleiskatsaus', component: Dashboard },
-  { id: 'products', label: '📦 Tuotteet', component: Products },
-  { id: 'stock', label: '🏪 Varasto', component: Stock },
-  { id: 'recipes', label: '🍽️ Reseptit', component: Recipes },
-  { id: 'shopping', label: '🛒 Ostoslista', component: ShoppingList },
-  { id: 'units', label: '📏 Yksiköt', component: Units },
-  { id: 'locations', label: '📍 Sijainnit', component: Locations },
-  { id: 'groups', label: '🏷️ Ryhmät', component: Groups },
-  { id: 'barcodes', label: '📱 Viivakoodit', component: BarcodeQueue },
-  { id: 'settings', label: '⚙️ Asetukset', component: Settings },
+  { id: 'dashboard', label: '📊 Dashboard', component: Dashboard },
+  { id: 'products', label: '📦 Products', component: Products },
+  { id: 'stock', label: '🏪 Stock', component: Stock },
+  { id: 'recipes', label: '🍽️ Recipes', component: Recipes },
+  { id: 'shopping', label: '🛒 Shopping List', component: ShoppingList },
+  { id: 'units', label: '📏 Units', component: Units },
+  { id: 'locations', label: '📍 Locations', component: Locations },
+  { id: 'groups', label: '🏷️ Groups', component: Groups },
+  { id: 'barcodes', label: '📱 Barcodes', component: BarcodeQueue },
+  { id: 'settings', label: '⚙️ Settings', component: Settings },
 ];
 
 export default function App() {
@@ -50,8 +50,8 @@ export default function App() {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="text-center">
-          <div className="animate-spin h-10 w-10 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-gray-500">Odotetaan Storage-palvelua…</p>
+          <div className="animate-spin h-10 w-10 border-4 border-emerald-500 border-t-transparent rounded-full mx-auto mb-4" />
+          <p className="text-gray-500">Waiting for Storage service…</p>
         </div>
       </div>
     );
@@ -60,15 +60,15 @@ export default function App() {
   const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component ?? Dashboard;
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-gray-900 text-gray-100">
       {/* Header */}
-      <header className="bg-white border-b px-4 py-2 flex items-center justify-between shrink-0">
+      <header className="bg-gray-900/90 backdrop-blur-md border-b border-gray-800 px-4 py-2 flex items-center justify-between shrink-0">
         <h1 className="text-lg font-bold">🗄️ Storage</h1>
         <span className="text-xs text-gray-400">v{version}</span>
       </header>
 
       {/* Tab bar */}
-      <nav className="bg-white border-b overflow-x-auto shrink-0">
+      <nav className="bg-gray-900 border-b border-gray-800 overflow-x-auto shrink-0">
         <div className="flex min-w-max px-2">
           {TABS.map((tab) => (
             <button
@@ -76,8 +76,8 @@ export default function App() {
               onClick={() => setActiveTab(tab.id)}
               className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 transition-colors ${
                 activeTab === tab.id
-                  ? 'border-blue-500 text-blue-600 font-medium'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  ? 'border-emerald-500 text-emerald-400 font-medium'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
               }`}
             >
               {tab.label}

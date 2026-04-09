@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- English UI (all Finnish labels translated)
+- Dark mode matching Stock and Recipe apps (bg-gray-900/800, emerald accents)
+
 ## 0.2.0
 
 - Ingress web UI for database management (React + Vite + Tailwind)

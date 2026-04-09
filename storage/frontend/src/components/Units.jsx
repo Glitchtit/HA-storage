@@ -37,7 +37,7 @@ export default function Units() {
       setConversions(c.data);
       setProducts(p.data);
     } catch {
-      setError('Tietojen lataus epäonnistui');
+      setError('Failed to load data');
     }
   }, []);
 
@@ -53,18 +53,18 @@ export default function Units() {
       setNamePlural('');
       await load();
     } catch {
-      setError('Yksikön lisäys epäonnistui');
+      setError('Failed to add unit');
     }
   };
 
   const handleDeleteUnit = async (id) => {
-    if (!window.confirm('Poistetaanko yksikkö?')) return;
+    if (!window.confirm('Delete this unit?')) return;
     setError('');
     try {
       await deleteUnit(id);
       await load();
     } catch {
-      setError('Yksikköä käytetään tuotteissa eikä sitä voi poistaa');
+      setError('Unit is used by products and cannot be deleted');
     }
   };
 
@@ -85,18 +85,18 @@ export default function Units() {
       setProductId('');
       await load();
     } catch {
-      setError('Muunnoksen lisäys epäonnistui');
+      setError('Failed to add conversion');
     }
   };
 
   const handleDeleteConversion = async (id) => {
-    if (!window.confirm('Poistetaanko muunnos?')) return;
+    if (!window.confirm('Delete this conversion?')) return;
     setError('');
     try {
       await deleteConversion(id);
       await load();
     } catch {
-      setError('Muunnoksen poisto epäonnistui');
+      setError('Failed to delete conversion');
     }
   };
 
@@ -106,37 +106,37 @@ export default function Units() {
   return (
     <div className="space-y-8 max-w-4xl">
       {error && (
-        <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-2 rounded">
+        <div className="bg-red-500/20 border border-red-500/30 text-red-400 px-4 py-2 rounded-lg">
           {error}
         </div>
       )}
 
       {/* ── Units ──────────────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold mb-3">📏 Yksiköt</h2>
+        <h2 className="text-lg font-semibold mb-3 text-gray-100">📏 Units</h2>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-gray-200 rounded">
-            <thead className="bg-gray-50">
+          <table className="w-full text-sm bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+            <thead className="bg-gray-700/50">
               <tr>
-                <th className="text-left px-3 py-2">Nimi</th>
-                <th className="text-left px-3 py-2">Lyhenne</th>
-                <th className="text-left px-3 py-2">Monikko</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Name</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Abbreviation</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Plural</th>
                 <th className="px-3 py-2 w-20" />
               </tr>
             </thead>
             <tbody>
               {units.map((u) => (
-                <tr key={u.id} className="border-t border-gray-100 hover:bg-gray-50">
+                <tr key={u.id} className="border-b border-gray-700 hover:bg-gray-700/50 text-gray-100">
                   <td className="px-3 py-2">{u.name}</td>
                   <td className="px-3 py-2">{u.abbreviation}</td>
                   <td className="px-3 py-2">{u.name_plural}</td>
                   <td className="px-3 py-2 text-right">
                     <button
                       onClick={() => handleDeleteUnit(u.id)}
-                      className="text-red-500 hover:text-red-700 text-xs"
+                      className="text-red-400 hover:text-red-300 text-xs"
                     >
-                      Poista
+                      Delete
                     </button>
                   </td>
                 </tr>
@@ -144,7 +144,7 @@ export default function Units() {
               {units.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-3 py-4 text-gray-400 text-center">
-                    Ei yksiköitä
+                    No units
                   </td>
                 </tr>
               )}
@@ -154,69 +154,69 @@ export default function Units() {
 
         <form onSubmit={handleAddUnit} className="mt-3 flex flex-wrap gap-2 items-end">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Nimi</label>
+            <label className="block text-xs text-gray-400 mb-1">Name</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              className="border rounded px-2 py-1 text-sm w-36"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-36"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Lyhenne</label>
+            <label className="block text-xs text-gray-400 mb-1">Abbreviation</label>
             <input
               value={abbreviation}
               onChange={(e) => setAbbreviation(e.target.value)}
-              className="border rounded px-2 py-1 text-sm w-24"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-24"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Monikko</label>
+            <label className="block text-xs text-gray-400 mb-1">Plural</label>
             <input
               value={namePlural}
               onChange={(e) => setNamePlural(e.target.value)}
-              className="border rounded px-2 py-1 text-sm w-36"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-36"
             />
           </div>
           <button
             type="submit"
-            className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600"
+            className="bg-emerald-600 text-white px-3 py-1 rounded-xl text-sm hover:bg-emerald-700"
           >
-            Lisää yksikkö
+            Add Unit
           </button>
         </form>
       </section>
 
       {/* ── Conversions ────────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold mb-3">🔄 Muunnokset</h2>
+        <h2 className="text-lg font-semibold mb-3 text-gray-100">🔄 Conversions</h2>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-gray-200 rounded">
-            <thead className="bg-gray-50">
+          <table className="w-full text-sm bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+            <thead className="bg-gray-700/50">
               <tr>
-                <th className="text-left px-3 py-2">Yksiköstä</th>
-                <th className="text-left px-3 py-2">Yksikköön</th>
-                <th className="text-left px-3 py-2">Kerroin</th>
-                <th className="text-left px-3 py-2">Tuote</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">From Unit</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">To Unit</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Factor</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Product</th>
                 <th className="px-3 py-2 w-20" />
               </tr>
             </thead>
             <tbody>
               {conversions.map((c) => (
-                <tr key={c.id} className="border-t border-gray-100 hover:bg-gray-50">
+                <tr key={c.id} className="border-b border-gray-700 hover:bg-gray-700/50 text-gray-100">
                   <td className="px-3 py-2">{unitName(c.from_unit_id)}</td>
                   <td className="px-3 py-2">{unitName(c.to_unit_id)}</td>
                   <td className="px-3 py-2">{c.factor}</td>
-                  <td className="px-3 py-2 text-gray-500">
+                  <td className="px-3 py-2 text-gray-400">
                     {c.product_id ? productName(c.product_id) : '—'}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <button
                       onClick={() => handleDeleteConversion(c.id)}
-                      className="text-red-500 hover:text-red-700 text-xs"
+                      className="text-red-400 hover:text-red-300 text-xs"
                     >
-                      Poista
+                      Delete
                     </button>
                   </td>
                 </tr>
@@ -224,7 +224,7 @@ export default function Units() {
               {conversions.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-3 py-4 text-gray-400 text-center">
-                    Ei muunnoksia
+                    No conversions
                   </td>
                 </tr>
               )}
@@ -234,52 +234,52 @@ export default function Units() {
 
         <form onSubmit={handleAddConversion} className="mt-3 flex flex-wrap gap-2 items-end">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Yksiköstä</label>
+            <label className="block text-xs text-gray-400 mb-1">From Unit</label>
             <select
               value={fromUnitId}
               onChange={(e) => setFromUnitId(e.target.value)}
               required
-              className="border rounded px-2 py-1 text-sm w-36"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-36"
             >
-              <option value="">Valitse…</option>
+              <option value="">Select…</option>
               {units.map((u) => (
                 <option key={u.id} value={u.id}>{u.name}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Yksikköön</label>
+            <label className="block text-xs text-gray-400 mb-1">To Unit</label>
             <select
               value={toUnitId}
               onChange={(e) => setToUnitId(e.target.value)}
               required
-              className="border rounded px-2 py-1 text-sm w-36"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-36"
             >
-              <option value="">Valitse…</option>
+              <option value="">Select…</option>
               {units.map((u) => (
                 <option key={u.id} value={u.id}>{u.name}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Kerroin</label>
+            <label className="block text-xs text-gray-400 mb-1">Factor</label>
             <input
               type="number"
               step="any"
               value={factor}
               onChange={(e) => setFactor(e.target.value)}
               required
-              className="border rounded px-2 py-1 text-sm w-24"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-24"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Tuote (valinnainen)</label>
+            <label className="block text-xs text-gray-400 mb-1">Product (optional)</label>
             <select
               value={productId}
               onChange={(e) => setProductId(e.target.value)}
-              className="border rounded px-2 py-1 text-sm w-44"
+              className="bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none rounded-lg px-2 py-1 text-sm w-44"
             >
-              <option value="">Yleinen</option>
+              <option value="">Global</option>
               {products.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -287,9 +287,9 @@ export default function Units() {
           </div>
           <button
             type="submit"
-            className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600"
+            className="bg-emerald-600 text-white px-3 py-1 rounded-xl text-sm hover:bg-emerald-700"
           >
-            Lisää muunnos
+            Add Conversion
           </button>
         </form>
       </section>

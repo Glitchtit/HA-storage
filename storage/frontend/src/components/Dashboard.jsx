@@ -9,19 +9,19 @@ import {
 
 function StatCard({ icon, label, value, accent = 'blue' }) {
   const colors = {
-    blue: 'text-blue-600 bg-blue-50',
-    green: 'text-green-600 bg-green-50',
-    purple: 'text-purple-600 bg-purple-50',
-    orange: 'text-orange-600 bg-orange-50',
+    blue: 'text-emerald-400 bg-emerald-500/20',
+    green: 'text-green-400 bg-green-500/20',
+    purple: 'text-purple-400 bg-purple-500/20',
+    orange: 'text-orange-400 bg-orange-500/20',
   };
   return (
-    <div className="bg-white rounded-lg shadow p-4 flex items-center gap-4">
+    <div className="bg-gray-800 rounded-lg shadow p-4 flex items-center gap-4">
       <div className={`text-2xl w-12 h-12 rounded-lg flex items-center justify-center ${colors[accent] ?? colors.blue}`}>
         {icon}
       </div>
       <div>
-        <p className="text-sm text-gray-500">{label}</p>
-        <p className="text-2xl font-bold text-gray-900">{value ?? '—'}</p>
+        <p className="text-sm text-gray-400">{label}</p>
+        <p className="text-2xl font-bold text-gray-100">{value ?? '—'}</p>
       </div>
     </div>
   );
@@ -111,7 +111,7 @@ export default function Dashboard() {
       setPendingBarcodes(Array.isArray(barcodes) ? barcodes.length : 0);
     } catch (err) {
       console.error('Dashboard fetch error:', err);
-      setError('Tietojen lataus epäonnistui.');
+      setError('Failed to load data.');
     } finally {
       setLoading(false);
     }
@@ -125,8 +125,8 @@ export default function Dashboard() {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
-          <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-3" />
-          <p className="text-gray-500">Ladataan...</p>
+          <div className="animate-spin h-8 w-8 border-4 border-emerald-500 border-t-transparent rounded-full mx-auto mb-3" />
+          <p className="text-gray-500">Loading...</p>
         </div>
       </div>
     );
@@ -134,13 +134,13 @@ export default function Dashboard() {
 
   if (error) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700 text-center">
+      <div className="bg-gray-800 border border-red-500/30 rounded-lg p-4 text-red-400 text-center">
         <p>{error}</p>
         <button
           onClick={fetchData}
           className="mt-2 px-4 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
         >
-          Yritä uudelleen
+          Retry
         </button>
       </div>
     );
@@ -150,12 +150,12 @@ export default function Dashboard() {
     <div className="space-y-6 max-w-5xl mx-auto">
       {/* Stats cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon="📦" label="Tuotteet" value={stats?.products} accent="blue" />
-        <StatCard icon="🏪" label="Varastossa" value={stats?.inStock} accent="green" />
-        <StatCard icon="🍽️" label="Reseptit" value={stats?.recipes} accent="purple" />
+        <StatCard icon="📦" label="Products" value={stats?.products} accent="blue" />
+        <StatCard icon="🏪" label="In Stock" value={stats?.inStock} accent="green" />
+        <StatCard icon="🍽️" label="Recipes" value={stats?.recipes} accent="purple" />
         <StatCard
           icon="🛒"
-          label="Ostoslista"
+          label="Shopping List"
           value={stats?.shopping}
           accent="orange"
         />
@@ -163,15 +163,15 @@ export default function Dashboard() {
 
       {/* Pending barcodes badge */}
       {pendingBarcodes > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
+        <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-4 flex items-center gap-3">
           <span className="text-xl">📱</span>
           <div className="flex-1">
-            <p className="font-medium text-blue-900">Odottavia viivakoodeja</p>
-            <p className="text-sm text-blue-700">
-              {pendingBarcodes} viivakoodia odottaa tunnistusta
+            <p className="font-medium text-emerald-400">Pending Barcodes</p>
+            <p className="text-sm text-emerald-400/70">
+              {pendingBarcodes} barcodes awaiting identification
             </p>
           </div>
-          <span className="bg-blue-600 text-white text-sm font-bold px-2.5 py-0.5 rounded-full">
+          <span className="bg-emerald-600 text-white text-sm font-bold px-2.5 py-0.5 rounded-full">
             {pendingBarcodes}
           </span>
         </div>
@@ -179,44 +179,44 @@ export default function Dashboard() {
 
       {/* Low stock alerts */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-900 mb-3">
-          ⚠️ Vähissä olevat tuotteet
+        <h2 className="text-lg font-semibold text-gray-100 mb-3">
+          ⚠️ Low Stock Alerts
         </h2>
         {lowStock.length === 0 ? (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-green-700 text-sm">
-            Kaikki tuotteet ovat riittävällä tasolla 👍
+          <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-4 text-emerald-400 text-sm">
+            All products are sufficiently stocked 👍
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="bg-gray-800 rounded-lg shadow overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-orange-50 text-orange-800">
+              <thead className="bg-gray-800/50 text-gray-400 text-xs uppercase">
                 <tr>
-                  <th className="text-left px-4 py-2 font-medium">Tuote</th>
-                  <th className="text-right px-4 py-2 font-medium">Määrä</th>
-                  <th className="text-right px-4 py-2 font-medium">Minimi</th>
-                  <th className="text-right px-4 py-2 font-medium">Puuttuu</th>
+                  <th className="text-left px-4 py-2 font-medium">Product</th>
+                  <th className="text-right px-4 py-2 font-medium">Amount</th>
+                  <th className="text-right px-4 py-2 font-medium">Minimum</th>
+                  <th className="text-right px-4 py-2 font-medium">Deficit</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-700">
                 {lowStock.map((item) => {
                   const deficit = item.min_stock_amount - item.amount;
                   const critical = item.amount === 0;
                   return (
                     <tr
                       key={item.product_id}
-                      className={critical ? 'bg-red-50' : 'bg-orange-50/30'}
+                      className={critical ? 'bg-red-500/10' : 'bg-orange-500/10'}
                     >
-                      <td className="px-4 py-2 font-medium text-gray-900">
+                      <td className="px-4 py-2 font-medium text-gray-100">
                         {item.product_name ?? `#${item.product_id}`}
                       </td>
-                      <td className={`px-4 py-2 text-right font-bold ${critical ? 'text-red-600' : 'text-orange-600'}`}>
+                      <td className={`px-4 py-2 text-right font-bold ${critical ? 'text-red-400' : 'text-orange-400'}`}>
                         {item.amount}
                       </td>
-                      <td className="px-4 py-2 text-right text-gray-500">
+                      <td className="px-4 py-2 text-right text-gray-400">
                         {item.min_stock_amount}
                       </td>
                       <td className="px-4 py-2 text-right">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${critical ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${critical ? 'bg-red-500/20 text-red-400' : 'bg-orange-500/20 text-orange-400'}`}>
                           −{deficit}
                         </span>
                       </td>
@@ -231,40 +231,40 @@ export default function Dashboard() {
 
       {/* Expiring soon */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-900 mb-3">
-          🕐 Vanhenemassa pian
+        <h2 className="text-lg font-semibold text-gray-100 mb-3">
+          🕐 Expiring Soon
         </h2>
         {expiring.length === 0 ? (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-green-700 text-sm">
-            Ei vanhentuvia tuotteita seuraavan 7 päivän aikana 👍
+          <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-4 text-emerald-400 text-sm">
+            No products expiring within the next 7 days 👍
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="bg-gray-800 rounded-lg shadow overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-yellow-50 text-yellow-800">
+              <thead className="bg-gray-800/50 text-gray-400 text-xs uppercase">
                 <tr>
-                  <th className="text-left px-4 py-2 font-medium">Tuote</th>
-                  <th className="text-right px-4 py-2 font-medium">Parasta ennen</th>
-                  <th className="text-right px-4 py-2 font-medium">Päiviä jäljellä</th>
+                  <th className="text-left px-4 py-2 font-medium">Product</th>
+                  <th className="text-right px-4 py-2 font-medium">Best Before</th>
+                  <th className="text-right px-4 py-2 font-medium">Days Left</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-700">
                 {expiring.map((item) => {
                   const expired = item._days <= 0;
                   return (
                     <tr
                       key={`${item.product_id}-${item._bbd}`}
-                      className={expired ? 'bg-red-50' : 'bg-yellow-50/30'}
+                      className={expired ? 'bg-red-500/10' : 'bg-yellow-500/10'}
                     >
-                      <td className="px-4 py-2 font-medium text-gray-900">
+                      <td className="px-4 py-2 font-medium text-gray-100">
                         {item.product_name ?? `#${item.product_id}`}
                       </td>
-                      <td className="px-4 py-2 text-right text-gray-600">
+                      <td className="px-4 py-2 text-right text-gray-400">
                         {formatDate(item._bbd)}
                       </td>
                       <td className="px-4 py-2 text-right">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${expired ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                          {expired ? `Vanhentunut ${Math.abs(item._days)} pv sitten` : `${item._days} pv`}
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${expired ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                          {expired ? `Expired ${Math.abs(item._days)}d ago` : `${item._days}d`}
                         </span>
                       </td>
                     </tr>
