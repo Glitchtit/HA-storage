@@ -3,3 +3,4 @@ __pycache__/
 *.pyo
 *.db
 .env
+storage/frontend/node_modules/

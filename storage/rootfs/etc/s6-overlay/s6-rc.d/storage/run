@@ -1,20 +1,18 @@
 #!/command/with-contenv bashio
 
-bashio::log.info "Starting HA-Storage addon..."
+bashio::log.info "Starting Storage nginx on port 8099..."
 
-# Read config
-GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
-GEMINI_MODEL=$(bashio::config 'gemini_model')
-DEBUG=$(bashio::config 'debug')
+# Copy nginx template (no envsubst needed — static config)
+cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
 
-export GEMINI_API_KEY
-export GEMINI_MODEL
-export DEBUG
+# Wait for FastAPI to be ready
+for i in $(seq 1 30); do
+    if curl -sf http://127.0.0.1:8100/api/health > /dev/null 2>&1; then
+        bashio::log.info "Storage API is ready."
+        break
+    fi
+    bashio::log.info "Waiting for Storage API (attempt ${i}/30)..."
+    sleep 2
+done
 
-# Data directory for SQLite DB and images (persisted across restarts)
-export DATA_DIR="/data"
-mkdir -p "${DATA_DIR}/images/products" "${DATA_DIR}/images/recipes"
-
-bashio::log.info "Database: ${DATA_DIR}/storage.db"
-
-exec python3 /app/main.py
+exec nginx -g "daemon off;"
