@@ -1,0 +1,168 @@
+"""HA-Storage FastAPI application entry point."""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from database import get_db, init_db
+from models import HealthResponse
+
+# ── Logging ────────────────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.DEBUG if os.getenv("DEBUG", "").lower() == "true" else logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+log = logging.getLogger(__name__)
+
+# ── Constants ──────────────────────────────────────────────────────────────
+
+VERSION = "0.1.0"
+DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
+DB_PATH = DATA_DIR / "storage.db"
+
+# ── Database lifecycle ─────────────────────────────────────────────────────
+
+_db = None
+
+
+def get_connection():
+    """Return the shared database connection."""
+    global _db
+    if _db is None:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _db = get_db(DB_PATH)
+        init_db(_db)
+        _seed_config(_db)
+    return _db
+
+
+def _seed_config(conn):
+    """Write addon config values to the config table."""
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    if api_key:
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('gemini_api_key', ?)",
+            (api_key,),
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('gemini_model', ?)",
+        (model,),
+    )
+    conn.commit()
+
+
+# ── FastAPI app ────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    conn = get_connection()
+    tables = conn.execute(
+        "SELECT count(*) as cnt FROM sqlite_master WHERE type='table'"
+    ).fetchone()
+    log.info("Storage v%s ready — %d tables in DB.", VERSION, tables["cnt"])
+    yield
+    # Shutdown
+    global _db
+    if _db:
+        _db.close()
+        _db = None
+
+
+app = FastAPI(
+    title="HA-Storage",
+    version=VERSION,
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Ingress path rewrite middleware ────────────────────────────────────────
+
+@app.middleware("http")
+async def ingress_path_middleware(request: Request, call_next):
+    """Strip HA ingress path prefix so routes match."""
+    ingress_path = request.headers.get("X-Ingress-Path", "")
+    if ingress_path and request.url.path.startswith(ingress_path):
+        scope = request.scope
+        scope["path"] = request.url.path[len(ingress_path):]
+    return await call_next(request)
+
+
+# ── Health endpoint ────────────────────────────────────────────────────────
+
+@app.get("/api/health", response_model=HealthResponse)
+def health():
+    conn = get_connection()
+    tables = conn.execute(
+        "SELECT count(*) as cnt FROM sqlite_master WHERE type='table'"
+    ).fetchone()
+    return HealthResponse(status="ok", version=VERSION, db_tables=tables["cnt"])
+
+
+# ── Include routers ───────────────────────────────────────────────────────
+
+from routers import (
+    products,
+    stock,
+    barcodes,
+    units,
+    locations,
+    groups,
+    recipes,
+    shopping,
+    files,
+    config,
+    migrate,
+)
+
+app.include_router(products.router, prefix="/api")
+app.include_router(stock.router, prefix="/api")
+app.include_router(barcodes.router, prefix="/api")
+app.include_router(units.router, prefix="/api")
+app.include_router(locations.router, prefix="/api")
+app.include_router(groups.router, prefix="/api")
+app.include_router(recipes.router, prefix="/api")
+app.include_router(shopping.router, prefix="/api")
+app.include_router(files.router, prefix="/api")
+app.include_router(config.router, prefix="/api")
+app.include_router(migrate.router, prefix="/api")
+
+
+# ── Error handler ──────────────────────────────────────────────────────────
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    log.exception("Unhandled error: %s", exc)
+    return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ── Main ───────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8099,
+        log_level="debug" if os.getenv("DEBUG", "").lower() == "true" else "info",
+    )
