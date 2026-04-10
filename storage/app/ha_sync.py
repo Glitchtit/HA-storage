@@ -6,7 +6,7 @@ import logging
 import os
 import sqlite3
 
-import requests
+import httpx
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def ha_ensure_entity(conn: sqlite3.Connection) -> bool:
 
     # Check if entity already exists
     try:
-        resp = requests.get(f"{_HA_BASE}/states/{entity_id}", headers=hdrs, timeout=5)
+        resp = httpx.get(f"{_HA_BASE}/states/{entity_id}", headers=hdrs, timeout=5)
         if resp.status_code == 200:
             return True
         if resp.status_code != 404:
@@ -58,13 +58,13 @@ def ha_ensure_entity(conn: sqlite3.Connection) -> bool:
     try:
         # Determine list name from entity_id (reverse: todo.smart_shopping_list → Smart shopping list)
         # Use stored list name or derive it
-        r1 = requests.post(
+        r1 = httpx.post(
             f"{_HA_BASE}/config/config_entries/flow",
             headers=hdrs,
             json={"handler": "local_todo"},
             timeout=10,
         )
-        if not r1.ok:
+        if not r1.is_success:
             log.warning("HA local_todo flow init failed: %d %s", r1.status_code, r1.text[:200])
             return False
         flow = r1.json()
@@ -73,13 +73,13 @@ def ha_ensure_entity(conn: sqlite3.Connection) -> bool:
             log.warning("HA flow response missing flow_id: %s", flow)
             return False
 
-        r2 = requests.post(
+        r2 = httpx.post(
             f"{_HA_BASE}/config/config_entries/flow/{flow_id}",
             headers=hdrs,
             json={"name": list_name},
             timeout=10,
         )
-        if r2.ok:
+        if r2.is_success:
             log.info("Created HA to-do list '%s' (entity: %s)", list_name, entity_id)
             return True
         log.warning("HA flow submit failed: %d %s", r2.status_code, r2.text[:200])
@@ -98,13 +98,13 @@ def ha_add_item(conn: sqlite3.Connection, item_name: str, description: str = "")
         payload: dict = {"entity_id": entity_id, "item": item_name}
         if description:
             payload["description"] = description
-        resp = requests.post(
+        resp = httpx.post(
             f"{_HA_BASE}/services/todo/add_item",
             headers=hdrs,
             json=payload,
             timeout=5,
         )
-        if not resp.ok:
+        if not resp.is_success:
             log.warning("HA add_item failed for '%s': %d", item_name, resp.status_code)
     except Exception as exc:
         log.warning("HA add_item error: %s", exc)
@@ -117,13 +117,13 @@ def ha_remove_item(conn: sqlite3.Connection, item_name: str) -> None:
         return
     entity_id = _entity(conn)
     try:
-        resp = requests.post(
+        resp = httpx.post(
             f"{_HA_BASE}/services/todo/remove_item",
             headers=hdrs,
             json={"entity_id": entity_id, "item": item_name},
             timeout=5,
         )
-        if not resp.ok and resp.status_code != 404:
+        if not resp.is_success and resp.status_code != 404:
             log.warning("HA remove_item failed for '%s': %d", item_name, resp.status_code)
     except Exception as exc:
         log.warning("HA remove_item error: %s", exc)
@@ -145,13 +145,13 @@ def _ha_update_status(conn: sqlite3.Connection, item_name: str, status: str) -> 
         return
     entity_id = _entity(conn)
     try:
-        resp = requests.post(
+        resp = httpx.post(
             f"{_HA_BASE}/services/todo/update_item",
             headers=hdrs,
             json={"entity_id": entity_id, "item": item_name, "status": status},
             timeout=5,
         )
-        if not resp.ok:
+        if not resp.is_success:
             log.warning("HA update_item(%s) failed for '%s': %d", status, item_name, resp.status_code)
     except Exception as exc:
         log.warning("HA update_item error: %s", exc)
