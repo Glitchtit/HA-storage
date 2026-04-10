@@ -22,6 +22,9 @@ COPY --from=frontend-builder /app/dist /var/www/html
 # nginx config template
 COPY nginx.conf.template /etc/nginx/nginx.conf.template
 
+# Addon manifest (version is read from here at runtime)
+COPY config.json /config.json
+
 # FastAPI app
 COPY app/ /app/
 

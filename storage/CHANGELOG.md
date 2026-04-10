@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.3
+- Fix version always showing 0.0.0: copy config.json into Docker image at /config.json
+
 ## 0.3.2
 - Fix HA To-do sync: add `homeassistant_api: true` to config.json (was missing, blocked all HA Core API calls)
 - Remove unreliable config flow auto-creation of To-do entity (not supported via HA API)
