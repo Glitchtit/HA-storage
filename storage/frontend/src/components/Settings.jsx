@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { getHealth, getAiKey, setConfig, migrateFromGrocy } from '../api';
+import { useState, useEffect, useRef } from 'react';
+import { getHealth, getAiKey, setConfig, migrateFromGrocy, scraperDiscover, scraperTask } from '../api';
 
 export default function Settings() {
   // Database info
@@ -11,11 +11,18 @@ export default function Settings() {
   const [aiKeyInput, setAiKeyInput] = useState('');
   const [aiModelInput, setAiModelInput] = useState('');
   const [savingAi, setSavingAi] = useState(false);
-  // Grocy migration
+  // Grocy import
   const [grocyUrl, setGrocyUrl] = useState('');
   const [grocyApiKey, setGrocyApiKey] = useState('');
-  const [migrating, setMigrating] = useState(false);
-  const [migrationResult, setMigrationResult] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importPhase, setImportPhase] = useState('');
+  const [importResult, setImportResult] = useState(null);
+  const [discoverLogs, setDiscoverLogs] = useState([]);
+  const pollRef = useRef(null);
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,23 +68,71 @@ export default function Settings() {
     }
   };
 
-  const handleMigration = async () => {
+  const handleImport = async () => {
     if (!grocyUrl.trim() || !grocyApiKey.trim()) return;
-    setMigrating(true);
-    setMigrationResult(null);
+    setImporting(true);
+    setImportResult(null);
+    setDiscoverLogs([]);
+
+    // Phase 1: Queue barcodes
+    setImportPhase('Fetching barcodes from Grocy…');
+    let queueResult;
     try {
       const { data } = await migrateFromGrocy({
         grocy_url: grocyUrl.trim(),
         api_key: grocyApiKey.trim(),
       });
-      setMigrationResult(data);
+      queueResult = data;
+      setImportResult(data);
     } catch (err) {
-      setMigrationResult({
+      setImportResult({
         error: err.response?.data?.detail ?? err.message ?? 'Unknown error',
       });
-    } finally {
-      setMigrating(false);
+      setImporting(false);
+      setImportPhase('');
+      return;
     }
+
+    // Phase 2: Trigger scraper discover if we queued any barcodes
+    if ((queueResult.barcodes_queued ?? 0) > 0) {
+      setImportPhase('Creating products from barcodes…');
+      try {
+        const { data: taskData } = await scraperDiscover();
+        const taskId = taskData.task_id;
+
+        if (taskId) {
+          // Poll scraper task until done
+          await new Promise((resolve) => {
+            pollRef.current = setInterval(async () => {
+              try {
+                const { data: status } = await scraperTask(taskId);
+                if (status.logs) setDiscoverLogs(status.logs);
+                if (status.status === 'done') {
+                  clearInterval(pollRef.current);
+                  pollRef.current = null;
+                  setImportResult((prev) => ({
+                    ...prev,
+                    discover_done: true,
+                    discover_success: status.success !== false,
+                  }));
+                  resolve();
+                }
+              } catch {
+                // Keep polling on transient errors
+              }
+            }, 3000);
+          });
+        }
+      } catch (err) {
+        setImportResult((prev) => ({
+          ...prev,
+          discover_error: err.response?.data?.error ?? err.message ?? 'Scraper not reachable',
+        }));
+      }
+    }
+
+    setImporting(false);
+    setImportPhase('');
   };
 
   return (
@@ -180,14 +235,13 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Grocy barcode import card */}
+      {/* Grocy import card */}
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-5 space-y-4">
         <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Import from Grocy</h3>
 
         <p className="text-sm text-gray-400">
-          Imports barcodes and stock amounts from Grocy into the barcode queue.
-          Run the Scraper with <code className="text-emerald-400">--discover</code> afterwards
-          to create products with images, AI grouping, and conversions.
+          Imports barcodes and stock from Grocy, then automatically creates products
+          with images, AI grouping, and conversions via the Scraper.
         </p>
 
         <div className="space-y-3">
@@ -212,38 +266,62 @@ export default function Settings() {
             />
           </div>
           <button
-            onClick={handleMigration}
-            disabled={migrating || !grocyUrl.trim() || !grocyApiKey.trim()}
+            onClick={handleImport}
+            disabled={importing || !grocyUrl.trim() || !grocyApiKey.trim()}
             className="bg-emerald-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {migrating ? 'Importing…' : 'Import Barcodes'}
+            {importing ? 'Importing…' : 'Import from Grocy'}
           </button>
         </div>
 
-        {/* Import results */}
-        {migrationResult && (
+        {/* Progress */}
+        {importing && importPhase && (
+          <div className="flex items-center gap-2 text-sm text-gray-400">
+            <svg className="animate-spin h-4 w-4 text-emerald-400" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
+            </svg>
+            {importPhase}
+          </div>
+        )}
+
+        {/* Discover logs */}
+        {discoverLogs.length > 0 && (
+          <div className="bg-gray-900 rounded px-3 py-2 text-xs font-mono text-gray-400 max-h-48 overflow-y-auto">
+            {discoverLogs.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+        )}
+
+        {/* Results */}
+        {importResult && !importing && (
           <div className="mt-4 space-y-3">
-            {migrationResult.error ? (
+            {importResult.error ? (
               <div className="bg-red-500/20 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400">
-                Error: {migrationResult.error}
+                Error: {importResult.error}
               </div>
             ) : (
               <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg px-4 py-3 text-sm text-emerald-400 space-y-1">
-                <p>✅ {migrationResult.barcodes_queued ?? 0} barcode(s) queued for discovery</p>
-                {(migrationResult.barcodes_skipped ?? 0) > 0 && (
-                  <p className="text-gray-400">{migrationResult.barcodes_skipped} already known — skipped</p>
+                <p>✅ {importResult.barcodes_queued ?? 0} barcode(s) imported from Grocy</p>
+                {(importResult.barcodes_skipped ?? 0) > 0 && (
+                  <p className="text-gray-400">{importResult.barcodes_skipped} already known — skipped</p>
                 )}
-                <p className="text-gray-400 text-xs mt-2">
-                  Run the Scraper with --discover to create products from the queue.
-                </p>
+                {importResult.discover_done && importResult.discover_success && (
+                  <p>✅ Products created with images and AI optimization</p>
+                )}
+                {importResult.discover_done && !importResult.discover_success && (
+                  <p className="text-yellow-400">⚠️ Discover completed with some errors — check scraper logs</p>
+                )}
+                {importResult.discover_error && (
+                  <p className="text-yellow-400">⚠️ Could not reach Scraper: {importResult.discover_error}</p>
+                )}
               </div>
             )}
 
-            {Array.isArray(migrationResult.errors) && migrationResult.errors.length > 0 && (
+            {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
               <div className="bg-red-500/20 border border-red-500/30 rounded-lg px-4 py-3 space-y-1">
-                <h4 className="text-sm font-medium text-red-400">Errors ({migrationResult.errors.length})</h4>
+                <h4 className="text-sm font-medium text-red-400">Errors ({importResult.errors.length})</h4>
                 <ul className="text-xs text-red-400 list-disc list-inside max-h-40 overflow-y-auto">
-                  {migrationResult.errors.map((err, i) => (
+                  {importResult.errors.map((err, i) => (
                     <li key={i}>{typeof err === 'string' ? err : JSON.stringify(err)}</li>
                   ))}
                 </ul>

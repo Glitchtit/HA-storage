@@ -2,8 +2,74 @@
 
 bashio::log.info "Starting Storage nginx on port 8099..."
 
-# Copy nginx template (no envsubst needed — static config)
-cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+# ── Grocy Scraper auto-detect ────────────────────────────────────────────
+SCRAPER_URL=""
+
+if bashio::config.has_value 'scraper_url'; then
+    SCRAPER_URL=$(bashio::config 'scraper_url')
+    bashio::log.info "Scraper URL (from config): ${SCRAPER_URL}"
+else
+    bashio::log.info "Attempting auto-detect of Grocy Scraper addon..."
+
+    MY_HOSTNAME="${HOSTNAME:-}"
+    [ -z "${MY_HOSTNAME}" ] && MY_HOSTNAME=$(hostname 2>/dev/null) || true
+
+    if [ -n "${MY_HOSTNAME}" ]; then
+        MY_HOSTNAME_NORM=$(echo "${MY_HOSTNAME}" | tr '_' '-')
+        REPO_PREFIX="${MY_HOSTNAME_NORM%%-ha-storage}"
+        if [ "${REPO_PREFIX}" != "${MY_HOSTNAME_NORM}" ] && [ -n "${REPO_PREFIX}" ]; then
+            for CANDIDATE in "${REPO_PREFIX}-grocy-scraper" "${REPO_PREFIX}_grocy_scraper"; do
+                bashio::log.info "Probing scraper at ${CANDIDATE}:8099 ..."
+                if curl -sf --max-time 3 "http://${CANDIDATE}:8099/api/config" >/dev/null 2>&1; then
+                    SCRAPER_URL="http://${CANDIDATE}:8099"
+                    bashio::log.info "Scraper URL (auto-detected via hostname): ${SCRAPER_URL}"
+                    break
+                fi
+            done
+        fi
+    fi
+
+    if [ -z "${SCRAPER_URL}" ] && [ -n "${SUPERVISOR_TOKEN}" ]; then
+        SCRAPER_SLUG=""
+        SCRAPER_SLUG=$(curl -sf --max-time 5 \
+            -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+            http://supervisor/addons \
+            | jq -r '
+                [.data.addons[]?
+                 | select(.slug | test("grocy.scraper"; "i"))
+                ][0].slug // empty
+            ' \
+        ) || true
+
+        if [ -n "${SCRAPER_SLUG}" ]; then
+            SCRAPER_IP=$(curl -sf --max-time 5 \
+                -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+                "http://supervisor/addons/${SCRAPER_SLUG}/info" \
+                | jq -r '.data.ip_address // empty' \
+            ) || true
+
+            if [ -n "${SCRAPER_IP}" ]; then
+                SCRAPER_URL="http://${SCRAPER_IP}:8099"
+                bashio::log.info "Scraper URL (auto-detected via API): ${SCRAPER_URL}"
+            elif curl -sf --max-time 3 "http://${SCRAPER_SLUG}:8099/api/config" >/dev/null 2>&1; then
+                SCRAPER_URL="http://${SCRAPER_SLUG}:8099"
+                bashio::log.info "Scraper URL (auto-detected via slug): ${SCRAPER_URL}"
+            fi
+        fi
+    fi
+
+    if [ -z "${SCRAPER_URL}" ]; then
+        bashio::log.info "Grocy Scraper addon not found — discover integration disabled."
+    fi
+fi
+
+if [ -z "${SCRAPER_URL}" ]; then
+    SCRAPER_URL="http://127.0.0.1:1"
+fi
+export SCRAPER_URL
+
+# Generate nginx config from template
+envsubst '${SCRAPER_URL}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 # Wait for FastAPI to be ready
 for i in $(seq 1 30); do
@@ -15,4 +81,5 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
+bashio::log.info "Scraper URL: ${SCRAPER_URL}"
 exec nginx -g "daemon off;"

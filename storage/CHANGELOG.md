@@ -3,9 +3,11 @@
 ## 0.2.4
 
 - Fix Pydantic validation errors: description/note fields now accept NULL from database
-- Rewrite Grocy migration: imports barcodes and stock amounts only (products created via Scraper --discover)
+- Rewrite Grocy migration: imports barcodes and stock amounts only (products created via Scraper discover)
 - Add import_stock_amount field to barcode queue for preserving stock during migration
 - Schema migration adds import_stock_amount column to existing databases
+- Auto-detect and proxy to Scraper addon — import triggers discover automatically
+- Settings UI shows live progress during import + discover pipeline
 
 ## 0.2.3
 
