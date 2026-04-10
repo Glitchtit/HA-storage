@@ -176,6 +176,8 @@ export default function Optimize() {
                     ? 'text-yellow-400'
                     : line.includes('complete')
                     ? 'text-green-400'
+                    : line.startsWith('  ↳')
+                    ? 'text-cyan-500'
                     : 'text-gray-300'
                 }
               >{line}</div>

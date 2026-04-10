@@ -1,4 +1,8 @@
-## 0.3.9
+## 0.3.10
+- Optimize log now shows AI token usage (in/out) and response time per batch call
+- Token/timing lines rendered in cyan in the web UI log view
+
+
 - Settings: AI card is now read-only (provider + model display only); configure via HA add-on options
 - Fix: sync_from_options() now called at startup so HA add-on config always takes effect
 

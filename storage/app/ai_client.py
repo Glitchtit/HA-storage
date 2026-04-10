@@ -48,7 +48,7 @@ def _get_ai_config(conn: sqlite3.Connection) -> dict[str, str]:
 # Raw provider calls
 # ---------------------------------------------------------------------------
 
-def _call_gemini(prompt: str, api_key: str, model: str) -> str:
+def _call_gemini(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
     url = f"{_GEMINI_BASE_URL}{model}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -58,17 +58,21 @@ def _call_gemini(prompt: str, api_key: str, model: str) -> str:
     resp.raise_for_status()
     data = resp.json()
     usage = data.get("usageMetadata", {})
+    stats: dict = {}
     if usage:
+        stats = {
+            "in": usage.get("promptTokenCount") or 0,
+            "out": usage.get("candidatesTokenCount") or 0,
+        }
         logger.info(
             "Gemini usage — prompt tokens: %s, output tokens: %s, total: %s",
-            usage.get("promptTokenCount", "?"),
-            usage.get("candidatesTokenCount", "?"),
+            stats["in"], stats["out"],
             usage.get("totalTokenCount", "?"),
         )
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    return data["candidates"][0]["content"]["parts"][0]["text"], stats
 
 
-def _call_ollama(prompt: str, url: str, model: str) -> str:
+def _call_ollama(prompt: str, url: str, model: str) -> tuple[str, dict]:
     resp = requests.post(
         f"{url}/api/chat",
         json={
@@ -81,18 +85,18 @@ def _call_ollama(prompt: str, url: str, model: str) -> str:
     )
     resp.raise_for_status()
     data = resp.json()
-    prompt_tokens = data.get("prompt_eval_count", "?")
-    output_tokens = data.get("eval_count", "?")
+    prompt_tokens = data.get("prompt_eval_count") or 0
+    output_tokens = data.get("eval_count") or 0
     total_ns = data.get("total_duration")
-    total_ms = round(total_ns / 1_000_000) if total_ns else "?"
+    total_ms = round(total_ns / 1_000_000) if total_ns else 0
     logger.info(
         "Ollama usage — prompt tokens: %s, output tokens: %s, duration: %sms",
         prompt_tokens, output_tokens, total_ms,
     )
-    return data["message"]["content"]
+    return data["message"]["content"], {"in": prompt_tokens, "out": output_tokens, "ms": total_ms}
 
 
-def _call_claude(prompt: str, api_key: str, model: str) -> str:
+def _call_claude(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
     import anthropic as _anthropic  # optional dependency
 
     client = _anthropic.Anthropic(api_key=api_key)
@@ -102,11 +106,12 @@ def _call_claude(prompt: str, api_key: str, model: str) -> str:
         messages=[{"role": "user", "content": prompt}],
     )
     usage = response.usage
+    stats = {"in": usage.input_tokens, "out": usage.output_tokens}
     logger.info(
         "Claude usage — input tokens: %s, output tokens: %s",
-        usage.input_tokens, usage.output_tokens,
+        stats["in"], stats["out"],
     )
-    return response.content[0].text
+    return response.content[0].text, stats
 
 
 # ---------------------------------------------------------------------------
@@ -129,11 +134,14 @@ def call_ai_json(
     conn: sqlite3.Connection,
     *,
     cfg: dict[str, str] | None = None,
+    emit: Any = None,
 ) -> Any:
     """Call the configured AI provider and parse the response as JSON.
 
     *cfg* may be provided to avoid repeated DB reads inside loops; if omitted
     it is fetched from *conn* on every call.
+    *emit* optional callable(str) — receives a formatted token/timing line on
+    each successful call.
 
     Retries up to _MAX_RETRIES times with exponential back-off on transient
     errors or JSON parse failures.
@@ -146,12 +154,14 @@ def call_ai_json(
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
+            t0 = time.time()
             if provider == "ollama":
-                raw = _call_ollama(prompt, cfg["ollama_url"], cfg["ollama_model"])
+                raw, stats = _call_ollama(prompt, cfg["ollama_url"], cfg["ollama_model"])
             elif provider == "claude":
-                raw = _call_claude(prompt, cfg["claude_api_key"], cfg["claude_model"])
+                raw, stats = _call_claude(prompt, cfg["claude_api_key"], cfg["claude_model"])
             else:
-                raw = _call_gemini(prompt, cfg["gemini_api_key"], cfg["gemini_model"])
+                raw, stats = _call_gemini(prompt, cfg["gemini_api_key"], cfg["gemini_model"])
+            wall_ms = round((time.time() - t0) * 1000)
 
             # Strip control characters that AI models occasionally embed.
             sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
@@ -160,7 +170,24 @@ def call_ai_json(
             if provider in ("claude", "ollama"):
                 sanitized = _extract_json(sanitized)
 
-            return json.loads(sanitized)
+            result = json.loads(sanitized)
+
+            # Emit token/timing summary to the caller's log stream.
+            if emit:
+                model_name = (
+                    cfg.get("ollama_model") if provider == "ollama"
+                    else cfg.get("claude_model") if provider == "claude"
+                    else cfg.get("gemini_model") or _GEMINI_DEFAULT_MODEL
+                )
+                in_tok = stats.get("in", 0)
+                out_tok = stats.get("out", 0)
+                # Ollama provides native inference time; others use wall clock.
+                elapsed_ms = stats.get("ms") or wall_ms
+                emit(
+                    f"  ↳ {model_name}: {in_tok:,} in / {out_tok:,} out tokens · {elapsed_ms:,}ms"
+                )
+
+            return result
 
         except Exception as exc:
             last_exc = exc

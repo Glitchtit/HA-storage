@@ -247,7 +247,7 @@ def _phase1_structure(
         )
 
         try:
-            mapping = call_ai_json(prompt, conn, cfg=cfg)
+            mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
         except Exception as exc:
             log("AI structure batch %d failed: %s", batch_idx + 1, exc)
             continue
@@ -392,7 +392,7 @@ def _phase2_details(
         )
 
         try:
-            mapping = call_ai_json(prompt, conn, cfg=cfg)
+            mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
         except Exception as exc:
             log("AI details batch %d failed: %s", batch_idx + 1, exc)
             continue
