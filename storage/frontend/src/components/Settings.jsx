@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getHealth, getAiKey, setConfig, migrateFromGrocy, scraperDiscover, scraperTask } from '../api';
+import { getHealth, getAiKey, setConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset } from '../api';
 
 export default function Settings() {
   // Database info
@@ -19,6 +19,26 @@ export default function Settings() {
   const [importResult, setImportResult] = useState(null);
   const [discoverLogs, setDiscoverLogs] = useState([]);
   const pollRef = useRef(null);
+
+  // Factory reset
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetResult, setResetResult] = useState(null);
+
+  const handleReset = async () => {
+    setResetting(true);
+    setResetResult(null);
+    try {
+      await factoryReset();
+      setResetResult({ success: true });
+      setTimeout(() => window.location.reload(), 2000);
+    } catch (err) {
+      setResetResult({ error: err.response?.data?.detail ?? err.message ?? 'Reset failed' });
+    } finally {
+      setResetting(false);
+      setResetConfirming(false);
+    }
+  };
 
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -327,6 +347,59 @@ export default function Settings() {
                 </ul>
               </div>
             )}
+          </div>
+        )}
+      </div>
+      {/* Danger Zone card */}
+      <div className="bg-gray-800 rounded-lg border border-red-800/60 p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wide">Danger Zone</h3>
+
+        <p className="text-sm text-gray-400">
+          Factory reset deletes all products, stock, barcodes, recipes, and uploaded images.
+          Standard units, locations, and conversions are re-seeded automatically.
+        </p>
+
+        {!resetConfirming && !resetResult && (
+          <button
+            onClick={() => setResetConfirming(true)}
+            className="bg-red-700 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
+          >
+            Factory Reset
+          </button>
+        )}
+
+        {resetConfirming && (
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-red-400">
+              ⚠️ This will permanently delete everything. Are you sure?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleReset}
+                disabled={resetting}
+                className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {resetting ? 'Resetting…' : 'Yes, wipe everything'}
+              </button>
+              <button
+                onClick={() => setResetConfirming(false)}
+                disabled={resetting}
+                className="px-4 py-2 rounded text-sm font-medium text-gray-400 hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {resetResult?.success && (
+          <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg px-4 py-3 text-sm text-emerald-400">
+            ✅ Database reset complete. Reloading…
+          </div>
+        )}
+        {resetResult?.error && (
+          <div className="bg-red-500/20 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400">
+            Error: {resetResult.error}
           </div>
         )}
       </div>
