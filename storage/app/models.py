@@ -80,6 +80,7 @@ class ProductDetail(Product):
     barcodes: list["Barcode"] = []
     stock_amount: float = 0
     stock_opened: float = 0
+    matched_pack_size: float = 1.0
 
 # ── Barcodes ───────────────────────────────────────────────────────────────
 
