@@ -71,6 +71,28 @@ def _seed_config(conn):
         "INSERT OR REPLACE INTO config (key, value) VALUES ('gemini_model', ?)",
         (model,),
     )
+
+    # Ollama / provider — INSERT OR IGNORE so user edits via the Settings UI
+    # survive addon restarts (env var only sets the initial value).
+    ai_provider = os.getenv("AI_PROVIDER", "")
+    ollama_url = os.getenv("OLLAMA_URL", "")
+    ollama_model = os.getenv("OLLAMA_MODEL", "")
+    if ai_provider:
+        conn.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('ai_provider', ?)",
+            (ai_provider,),
+        )
+    if ollama_url:
+        conn.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('ollama_url', ?)",
+            (ollama_url,),
+        )
+    if ollama_model:
+        conn.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('ollama_model', ?)",
+            (ollama_model,),
+        )
+
     conn.commit()
 
 
