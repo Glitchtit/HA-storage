@@ -1,3 +1,6 @@
+## 0.3.5
+- Persistent service health monitoring: background loop never stops; re-detects scraper if it goes down or moves, reloads nginx only when URL changes
+
 # Changelog
 
 ## 0.3.4
