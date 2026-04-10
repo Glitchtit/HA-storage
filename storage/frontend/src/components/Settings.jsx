@@ -16,6 +16,10 @@ export default function Settings() {
   const [aiModelInput, setAiModelInput] = useState('');
   const [ollamaUrlInput, setOllamaUrlInput] = useState('');
   const [ollamaModelInput, setOllamaModelInput] = useState('');
+  const [claudeKey, setClaudeKey] = useState('');
+  const [claudeModel, setClaudeModel] = useState('');
+  const [claudeKeyInput, setClaudeKeyInput] = useState('');
+  const [claudeModelInput, setClaudeModelInput] = useState('');
   const [savingAi, setSavingAi] = useState(false);
   // Grocy import
   const [grocyUrl, setGrocyUrl] = useState('');
@@ -106,6 +110,8 @@ export default function Settings() {
         setAiModel(d.model ?? '');
         setOllamaUrl(d.ollama_url ?? '');
         setOllamaModel(d.ollama_model ?? '');
+        setClaudeKey(d.claude_api_key ?? '');
+        setClaudeModel(d.claude_model ?? '');
         const entity = configRes.data?.ha_todo_entity ?? 'todo.smart_shopping_list';
         setHaTodoEntity(entity);
         setHaTodoInput(entity);
@@ -138,7 +144,7 @@ export default function Settings() {
           await setConfig('gemini_model', aiModelInput.trim());
           setAiModel(aiModelInput.trim());
         }
-      } else {
+      } else if (editProvider === 'ollama') {
         if (ollamaUrlInput.trim()) {
           await setConfig('ollama_url', ollamaUrlInput.trim());
           setOllamaUrl(ollamaUrlInput.trim());
@@ -147,12 +153,23 @@ export default function Settings() {
           await setConfig('ollama_model', ollamaModelInput.trim());
           setOllamaModel(ollamaModelInput.trim());
         }
+      } else if (editProvider === 'claude') {
+        if (claudeKeyInput.trim()) {
+          await setConfig('claude_api_key', claudeKeyInput.trim());
+          setClaudeKey(claudeKeyInput.trim());
+        }
+        if (claudeModelInput.trim()) {
+          await setConfig('claude_model', claudeModelInput.trim());
+          setClaudeModel(claudeModelInput.trim());
+        }
       }
       setEditingAi(false);
       setAiKeyInput('');
       setAiModelInput('');
       setOllamaUrlInput('');
       setOllamaModelInput('');
+      setClaudeKeyInput('');
+      setClaudeModelInput('');
     } catch (err) {
       console.error('Failed to save AI settings', err);
     } finally {
@@ -281,6 +298,17 @@ export default function Settings() {
                     <span className="font-medium">{aiModel || '–'}</span>
                   </div>
                 </>
+              ) : aiProvider === 'claude' ? (
+                <>
+                  <div>
+                    <span className="text-gray-400 block text-xs">Claude API Key</span>
+                    <span className="font-mono text-sm">{claudeKey ? '••••' + claudeKey.slice(-4) : '–'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block text-xs">Model</span>
+                    <span className="font-medium">{claudeModel || '–'}</span>
+                  </div>
+                </>
               ) : (
                 <>
                   <div>
@@ -302,6 +330,8 @@ export default function Settings() {
                 setAiModelInput(aiModel);
                 setOllamaUrlInput(ollamaUrl);
                 setOllamaModelInput(ollamaModel);
+                setClaudeKeyInput('');
+                setClaudeModelInput(claudeModel);
               }}
               className="text-sm text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
             >
@@ -314,7 +344,7 @@ export default function Settings() {
             <div>
               <label className="block text-xs text-gray-400 mb-1">Provider</label>
               <div className="flex gap-2">
-                {['gemini', 'ollama'].map((p) => (
+                {['gemini', 'ollama', 'claude'].map((p) => (
                   <button
                     key={p}
                     onClick={() => setEditProvider(p)}
@@ -349,6 +379,29 @@ export default function Settings() {
                     value={aiModelInput}
                     onChange={(e) => setAiModelInput(e.target.value)}
                     placeholder="gemini-2.0-flash"
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </>
+            ) : editProvider === 'claude' ? (
+              <>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Claude API Key</label>
+                  <input
+                    type="password"
+                    value={claudeKeyInput}
+                    onChange={(e) => setClaudeKeyInput(e.target.value)}
+                    placeholder="New API key"
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Model</label>
+                  <input
+                    type="text"
+                    value={claudeModelInput}
+                    onChange={(e) => setClaudeModelInput(e.target.value)}
+                    placeholder="claude-3-5-haiku-20241022"
                     className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
