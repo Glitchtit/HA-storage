@@ -139,9 +139,9 @@ def _strip_parents(
     1. Any product referenced as parent_id by another product (has children).
     2. Any product whose product_group_id equals group_master_id (optimizer-created).
 
-    Group-master products are deleted immediately (recipe stubs are safe — they
-    have no product_group_id and no children).  All other identified parents are
-    marked active=0 so they are excluded from the AI feed.
+    Group-master products are deleted UNLESS they are referenced by a recipe
+    ingredient — those are kept (but deactivated) so recipe links are preserved.
+    All identified parents are marked active=0 to exclude them from the AI feed.
 
     Returns the full set of identified parent IDs so the caller can filter them
     out of the working product list.
@@ -152,12 +152,29 @@ def _strip_parents(
         if p.get("parent_id"):
             has_children.add(int(p["parent_id"]))
 
-    # 2. Optimizer-created group-master products (safe to delete)
+    # 2. Optimizer-created group-master products (safe to delete unless in a recipe)
     group_master_prods: set[int] = set()
     if group_master_id is not None:
         for p in products:
             if p.get("product_group_id") == group_master_id:
                 group_master_prods.add(int(p["id"]))
+
+    # Never delete group-master products that are referenced by a recipe ingredient
+    recipe_linked: set[int] = set()
+    if group_master_prods:
+        placeholders_gm = ",".join("?" * len(group_master_prods))
+        rows = conn.execute(
+            f"SELECT DISTINCT product_id FROM recipe_ingredients WHERE product_id IN ({placeholders_gm})",
+            list(group_master_prods),
+        ).fetchall()
+        recipe_linked = {int(r["product_id"]) for r in rows}
+        if recipe_linked:
+            log(
+                "Keeping %d group-master product(s) that are referenced by recipes.",
+                len(recipe_linked),
+            )
+
+    deletable_group_masters = group_master_prods - recipe_linked
 
     all_parent_ids = has_children | group_master_prods
 
@@ -177,9 +194,9 @@ def _strip_parents(
             p["parent_id"] = None
             stripped += 1
 
-    # Delete optimizer-created group-master products immediately
+    # Delete group-master products that are not referenced by any recipe
     deleted = 0
-    for pid in group_master_prods:
+    for pid in deletable_group_masters:
         conn.execute("DELETE FROM products WHERE id = ?", (pid,))
         deleted += 1
 
@@ -187,8 +204,9 @@ def _strip_parents(
 
     log(
         "Clean-slate: stripped parents from %d product(s), "
-        "deactivated %d parent placeholder(s), deleted %d group-master product(s).",
-        stripped, len(all_parent_ids), deleted,
+        "deactivated %d parent placeholder(s), deleted %d group-master product(s) "
+        "(%d preserved — referenced by recipes).",
+        stripped, len(all_parent_ids), deleted, len(recipe_linked),
     )
     return all_parent_ids
 
