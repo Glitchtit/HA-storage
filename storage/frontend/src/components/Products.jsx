@@ -573,6 +573,7 @@ export default function Products() {
   const [filterGroup, setFilterGroup] = useState('');
   const [filterLocation, setFilterLocation] = useState('');
   const [topOnly, setTopOnly] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
 
   const [expandedId, setExpandedId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -580,16 +581,20 @@ export default function Products() {
   const [error, setError] = useState(null);
 
   /* ─ data loading ─ */
+  const [allProducts, setAllProducts] = useState([]);
+
   const loadRef = useCallback(async () => {
     try {
-      const [g, l, u] = await Promise.all([
+      const [g, l, u, all] = await Promise.all([
         getProductGroups(),
         getLocations(),
         getUnits(),
+        getProducts({ active_only: false }),
       ]);
       setGroups(g.data);
       setLocations(l.data);
       setUnits(u.data);
+      setAllProducts(all.data);
     } catch (err) {
       console.error('Load reference data failed', err);
     }
@@ -600,14 +605,18 @@ export default function Products() {
       const params = {};
       if (topOnly) params.parent_id = 'null';
       if (filterGroup) params.group_id = filterGroup;
+      if (showInactive) params.active_only = false;
       const { data } = await getProducts(params);
       setProducts(data);
+      // Also refresh all-products for parent dropdown
+      const all = await getProducts({ active_only: false });
+      setAllProducts(all.data);
     } catch (err) {
       console.error('Load products failed', err);
     } finally {
       setLoading(false);
     }
-  }, [topOnly, filterGroup]);
+  }, [topOnly, filterGroup, showInactive]);
 
   useEffect(() => { loadRef(); }, [loadRef]);
   useEffect(() => { loadProducts(); }, [loadProducts]);
@@ -735,7 +744,17 @@ export default function Products() {
             onChange={(e) => setTopOnly(e.target.checked)}
             className="rounded border-gray-600 text-emerald-600 focus:ring-emerald-500 bg-gray-700"
           />
-          Top-level products only
+          Top-level only
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+            className="rounded border-gray-600 text-emerald-600 focus:ring-emerald-500 bg-gray-700"
+          />
+          Include inactive
         </label>
 
         <span className="text-xs text-gray-400 ml-auto">
@@ -781,7 +800,7 @@ export default function Products() {
                   groups={groups}
                   locations={locations}
                   units={units}
-                  products={products}
+                  products={allProducts}
                   onSaved={loadProducts}
                 />
               ))}
@@ -798,7 +817,7 @@ export default function Products() {
           groups={groups}
           locations={locations}
           units={units}
-          products={products}
+          products={allProducts}
         />
       )}
 

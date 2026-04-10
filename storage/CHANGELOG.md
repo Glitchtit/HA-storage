@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Add "Include inactive" toggle to Products page
+- Parent product dropdown now shows all products (including inactive)
+
 ## 0.2.2
 
 - Fix product image upload returning 404 (nginx static asset regex was intercepting /api/files/ requests)
