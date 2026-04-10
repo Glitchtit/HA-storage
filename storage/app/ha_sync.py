@@ -34,58 +34,39 @@ def _entity(conn: sqlite3.Connection) -> str:
 
 
 def ha_ensure_entity(conn: sqlite3.Connection) -> bool:
-    """Auto-create the HA to-do list if it doesn't exist. Returns True if entity exists after call."""
+    """Return True if the HA to-do entity exists. Does NOT attempt to create it."""
     hdrs = _headers()
     if not hdrs:
         log.debug("SUPERVISOR_TOKEN not set — skipping HA todo sync.")
         return False
-
     entity_id = _entity(conn)
-
     try:
         resp = httpx.get(f"{_HA_BASE}/states/{entity_id}", headers=hdrs, timeout=5)
         if resp.status_code == 200:
             return True
-        if resp.status_code != 404:
-            log.warning("HA entity check returned %d: %s", resp.status_code, resp.text[:300])
+        log.debug("HA entity '%s' not found (%d).", entity_id, resp.status_code)
     except Exception as exc:
         log.warning("HA entity check failed: %s", exc)
-        return False
-
-    # Create via config flow — field name is "todo_list_name" in local_todo integration
-    try:
-        r1 = httpx.post(
-            f"{_HA_BASE}/config/config_entries/flow",
-            headers=hdrs,
-            json={"handler": "local_todo"},
-            timeout=10,
-        )
-        if not r1.is_success:
-            log.warning("HA local_todo flow init failed: %d %s", r1.status_code, r1.text[:300])
-            return False
-        flow = r1.json()
-        flow_id = flow.get("flow_id")
-        if not flow_id:
-            log.warning("HA flow response missing flow_id: %s", flow)
-            return False
-
-        r2 = httpx.post(
-            f"{_HA_BASE}/config/config_entries/flow/{flow_id}",
-            headers=hdrs,
-            json={"todo_list_name": _DEFAULT_LIST_NAME},
-            timeout=10,
-        )
-        if r2.is_success:
-            result = r2.json()
-            log.info(
-                "Created HA to-do list '%s' (entity: %s) — flow result: %s",
-                _DEFAULT_LIST_NAME, entity_id, result.get("type", "?"),
-            )
-            return True
-        log.warning("HA flow submit failed: %d %s", r2.status_code, r2.text[:300])
-    except Exception as exc:
-        log.warning("HA entity creation failed: %s", exc)
     return False
+
+
+def ha_check_status(conn: sqlite3.Connection) -> dict:
+    """Return HA integration status for the shopping list."""
+    token_available = bool(_token())
+    entity_id = _entity(conn)
+    entity_exists = False
+    if token_available:
+        hdrs = _headers()
+        try:
+            resp = httpx.get(f"{_HA_BASE}/states/{entity_id}", headers=hdrs, timeout=5)
+            entity_exists = resp.status_code == 200
+        except Exception as exc:
+            log.warning("HA status check failed: %s", exc)
+    return {
+        "token_available": token_available,
+        "entity_id": entity_id,
+        "entity_exists": entity_exists,
+    }
 
 
 def ha_add_item(conn: sqlite3.Connection, item_name: str, description: str = "") -> None:
