@@ -103,6 +103,9 @@ export const factoryReset = () => api.post('/reset');
 export const startOptimize = (productIds = null) =>
   api.post('/ai/optimize', productIds ? { product_ids: productIds } : {});
 export const getOptimizeStatus = (taskId) => api.get(`/ai/optimize/${taskId}`);
+export const getOptimizeCategories = () => api.get('/ai/optimize/categories');
+export const setOptimizeCategories = (categories) =>
+  api.put('/ai/optimize/categories', { categories });
 
 // ── Scraper (proxied via /api/scraper/) ───────────────────────────────────
 const scraper = axios.create({ baseURL: `${INGRESS_PATH}/api/scraper` });

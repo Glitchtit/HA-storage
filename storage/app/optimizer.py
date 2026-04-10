@@ -549,12 +549,15 @@ def run_optimize(
     *,
     product_ids: list[int] | None = None,
     emit: Callable[[str], None] | None = None,
+    enforced_categories: list[str] | None = None,
 ) -> dict[str, int]:
     """Run the full AI optimize pipeline.
 
     *product_ids* = None  → full mode (all products, clean-slate parent strip)
     *product_ids* = [...]  → incremental mode (only those products)
     *emit*  → optional callable for streaming log messages to the frontend
+    *enforced_categories* → category names the AI must prefer and that will
+                            always be created as product_group rows
 
     Returns ``{"updated": int}``.
     """
@@ -623,6 +626,14 @@ def run_optimize(
         }
 
     # --- Phase 1: structure ---
+    # Merge enforced_categories into initial list so AI strongly prefers them
+    merged_category_names = list(initial_category_names or [])
+    if enforced_categories:
+        for cat in enforced_categories:
+            if cat and cat not in merged_category_names:
+                merged_category_names.append(cat)
+        log("Enforcing %d user-defined category/categories.", len(enforced_categories))
+
     log("Phase 1: assigning categories and parent products…")
     p1 = _phase1_structure(
         conn, products, cfg, log,
@@ -630,7 +641,7 @@ def run_optimize(
         name_to_product=name_to_product,
         group_master_id=group_master_id,
         initial_parent_names=initial_parent_names,
-        initial_category_names=initial_category_names,
+        initial_category_names=merged_category_names or None,
     )
 
     if initial_parent_name_to_id:
@@ -638,6 +649,15 @@ def run_optimize(
     if initial_category_name_to_group_id:
         for k, v in initial_category_name_to_group_id.items():
             p1["category_name_to_group_id"].setdefault(k, v)
+
+    # Ensure every enforced category exists as a product_group row
+    if enforced_categories:
+        for cat in enforced_categories:
+            if cat and cat not in p1["category_name_to_group_id"]:
+                gid = _ensure_product_group(conn, cat)
+                p1["category_name_to_group_id"][cat] = gid
+                log("  Created enforced product group '%s'.", cat)
+        conn.commit()
 
     # --- Phase 2: details ---
     log("Phase 2: assigning locations, best-before, and pack info…")

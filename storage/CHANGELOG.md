@@ -1,3 +1,9 @@
+## 0.3.7
+- Optimize: user-defined enforced categories panel (tag/pill UI with add/remove)
+- Categories stored in config table as JSON under key optimize_categories
+- New API: GET/PUT /api/ai/optimize/categories
+- optimizer.py: run_optimize() accepts enforced_categories param; AI strongly prefers them in Phase 1; groups are created even if no products are assigned
+
 ## 0.3.6
 - AI Optimize tab: full 2-phase AI product optimization moved from Scraper to Storage app
 - New backend modules: ai_client.py (Gemini/Claude/Ollama calling), optimizer.py (2-phase pipeline)
