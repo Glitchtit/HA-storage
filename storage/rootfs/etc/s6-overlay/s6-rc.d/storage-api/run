@@ -33,6 +33,7 @@ if bashio::config.has_value 'claude_model'; then
 fi
 
 export GEMINI_API_KEY GEMINI_MODEL DEBUG AI_PROVIDER OLLAMA_URL OLLAMA_MODEL CLAUDE_API_KEY CLAUDE_MODEL
+export PYTHONUNBUFFERED=1
 
 # Data directory for SQLite DB and images
 export DATA_DIR="/data"
