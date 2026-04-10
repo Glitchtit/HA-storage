@@ -1,3 +1,8 @@
+## 0.3.15
+- Move optimize_batch_size setting to HA add-on config (HA Settings → Add-ons → Storage → Configuration), default 100
+- Synced from options.json at startup via sync_from_options
+- Removed editable batch size field from Settings web UI
+
 ## 0.3.14
 - Fix: Settings page config values (batch size, HA entity IDs) never loaded correctly — GET /config returns an array but was read as object; now converted with Object.fromEntries
 

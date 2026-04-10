@@ -1,6 +1,6 @@
 {
   "name": "Storage",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "slug": "ha_storage",
   "description": "SQLite-backed central data store for the HA-apps ecosystem",
   "url": "https://github.com/Glitchtit/HA-storage",
@@ -34,7 +34,8 @@
     "claude_api_key": "",
     "claude_model": "claude-3-5-haiku-20241022",
     "debug": false,
-    "scraper_url": ""
+    "scraper_url": "",
+    "optimize_batch_size": 100
   },
   "schema": {
     "gemini_api_key": "str?",
@@ -45,6 +46,7 @@
     "claude_api_key": "str?",
     "claude_model": "str?",
     "debug": "bool?",
-    "scraper_url": "str?"
+    "scraper_url": "str?",
+    "optimize_batch_size": "int?"
   }
 }

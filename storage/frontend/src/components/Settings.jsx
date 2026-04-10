@@ -10,10 +10,6 @@ export default function Settings() {
   const [ollamaUrl, setOllamaUrl] = useState('');
   const [ollamaModel, setOllamaModel] = useState('');
   const [claudeModel, setClaudeModel] = useState('');
-  // Optimize batch size
-  const [batchSize, setBatchSize] = useState(100);
-  const [batchSizeInput, setBatchSizeInput] = useState('100');
-  const [savingBatchSize, setSavingBatchSize] = useState(false);
   // Grocy import
   const [grocyUrl, setGrocyUrl] = useState('');
   const [grocyApiKey, setGrocyApiKey] = useState('');
@@ -151,9 +147,6 @@ export default function Settings() {
         const stockEntity = cfg.ha_stock_entity ?? 'todo.smart_stock_list';
         setHaStockEntity(stockEntity);
         setHaStockInput(stockEntity);
-        const bs = parseInt(cfg.optimize_batch_size ?? '100', 10) || 100;
-        setBatchSize(bs);
-        setBatchSizeInput(String(bs));
         setHaStatus(haStatusRes.data);
         setHaStockStatus(haStockStatusRes.data);
       } catch (err) {
@@ -163,20 +156,6 @@ export default function Settings() {
     load();
     return () => { cancelled = true; };
   }, []);
-
-  const handleSaveBatchSize = async () => {
-    const val = Math.max(1, Math.min(1000, parseInt(batchSizeInput, 10) || 100));
-    setSavingBatchSize(true);
-    try {
-      await setConfig('optimize_batch_size', String(val));
-      setBatchSize(val);
-      setBatchSizeInput(String(val));
-    } catch (err) {
-      console.error('Failed to save batch size', err);
-    } finally {
-      setSavingBatchSize(false);
-    }
-  };
 
   const handleImport = async () => {
     if (!grocyUrl.trim() || !grocyApiKey.trim()) return;
@@ -305,31 +284,7 @@ export default function Settings() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3 pt-1">
-          <div>
-            <span className="text-gray-400 block text-xs mb-1">Optimize batch size</span>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="1"
-                max="1000"
-                value={batchSizeInput}
-                onChange={(e) => setBatchSizeInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSaveBatchSize()}
-                className="w-24 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500"
-              />
-              <button
-                onClick={handleSaveBatchSize}
-                disabled={savingBatchSize || parseInt(batchSizeInput, 10) === batchSize}
-                className="px-3 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {savingBatchSize ? 'Saving…' : 'Save'}
-              </button>
-              <span className="text-xs text-gray-500">products per AI call (1–1000, default 100)</span>
-            </div>
-          </div>
-        </div>
-        <p className="text-xs text-gray-500">Configure AI provider in the add-on options (HA Settings → Add-ons).</p>
+        <p className="text-xs text-gray-500">Configure AI provider and optimize batch size in the add-on options (HA Settings → Add-ons → Storage → Configuration).</p>
       </div>
 
       {/* Grocy import card */}

@@ -289,6 +289,7 @@ _OPTIONS_CONFIG_MAP = {
     "claude_api_key": "claude_api_key",
     "claude_model": "claude_model",
     "scraper_url": "scraper_url",
+    "optimize_batch_size": "optimize_batch_size",
 }
 
 
