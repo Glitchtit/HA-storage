@@ -66,6 +66,20 @@ def ha_status():
     return ha_sync.ha_check_status(conn)
 
 
+@router.post("/stock-list/ha-sync", status_code=200)
+def trigger_stock_ha_sync():
+    """Manually trigger a full sync of the stock list to HA to-do."""
+    conn = _get_db()
+    return ha_sync.ha_full_stock_sync(conn)
+
+
+@router.get("/stock-list/ha-status", status_code=200)
+def ha_stock_status():
+    """Return HA To-do stock list integration status."""
+    conn = _get_db()
+    return ha_sync.ha_check_stock_status(conn)
+
+
 @router.post("/shopping-list", response_model=ShoppingItem, status_code=201)
 def add_shopping_item(body: ShoppingItemCreate):
     conn = _get_db()

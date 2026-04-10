@@ -115,6 +115,11 @@ def _seed_config(conn):
         "INSERT OR IGNORE INTO config (key, value) VALUES ('ha_todo_entity', 'todo.smart_shopping_list')"
     )
 
+    # Seed ha_stock_entity default (INSERT OR IGNORE — user may override via UI)
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('ha_stock_entity', 'todo.smart_stock_list')"
+    )
+
     # Seed optimize_batch_size default (INSERT OR IGNORE — user may override via UI)
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('optimize_batch_size', '100')"
@@ -136,6 +141,7 @@ async def lifespan(app: FastAPI):
     # Sync shopping list for all products with a minimum stock level
     import ha_sync as _ha
     _ha.startup_sync(conn)
+    _ha.startup_sync_stock(conn)
     yield
     # Shutdown
     global _db

@@ -1,3 +1,10 @@
+## 0.3.13
+- Smart Stock List: mirror all in-stock products to a HA Local To-do entity (default: todo.smart_stock_list)
+- Stock items show name + amount/unit as description; updated on every stock mutation
+- Settings: new "Home Assistant Stock List" card with entity ID edit and manual sync button
+- Stock list syncs automatically on startup and on every add/consume/transfer/delete stock action
+- New API endpoints: GET/POST /stock-list/ha-status and /stock-list/ha-sync
+
 ## 0.3.11
 - Settings: editable optimize batch size (10–500, default 100) in AI config card
 - Batch size is persisted in the config DB and read dynamically at optimize time
