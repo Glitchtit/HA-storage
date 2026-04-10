@@ -10,6 +10,7 @@ import Locations from './components/Locations';
 import Groups from './components/Groups';
 import BarcodeQueue from './components/BarcodeQueue';
 import Settings from './components/Settings';
+import Optimize from './components/Optimize';
 
 const TABS = [
   { id: 'dashboard', label: '📊 Dashboard', component: Dashboard },
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'locations', label: '📍 Locations', component: Locations },
   { id: 'groups', label: '🏷️ Groups', component: Groups },
   { id: 'barcodes', label: '📱 Barcodes', component: BarcodeQueue },
+  { id: 'optimize', label: '🤖 Optimize', component: Optimize },
   { id: 'settings', label: '⚙️ Settings', component: Settings },
 ];
 
