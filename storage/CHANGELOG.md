@@ -1,3 +1,9 @@
+## 0.3.8
+- Fix: HA interface AI provider/model settings now always take effect on addon restart (INSERT OR REPLACE instead of INSERT OR IGNORE)
+- Fix: Claude can now be selected as AI provider in Settings WebUI
+- Fix: Settings WebUI correctly saves Claude API key and model
+- Fix: Settings display correctly shows Claude key/model when provider is claude
+
 ## 0.3.7
 - Optimize: user-defined enforced categories panel (tag/pill UI with add/remove)
 - Categories stored in config table as JSON under key optimize_categories
