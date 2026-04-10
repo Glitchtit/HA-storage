@@ -21,8 +21,8 @@ _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/"
 _GEMINI_DEFAULT_MODEL = "gemini-2.0-flash"
 _BATCH_SIZE = 100  # kept for backward-compat imports
 _MAX_RETRIES = 4
-_BATCH_SIZE_MIN = 10
-_BATCH_SIZE_MAX = 500
+_BATCH_SIZE_MIN = 1
+_BATCH_SIZE_MAX = 1000
 
 
 # ---------------------------------------------------------------------------

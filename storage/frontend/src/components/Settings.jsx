@@ -119,7 +119,7 @@ export default function Settings() {
   }, []);
 
   const handleSaveBatchSize = async () => {
-    const val = Math.max(10, Math.min(500, parseInt(batchSizeInput, 10) || 100));
+    const val = Math.max(1, Math.min(1000, parseInt(batchSizeInput, 10) || 100));
     setSavingBatchSize(true);
     try {
       await setConfig('optimize_batch_size', String(val));
@@ -265,8 +265,8 @@ export default function Settings() {
             <div className="flex items-center gap-2">
               <input
                 type="number"
-                min="10"
-                max="500"
+                min="1"
+                max="1000"
                 value={batchSizeInput}
                 onChange={(e) => setBatchSizeInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSaveBatchSize()}
@@ -279,7 +279,7 @@ export default function Settings() {
               >
                 {savingBatchSize ? 'Saving…' : 'Save'}
               </button>
-              <span className="text-xs text-gray-500">products per AI call (10–500, default 100)</span>
+              <span className="text-xs text-gray-500">products per AI call (1–1000, default 100)</span>
             </div>
           </div>
         </div>
