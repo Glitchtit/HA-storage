@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getHealth, getAiConfig, setConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset, syncShoppingListToHa } from '../api';
+import { getHealth, getAiConfig, setConfig, getConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset, syncShoppingListToHa, getHaShoppingStatus } from '../api';
 
 export default function Settings() {
   // Database info
@@ -38,6 +38,7 @@ export default function Settings() {
   const [savingHaTodo, setSavingHaTodo] = useState(false);
   const [haSyncing, setHaSyncing] = useState(false);
   const [haSyncResult, setHaSyncResult] = useState(null);
+  const [haStatus, setHaStatus] = useState(null); // {token_available, entity_id, entity_exists}
 
   const handleReset = async () => {
     setResetting(true);
@@ -57,9 +58,12 @@ export default function Settings() {
   const handleSaveHaTodo = async () => {
     setSavingHaTodo(true);
     try {
-      await setConfig('ha_todo_entity', haTodoInput.trim() || 'todo.smart_shopping_list');
-      setHaTodoEntity(haTodoInput.trim() || 'todo.smart_shopping_list');
+      const val = haTodoInput.trim() || 'todo.smart_shopping_list';
+      await setConfig('ha_todo_entity', val);
+      setHaTodoEntity(val);
       setEditingHaTodo(false);
+      const statusRes = await getHaShoppingStatus();
+      setHaStatus(statusRes.data);
     } catch (err) {
       console.error('Failed to save HA todo entity', err);
     } finally {
@@ -73,6 +77,9 @@ export default function Settings() {
     try {
       const res = await syncShoppingListToHa();
       setHaSyncResult({ success: true, data: res.data });
+      // Refresh status after sync attempt
+      const statusRes = await getHaShoppingStatus();
+      setHaStatus(statusRes.data);
     } catch (err) {
       setHaSyncResult({ error: err.response?.data?.detail ?? err.message ?? 'Sync failed' });
     } finally {
@@ -88,7 +95,9 @@ export default function Settings() {
     let cancelled = false;
     const load = async () => {
       try {
-        const [healthRes, aiRes, configRes] = await Promise.all([getHealth(), getAiConfig(), getConfig()]);
+        const [healthRes, aiRes, configRes, haStatusRes] = await Promise.all([
+          getHealth(), getAiConfig(), getConfig(), getHaShoppingStatus(),
+        ]);
         if (cancelled) return;
         setHealth(healthRes.data);
         const d = aiRes.data;
@@ -100,6 +109,7 @@ export default function Settings() {
         const entity = configRes.data?.ha_todo_entity ?? 'todo.smart_shopping_list';
         setHaTodoEntity(entity);
         setHaTodoInput(entity);
+        setHaStatus(haStatusRes.data);
       } catch (err) {
         console.error('Failed to load settings', err);
       }
@@ -487,8 +497,30 @@ export default function Settings() {
         <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Home Assistant Shopping List</h3>
         <p className="text-sm text-gray-400">
           Sync the shopping list to a Home Assistant To-do entity. Products below their minimum stock
-          amount are auto-added; when restocked they are removed. The HA entity is created automatically.
+          amount are auto-added; when restocked they are removed.
         </p>
+
+        {/* Connection status banner */}
+        {haStatus && (
+          haStatus.entity_exists ? (
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-emerald-400">
+              ✅ Connected to <span className="font-mono">{haStatus.entity_id}</span>
+            </div>
+          ) : (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-3 space-y-2">
+              <p className="text-sm font-medium text-amber-400">⚠️ To-do list not found in Home Assistant</p>
+              <p className="text-xs text-amber-300/80">
+                Create it once in HA:&nbsp;
+                <strong>Settings → Devices &amp; Services → Add Integration → Local to-do</strong>
+                &nbsp;— name the list&nbsp;<span className="font-mono">"{haStatus.entity_id.replace('todo.', '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}"</span>
+                &nbsp;and the entity <span className="font-mono">{haStatus.entity_id}</span> will be created automatically.
+              </p>
+              {!haStatus.token_available && (
+                <p className="text-xs text-red-400">ℹ️ SUPERVISOR_TOKEN not available — addon may need to be restarted after updating.</p>
+              )}
+            </div>
+          )
+        )}
 
         {!editingHaTodo ? (
           <div className="flex items-center justify-between gap-3">
@@ -515,7 +547,7 @@ export default function Settings() {
                 className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
               />
               <p className="text-xs text-gray-500 mt-1">
-                The entity is auto-created in HA if it doesn't exist.
+                Must match the entity ID of a Local to-do list you created in HA.
               </p>
             </div>
             <div className="flex gap-2">

@@ -59,6 +59,13 @@ def trigger_ha_sync():
     return result
 
 
+@router.get("/shopping-list/ha-status", status_code=200)
+def ha_status():
+    """Return HA To-do integration status (token availability + entity existence)."""
+    conn = _get_db()
+    return ha_sync.ha_check_status(conn)
+
+
 @router.post("/shopping-list", response_model=ShoppingItem, status_code=201)
 def add_shopping_item(body: ShoppingItemCreate):
     conn = _get_db()
