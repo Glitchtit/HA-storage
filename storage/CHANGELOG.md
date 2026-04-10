@@ -1,3 +1,6 @@
+## 0.3.14
+- Fix: Settings page config values (batch size, HA entity IDs) never loaded correctly — GET /config returns an array but was read as object; now converted with Object.fromEntries
+
 ## 0.3.13
 - Smart Stock List: mirror all in-stock products to a HA Local To-do entity (default: todo.smart_stock_list)
 - Stock items show name + amount/unit as description; updated on every stock mutation
