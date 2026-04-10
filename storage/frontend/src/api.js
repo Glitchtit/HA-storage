@@ -82,6 +82,7 @@ export const getConfig = () => api.get('/config');
 export const setConfig = (key, value) =>
   api.put(`/config/${key}`, { value });
 export const getAiKey = () => api.get('/config/ai-key');
+export const getAiConfig = () => api.get('/config/ai');
 
 // ── Health ────────────────────────────────────────────────────────────────
 export const getHealth = () => api.get('/health');
