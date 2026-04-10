@@ -130,32 +130,67 @@ def _strip_parents(
     conn: sqlite3.Connection,
     products: list[dict],
     log: Callable[..., None],
+    group_master_id: int | None = None,
 ) -> set[int]:
-    """Remove all parent_id links and identify old parent placeholders."""
+    """Remove all parent_id links, deactivate parent placeholders, and delete
+    group-master products before the AI runs.
+
+    Detection uses two criteria (neither requires active=False):
+    1. Any product referenced as parent_id by another product (has children).
+    2. Any product whose product_group_id equals group_master_id (optimizer-created).
+
+    Group-master products are deleted immediately (recipe stubs are safe — they
+    have no product_group_id and no children).  All other identified parents are
+    marked active=0 so they are excluded from the AI feed.
+
+    Returns the full set of identified parent IDs so the caller can filter them
+    out of the working product list.
+    """
+    # 1. Products referenced as a parent by any other product
     has_children: set[int] = set()
     for p in products:
         if p.get("parent_id"):
             has_children.add(int(p["parent_id"]))
 
-    old_parent_ids: set[int] = set()
-    for p in products:
-        if int(p["id"]) in has_children and not p.get("active"):
-            old_parent_ids.add(int(p["id"]))
+    # 2. Optimizer-created group-master products (safe to delete)
+    group_master_prods: set[int] = set()
+    if group_master_id is not None:
+        for p in products:
+            if p.get("product_group_id") == group_master_id:
+                group_master_prods.add(int(p["id"]))
 
+    all_parent_ids = has_children | group_master_prods
+
+    # Deactivate all identified parents (catches ones still marked active)
+    if all_parent_ids:
+        placeholders = ",".join("?" * len(all_parent_ids))
+        conn.execute(
+            f"UPDATE products SET active = 0 WHERE id IN ({placeholders})",
+            list(all_parent_ids),
+        )
+
+    # Strip parent_id links from children before deleting parents
     stripped = 0
     for p in products:
         if p.get("parent_id"):
             conn.execute("UPDATE products SET parent_id = NULL WHERE id = ?", (p["id"],))
             p["parent_id"] = None
             stripped += 1
+
+    # Delete optimizer-created group-master products immediately
+    deleted = 0
+    for pid in group_master_prods:
+        conn.execute("DELETE FROM products WHERE id = ?", (pid,))
+        deleted += 1
+
     conn.commit()
 
     log(
-        "Clean-slate mode: stripped parents from %d product(s), "
-        "%d old parent placeholder(s) identified.",
-        stripped, len(old_parent_ids),
+        "Clean-slate: stripped parents from %d product(s), "
+        "deactivated %d parent placeholder(s), deleted %d group-master product(s).",
+        stripped, len(all_parent_ids), deleted,
     )
-    return old_parent_ids
+    return all_parent_ids
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +624,7 @@ def run_optimize(
     old_parent_ids: set[int] = set()
     if product_ids is None:
         # Full mode: strip all parents, exclude old parent placeholders
-        old_parent_ids = _strip_parents(conn, all_products, log)
+        old_parent_ids = _strip_parents(conn, all_products, log, group_master_id)
         products = [p for p in all_products if int(p["id"]) not in old_parent_ids]
     else:
         allowed = set(product_ids)
@@ -671,20 +706,6 @@ def run_optimize(
         name_to_product=name_to_product,
         batch_size=batch_size,
     )
-
-    # --- Clean up old parent placeholders (full mode only) ---
-    if product_ids is None and old_parent_ids:
-        removed = 0
-        for pid in old_parent_ids:
-            still_has_children = conn.execute(
-                "SELECT 1 FROM products WHERE parent_id = ? LIMIT 1", (pid,)
-            ).fetchone()
-            if not still_has_children:
-                conn.execute("DELETE FROM products WHERE id = ?", (pid,))
-                removed += 1
-        conn.commit()
-        if removed:
-            log("Removed %d obsolete parent placeholder(s).", removed)
 
     log("Optimize complete — %d field(s) updated.", updated)
     return {"updated": updated}

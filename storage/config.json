@@ -1,6 +1,6 @@
 {
   "name": "Storage",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "slug": "ha_storage",
   "description": "SQLite-backed central data store for the HA-apps ecosystem",
   "url": "https://github.com/Glitchtit/HA-storage",
