@@ -626,6 +626,11 @@ def run_optimize(
         # Full mode: strip all parents, exclude old parent placeholders
         old_parent_ids = _strip_parents(conn, all_products, log, group_master_id)
         products = [p for p in all_products if int(p["id"]) not in old_parent_ids]
+        # Purge deleted/deactivated parents from name lookup so _ensure_parent_product
+        # creates fresh entries rather than referencing stale (possibly deleted) IDs.
+        for p in all_products:
+            if int(p["id"]) in old_parent_ids:
+                name_to_product.pop(p.get("name", ""), None)
     else:
         allowed = set(product_ids)
         products = [p for p in all_products if int(p["id"]) in allowed]
