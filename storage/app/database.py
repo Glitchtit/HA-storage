@@ -272,3 +272,51 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
     log.info("Database seeded successfully.")
+
+
+# ---------------------------------------------------------------------------
+# HA Supervisor options sync
+# ---------------------------------------------------------------------------
+
+_OPTIONS_FILE = Path("/data/options.json")
+
+_OPTIONS_CONFIG_MAP = {
+    "ai_provider": "ai_provider",
+    "gemini_api_key": "gemini_api_key",
+    "gemini_model": "gemini_model",
+    "ollama_url": "ollama_url",
+    "ollama_model": "ollama_model",
+    "claude_api_key": "claude_api_key",
+    "claude_model": "claude_model",
+    "scraper_url": "scraper_url",
+}
+
+
+def sync_from_options(conn: sqlite3.Connection) -> None:
+    """Read /data/options.json (HA Supervisor add-on config) and upsert non-empty
+    values into the config table so settings set in the HA UI take effect.
+    """
+    import json as _json
+
+    if not _OPTIONS_FILE.exists():
+        return
+    try:
+        opts = _json.loads(_OPTIONS_FILE.read_text())
+    except Exception as exc:
+        log.warning("Could not read options.json: %s", exc)
+        return
+
+    synced = 0
+    for opt_key, config_key in _OPTIONS_CONFIG_MAP.items():
+        val = opts.get(opt_key)
+        if val is None or val == "":
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+            (config_key, str(val)),
+        )
+        synced += 1
+
+    if synced:
+        conn.commit()
+        log.info("Synced %d config value(s) from options.json.", synced)

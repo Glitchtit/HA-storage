@@ -59,7 +59,13 @@ def get_connection():
 
 
 def _seed_config(conn):
-    """Write addon config values to the config table."""
+    """Write addon config values to the config table.
+
+    All values read from environment variables (set from HA Supervisor options)
+    use INSERT OR REPLACE so that changes made via the HA interface always take
+    effect on the next addon restart.  The UI Settings page saves to the same
+    DB rows, which means the most-recent write wins.
+    """
     api_key = os.getenv("GEMINI_API_KEY", "")
     model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     if api_key:
@@ -72,8 +78,6 @@ def _seed_config(conn):
         (model,),
     )
 
-    # Ollama / provider — INSERT OR IGNORE so user edits via the Settings UI
-    # survive addon restarts (env var only sets the initial value).
     ai_provider = os.getenv("AI_PROVIDER", "")
     ollama_url = os.getenv("OLLAMA_URL", "")
     ollama_model = os.getenv("OLLAMA_MODEL", "")
@@ -81,27 +85,27 @@ def _seed_config(conn):
     claude_model = os.getenv("CLAUDE_MODEL", "")
     if ai_provider:
         conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('ai_provider', ?)",
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('ai_provider', ?)",
             (ai_provider,),
         )
     if ollama_url:
         conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('ollama_url', ?)",
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('ollama_url', ?)",
             (ollama_url,),
         )
     if ollama_model:
         conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('ollama_model', ?)",
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('ollama_model', ?)",
             (ollama_model,),
         )
     if claude_api_key:
         conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('claude_api_key', ?)",
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('claude_api_key', ?)",
             (claude_api_key,),
         )
     if claude_model:
         conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('claude_model', ?)",
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('claude_model', ?)",
             (claude_model,),
         )
 
