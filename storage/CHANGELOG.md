@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+- Fix HA To-do sync: add `homeassistant_api: true` to config.json (was missing, blocked all HA Core API calls)
+- Remove unreliable config flow auto-creation of To-do entity (not supported via HA API)
+- Settings UI: show HA connection status banner — ✅ Connected or ⚠️ with step-by-step setup instructions
+- Add `GET /api/shopping-list/ha-status` endpoint returning token availability + entity existence
+- Sync button refreshes status after sync
+
 ## 0.3.1
 - Smart Shopping List: products below `min_stock_amount` auto-added to shopping list; removed when restocked
 - HA To-do sync: shopping list synced to a Home Assistant To-do entity (`todo.smart_shopping_list` by default)

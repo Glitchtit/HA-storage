@@ -1,6 +1,6 @@
 {
   "name": "Storage",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "slug": "ha_storage",
   "description": "SQLite-backed central data store for the HA-apps ecosystem",
   "url": "https://github.com/Glitchtit/HA-storage",
@@ -10,6 +10,7 @@
   "admin": false,
   "panel_admin": false,
   "hassio_api": true,
+  "homeassistant_api": true,
   "ingress": true,
   "ingress_port": 8099,
   "init": false,
