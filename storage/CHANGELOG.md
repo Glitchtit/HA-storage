@@ -1,4 +1,8 @@
-## 0.3.10
+## 0.3.11
+- Settings: editable optimize batch size (10–500, default 100) in AI config card
+- Batch size is persisted in the config DB and read dynamically at optimize time
+
+
 - Optimize log now shows AI token usage (in/out) and response time per batch call
 - Token/timing lines rendered in cyan in the web UI log view
 

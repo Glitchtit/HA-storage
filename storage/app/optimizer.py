@@ -16,7 +16,7 @@ import sqlite3
 import time
 from typing import Any, Callable
 
-from ai_client import call_ai_json, _get_ai_config, _BATCH_SIZE
+from ai_client import call_ai_json, _get_ai_config, get_batch_size
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,7 @@ def _phase1_structure(
     group_master_id: int | None,
     initial_parent_names: list[str] | None = None,
     initial_category_names: list[str] | None = None,
+    batch_size: int = 100,
 ) -> dict[str, Any]:
     """Determine categories and parent products for all *products*.
 
@@ -198,8 +199,8 @@ def _phase1_structure(
     kpl_row = conn.execute("SELECT id FROM units WHERE name = 'kpl'").fetchone()
     default_unit_id = kpl_row["id"] if kpl_row else 1
 
-    for batch_idx, i in enumerate(range(0, len(products), _BATCH_SIZE)):
-        batch = products[i: i + _BATCH_SIZE]
+    for batch_idx, i in enumerate(range(0, len(products), batch_size)):
+        batch = products[i: i + batch_size]
         product_lines = "\n".join(f"  {p['id']}: {p.get('name', p['id'])}" for p in batch)
 
         parents_section = ""
@@ -292,7 +293,7 @@ def _phase1_structure(
 
         log(
             "Structure batch %d/%d: %d parent(s), %d categorie(s) assigned.",
-            batch_idx + 1, -(-len(products) // _BATCH_SIZE),
+            batch_idx + 1, -(-len(products) // batch_size),
             len(batch_parent_names), len(batch_category_names),
         )
 
@@ -317,6 +318,7 @@ def _phase2_details(
     log: Callable[..., None],
     *,
     name_to_product: dict[str, dict],
+    batch_size: int = 100,
 ) -> int:
     product_category = p1["product_category"]
     product_group_name = p1["product_group_name"]
@@ -342,8 +344,8 @@ def _phase2_details(
 
     updated = 0
 
-    for batch_idx, i in enumerate(range(0, len(products), _BATCH_SIZE)):
-        batch = products[i: i + _BATCH_SIZE]
+    for batch_idx, i in enumerate(range(0, len(products), batch_size)):
+        batch = products[i: i + batch_size]
 
         def _product_line(p: dict) -> str:
             line = f"  {p['id']}: {p.get('name', p['id'])}"
@@ -534,7 +536,7 @@ def _phase2_details(
         conn.commit()
         log(
             "Details batch %d/%d done.",
-            batch_idx + 1, -(-len(products) // _BATCH_SIZE),
+            batch_idx + 1, -(-len(products) // batch_size),
         )
 
     return updated
@@ -568,6 +570,8 @@ def run_optimize(
             emit(formatted)
 
     cfg = _get_ai_config(conn)
+    batch_size = get_batch_size(conn)
+    log("Batch size: %d product(s) per AI call.", batch_size)
 
     # --- Load data ---
     all_products = _load_products(conn)
@@ -642,6 +646,7 @@ def run_optimize(
         group_master_id=group_master_id,
         initial_parent_names=initial_parent_names,
         initial_category_names=merged_category_names or None,
+        batch_size=batch_size,
     )
 
     if initial_parent_name_to_id:
@@ -664,6 +669,7 @@ def run_optimize(
     updated = _phase2_details(
         conn, products, p1, locations, cfg, log,
         name_to_product=name_to_product,
+        batch_size=batch_size,
     )
 
     # --- Clean up old parent placeholders (full mode only) ---

@@ -115,6 +115,11 @@ def _seed_config(conn):
         "INSERT OR IGNORE INTO config (key, value) VALUES ('ha_todo_entity', 'todo.smart_shopping_list')"
     )
 
+    # Seed optimize_batch_size default (INSERT OR IGNORE — user may override via UI)
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('optimize_batch_size', '100')"
+    )
+
     conn.commit()
 
 
