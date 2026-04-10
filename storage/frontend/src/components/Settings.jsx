@@ -80,12 +80,6 @@ export default function Settings() {
     }
   };
 
-  const resultEntries = migrationResult
-    ? Object.entries(migrationResult).filter(
-        ([k]) => !['error', 'errors'].includes(k)
-      )
-    : [];
-
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
       <h2 className="text-xl font-bold">⚙️ Settings</h2>
@@ -186,13 +180,15 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Grocy migration card */}
+      {/* Grocy barcode import card */}
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-5 space-y-4">
-        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Grocy Migration</h3>
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Import from Grocy</h3>
 
-        <div className="bg-yellow-500/20 border border-yellow-500/30 rounded-lg px-4 py-3 text-sm text-yellow-400">
-          ⚠️ This will overwrite the current database
-        </div>
+        <p className="text-sm text-gray-400">
+          Imports barcodes and stock amounts from Grocy into the barcode queue.
+          Run the Scraper with <code className="text-emerald-400">--discover</code> afterwards
+          to create products with images, AI grouping, and conversions.
+        </p>
 
         <div className="space-y-3">
           <div>
@@ -218,13 +214,13 @@ export default function Settings() {
           <button
             onClick={handleMigration}
             disabled={migrating || !grocyUrl.trim() || !grocyApiKey.trim()}
-            className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="bg-emerald-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {migrating ? 'Migrating…' : 'Start Migration'}
+            {migrating ? 'Importing…' : 'Import Barcodes'}
           </button>
         </div>
 
-        {/* Migration results */}
+        {/* Import results */}
         {migrationResult && (
           <div className="mt-4 space-y-3">
             {migrationResult.error ? (
@@ -232,19 +228,15 @@ export default function Settings() {
                 Error: {migrationResult.error}
               </div>
             ) : (
-              <>
-                <h4 className="text-sm font-medium text-gray-300">Results</h4>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {resultEntries.map(([key, value]) => (
-                    <div key={key} className="bg-gray-700 rounded px-3 py-2 text-sm">
-                      <span className="text-gray-400 text-xs block capitalize">
-                        {key.replace(/_/g, ' ')}
-                      </span>
-                      <span className="font-medium">{value}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
+              <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg px-4 py-3 text-sm text-emerald-400 space-y-1">
+                <p>✅ {migrationResult.barcodes_queued ?? 0} barcode(s) queued for discovery</p>
+                {(migrationResult.barcodes_skipped ?? 0) > 0 && (
+                  <p className="text-gray-400">{migrationResult.barcodes_skipped} already known — skipped</p>
+                )}
+                <p className="text-gray-400 text-xs mt-2">
+                  Run the Scraper with --discover to create products from the queue.
+                </p>
+              </div>
             )}
 
             {Array.isArray(migrationResult.errors) && migrationResult.errors.length > 0 && (

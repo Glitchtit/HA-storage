@@ -116,13 +116,14 @@ CREATE TABLE IF NOT EXISTS shopping_list (
 );
 
 CREATE TABLE IF NOT EXISTS barcode_queue (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    barcode           TEXT NOT NULL,
-    source            TEXT DEFAULT 'scan',
-    status            TEXT DEFAULT 'pending',
-    result_product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
-    error_message     TEXT,
-    created_at        TEXT DEFAULT (datetime('now'))
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    barcode              TEXT NOT NULL,
+    source               TEXT DEFAULT 'scan',
+    status               TEXT DEFAULT 'pending',
+    result_product_id    INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    error_message        TEXT,
+    import_stock_amount  REAL,
+    created_at           TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS config (
@@ -191,9 +192,21 @@ def get_db(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations for existing databases."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(barcode_queue)").fetchall()}
+    if "import_stock_amount" not in cols:
+        conn.execute("ALTER TABLE barcode_queue ADD COLUMN import_stock_amount REAL")
+        conn.commit()
+        log.info("Added import_stock_amount column to barcode_queue.")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Create tables if they don't exist and seed initial data."""
     conn.executescript(_SCHEMA_SQL)
+
+    # Schema migrations for existing databases
+    _migrate_schema(conn)
 
     # Check if already seeded
     row = conn.execute(

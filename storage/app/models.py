@@ -62,7 +62,7 @@ class ProductUpdate(BaseModel):
 class Product(BaseModel):
     id: int
     name: str
-    description: str
+    description: str | None = None
     parent_id: int | None
     location_id: int | None
     product_group_id: int | None
@@ -187,7 +187,7 @@ class Ingredient(BaseModel):
     product_id: int
     amount: float
     unit_id: int
-    note: str
+    note: str | None = None
     sort_order: int
 
 class RecipeCreate(BaseModel):
@@ -208,7 +208,7 @@ class RecipeUpdate(BaseModel):
 class Recipe(BaseModel):
     id: int
     name: str
-    description: str
+    description: str | None = None
     source_url: str | None
     servings: float
     picture_filename: str | None
@@ -254,6 +254,7 @@ class ShoppingItem(BaseModel):
 class BarcodeQueueCreate(BaseModel):
     barcode: str
     source: str = "scan"
+    import_stock_amount: float | None = None
 
 class BarcodeQueueUpdate(BaseModel):
     status: str | None = None
@@ -267,6 +268,7 @@ class BarcodeQueueEntry(BaseModel):
     status: str
     result_product_id: int | None
     error_message: str | None
+    import_stock_amount: float | None = None
     created_at: str
 
 # ── Config ─────────────────────────────────────────────────────────────────
@@ -282,15 +284,8 @@ class GrocyMigrationRequest(BaseModel):
     api_key: str
 
 class MigrationResult(BaseModel):
-    products: int = 0
-    stock_entries: int = 0
-    units: int = 0
-    conversions: int = 0
-    barcodes: int = 0
-    locations: int = 0
-    product_groups: int = 0
-    recipes: int = 0
-    recipe_ingredients: int = 0
+    barcodes_queued: int = 0
+    barcodes_skipped: int = 0
     errors: list[str] = []
 
 # ── Health ─────────────────────────────────────────────────────────────────
