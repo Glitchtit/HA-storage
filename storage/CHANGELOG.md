@@ -1,6 +1,7 @@
 ## 0.3.16
 - Optimizer now deactivates ALL parent/group-master products before the AI runs (not just inactive ones)
 - Optimizer-created group-master products are deleted immediately before AI batches (fewer tokens wasted)
+- Fix: purge deleted parent IDs from name_to_product so Phase 1 creates fresh parents (fixes FOREIGN KEY constraint errors)
 - Recipe scraper stub products are unaffected (they have no product_group_id)
 
 ## 0.3.15
