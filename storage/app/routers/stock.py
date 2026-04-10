@@ -23,6 +23,14 @@ def _sync_shopping_list(conn: sqlite3.Connection, product_id: int) -> None:
     ha_sync.sync_product_shopping_list(conn, product_id)
 
 
+def _sync_stock_list(conn: sqlite3.Connection, product_id: int) -> None:
+    import ha_sync
+    try:
+        ha_sync.sync_product_stock_list(conn, product_id)
+    except Exception as exc:
+        log.warning("Stock list sync failed for product %d: %s", product_id, exc)
+
+
 @router.get("/stock", response_model=list[StockSummary])
 def list_stock():
     """Aggregated stock per product."""
@@ -96,6 +104,7 @@ def add_stock(body: StockAdd):
     log.info("Added %.1f to stock for product %d.", body.amount, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
     _sync_shopping_list(conn, body.product_id)
+    _sync_stock_list(conn, body.product_id)
     return entry
 
 
@@ -129,6 +138,7 @@ def consume_stock(body: StockConsume):
     log.info("Consumed %.1f from product %d (%.1f remaining to consume).",
              consumed, body.product_id, remaining)
     _sync_shopping_list(conn, body.product_id)
+    _sync_stock_list(conn, body.product_id)
     return {"consumed": consumed, "remaining_to_consume": remaining}
 
 
@@ -195,6 +205,7 @@ def transfer_stock(body: StockTransfer):
 
     conn.commit()
     _sync_shopping_list(conn, body.product_id)
+    _sync_stock_list(conn, body.product_id)
     return {"transferred": transferred}
 @router.delete("/stock/{entry_id}", status_code=204)
 def delete_stock_entry(entry_id: int):
@@ -206,3 +217,4 @@ def delete_stock_entry(entry_id: int):
     conn.execute("DELETE FROM stock WHERE id = ?", (entry_id,))
     conn.commit()
     _sync_shopping_list(conn, product_id)
+    _sync_stock_list(conn, product_id)
