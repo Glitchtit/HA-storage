@@ -61,7 +61,6 @@ http {
             sub_filter '<meta name="ingress-path" content="">'
                        '<meta name="ingress-path" content="$http_x_ingress_path">';
             sub_filter_once on;
-            sub_filter_types text/html;
             try_files $uri $uri/ /index.html;
         }
     }

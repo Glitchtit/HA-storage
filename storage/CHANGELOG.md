@@ -1,3 +1,6 @@
+## 0.3.18
+- Fix: remove redundant sub_filter_types text/html in nginx.conf (duplicate MIME type warning)
+
 ## 0.3.17
 - Fix: optimizer full-mode now seeds Phase 1 with old parent names (collected before deletion) so AI reuses consistent group names across batches instead of inventing fresh ones
 - Fix: optimizer loads existing categories as initial context in full mode (same as incremental mode)
