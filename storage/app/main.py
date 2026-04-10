@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from database import get_db, init_db
+from database import get_db, init_db, sync_from_options
 from models import HealthResponse
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -54,6 +54,7 @@ def get_connection():
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         _db = get_db(DB_PATH)
         init_db(_db)
+        sync_from_options(_db)
         _seed_config(_db)
     return _db
 
