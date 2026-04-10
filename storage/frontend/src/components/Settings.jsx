@@ -1,15 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
-import { getHealth, getAiKey, setConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset } from '../api';
+import { getHealth, getAiConfig, setConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset } from '../api';
 
 export default function Settings() {
   // Database info
   const [health, setHealth] = useState(null);
   // AI config
+  const [aiProvider, setAiProvider] = useState('gemini');
   const [aiKey, setAiKey] = useState('');
   const [aiModel, setAiModel] = useState('');
+  const [ollamaUrl, setOllamaUrl] = useState('');
+  const [ollamaModel, setOllamaModel] = useState('');
   const [editingAi, setEditingAi] = useState(false);
+  const [editProvider, setEditProvider] = useState('gemini');
   const [aiKeyInput, setAiKeyInput] = useState('');
   const [aiModelInput, setAiModelInput] = useState('');
+  const [ollamaUrlInput, setOllamaUrlInput] = useState('');
+  const [ollamaModelInput, setOllamaModelInput] = useState('');
   const [savingAi, setSavingAi] = useState(false);
   // Grocy import
   const [grocyUrl, setGrocyUrl] = useState('');
@@ -48,11 +54,15 @@ export default function Settings() {
     let cancelled = false;
     const load = async () => {
       try {
-        const [healthRes, aiRes] = await Promise.all([getHealth(), getAiKey()]);
+        const [healthRes, aiRes] = await Promise.all([getHealth(), getAiConfig()]);
         if (cancelled) return;
         setHealth(healthRes.data);
-        setAiKey(aiRes.data.api_key ?? '');
-        setAiModel(aiRes.data.model ?? '');
+        const d = aiRes.data;
+        setAiProvider(d.provider ?? 'gemini');
+        setAiKey(d.api_key ?? '');
+        setAiModel(d.model ?? '');
+        setOllamaUrl(d.ollama_url ?? '');
+        setOllamaModel(d.ollama_model ?? '');
       } catch (err) {
         console.error('Failed to load settings', err);
       }
@@ -70,17 +80,32 @@ export default function Settings() {
   const handleSaveAi = async () => {
     setSavingAi(true);
     try {
-      if (aiKeyInput.trim()) {
-        await setConfig('gemini_api_key', aiKeyInput.trim());
-        setAiKey(aiKeyInput.trim());
-      }
-      if (aiModelInput.trim()) {
-        await setConfig('gemini_model', aiModelInput.trim());
-        setAiModel(aiModelInput.trim());
+      await setConfig('ai_provider', editProvider);
+      setAiProvider(editProvider);
+      if (editProvider === 'gemini') {
+        if (aiKeyInput.trim()) {
+          await setConfig('gemini_api_key', aiKeyInput.trim());
+          setAiKey(aiKeyInput.trim());
+        }
+        if (aiModelInput.trim()) {
+          await setConfig('gemini_model', aiModelInput.trim());
+          setAiModel(aiModelInput.trim());
+        }
+      } else {
+        if (ollamaUrlInput.trim()) {
+          await setConfig('ollama_url', ollamaUrlInput.trim());
+          setOllamaUrl(ollamaUrlInput.trim());
+        }
+        if (ollamaModelInput.trim()) {
+          await setConfig('ollama_model', ollamaModelInput.trim());
+          setOllamaModel(ollamaModelInput.trim());
+        }
       }
       setEditingAi(false);
       setAiKeyInput('');
       setAiModelInput('');
+      setOllamaUrlInput('');
+      setOllamaModelInput('');
     } catch (err) {
       console.error('Failed to save AI settings', err);
     } finally {
@@ -195,19 +220,41 @@ export default function Settings() {
           <>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-gray-400 block text-xs">API Key</span>
-                <span className="font-mono text-sm">{maskKey(aiKey)}</span>
+                <span className="text-gray-400 block text-xs">Provider</span>
+                <span className="font-medium capitalize">{aiProvider}</span>
               </div>
-              <div>
-                <span className="text-gray-400 block text-xs">Model</span>
-                <span className="font-medium">{aiModel || '–'}</span>
-              </div>
+              {aiProvider === 'gemini' ? (
+                <>
+                  <div>
+                    <span className="text-gray-400 block text-xs">API Key</span>
+                    <span className="font-mono text-sm">{maskKey(aiKey)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block text-xs">Model</span>
+                    <span className="font-medium">{aiModel || '–'}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <span className="text-gray-400 block text-xs">Ollama URL</span>
+                    <span className="font-mono text-sm">{ollamaUrl || '–'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block text-xs">Model</span>
+                    <span className="font-medium">{ollamaModel || '–'}</span>
+                  </div>
+                </>
+              )}
             </div>
             <button
               onClick={() => {
                 setEditingAi(true);
+                setEditProvider(aiProvider);
                 setAiKeyInput('');
                 setAiModelInput(aiModel);
+                setOllamaUrlInput(ollamaUrl);
+                setOllamaModelInput(ollamaModel);
               }}
               className="text-sm text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
             >
@@ -216,30 +263,78 @@ export default function Settings() {
           </>
         ) : (
           <div className="space-y-3">
+            {/* Provider selector */}
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Gemini API Key</label>
-              <input
-                type="password"
-                value={aiKeyInput}
-                onChange={(e) => setAiKeyInput(e.target.value)}
-                placeholder="New API key"
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-              />
+              <label className="block text-xs text-gray-400 mb-1">Provider</label>
+              <div className="flex gap-2">
+                {['gemini', 'ollama'].map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setEditProvider(p)}
+                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors capitalize ${
+                      editProvider === p
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Model</label>
-              <input
-                type="text"
-                value={aiModelInput}
-                onChange={(e) => setAiModelInput(e.target.value)}
-                placeholder="gemini-2.0-flash"
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-              />
-            </div>
+
+            {editProvider === 'gemini' ? (
+              <>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Gemini API Key</label>
+                  <input
+                    type="password"
+                    value={aiKeyInput}
+                    onChange={(e) => setAiKeyInput(e.target.value)}
+                    placeholder="New API key"
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Model</label>
+                  <input
+                    type="text"
+                    value={aiModelInput}
+                    onChange={(e) => setAiModelInput(e.target.value)}
+                    placeholder="gemini-2.0-flash"
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Ollama URL</label>
+                  <input
+                    type="text"
+                    value={ollamaUrlInput}
+                    onChange={(e) => setOllamaUrlInput(e.target.value)}
+                    placeholder="http://192.168.1.100:11434"
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Model</label>
+                  <input
+                    type="text"
+                    value={ollamaModelInput}
+                    onChange={(e) => setOllamaModelInput(e.target.value)}
+                    placeholder="llama3"
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </>
+            )}
+
             <div className="flex gap-2">
               <button
                 onClick={handleSaveAi}
-                disabled={savingAi || (!aiKeyInput.trim() && !aiModelInput.trim())}
+                disabled={savingAi}
                 className="bg-emerald-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {savingAi ? 'Saving…' : 'Save'}
