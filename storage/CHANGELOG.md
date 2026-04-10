@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7
+- Add `GET /api/config/ai` endpoint returning provider-agnostic AI config
+  (`provider`, `api_key`, `model`, `ollama_url`, `ollama_model`)
+- Update `GET /api/config/ai-key` to return gracefully when provider is Ollama
+- Settings UI: AI provider toggle (Gemini / Ollama); Ollama shows URL + model fields
+
 ## 0.2.6
 - Barcode lookup (`GET /products/by-barcode/{barcode}`) now returns `matched_pack_size`
   so clients (e.g. Stock app) know how many units to add when scanning a multi-pack barcode

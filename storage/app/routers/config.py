@@ -24,17 +24,44 @@ def get_config():
     return rows
 
 
+@router.get("/config/ai")
+def get_ai_config():
+    """Return the full AI provider config (provider-agnostic, for sister apps)."""
+    conn = _get_db()
+
+    def _val(key: str, default: str = "") -> str:
+        row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row and row["value"] else default
+
+    return {
+        "provider": _val("ai_provider", "gemini"),
+        "api_key": _val("gemini_api_key"),
+        "model": _val("gemini_model", "gemini-2.0-flash"),
+        "ollama_url": _val("ollama_url"),
+        "ollama_model": _val("ollama_model", "llama3"),
+    }
+
+
 @router.get("/config/ai-key")
 def get_ai_key():
-    """Return the Gemini API key (for sister apps)."""
+    """Return the Gemini API key (for sister apps — legacy endpoint)."""
     conn = _get_db()
-    row = conn.execute("SELECT value FROM config WHERE key = 'gemini_api_key'").fetchone()
-    if not row or not row["value"]:
+
+    def _val(key: str, default: str = "") -> str:
+        row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row and row["value"] else default
+
+    provider = _val("ai_provider", "gemini")
+    # For Ollama provider, return empty key without 404 so old clients degrade gracefully
+    if provider == "ollama":
+        return {"api_key": "", "model": _val("ollama_model", "llama3")}
+
+    api_key = _val("gemini_api_key")
+    if not api_key:
         raise HTTPException(404, "Gemini API key not configured")
-    model = conn.execute("SELECT value FROM config WHERE key = 'gemini_model'").fetchone()
     return {
-        "api_key": row["value"],
-        "model": model["value"] if model else "gemini-2.0-flash",
+        "api_key": api_key,
+        "model": _val("gemini_model", "gemini-2.0-flash"),
     }
 
 
