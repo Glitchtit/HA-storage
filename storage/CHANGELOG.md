@@ -1,3 +1,7 @@
+## 0.3.21
+- Fix: optimizer rename-in-place pack conversion now multiplies stock entries by pack_size (e.g. 1 box of 10 eggs → 10 eggs in stock)
+- Safety cap: pack_size > 24 is ignored for stock multiplication (prevents package-content numbers like "cotton swabs 200 kpl" from inflating stock)
+
 ## 0.3.20
 - Fix: optimizer pack conversion now transfers stock to base product (amount × pack_size) before deleting the multi-pack product; previously stock was lost due to CASCADE DELETE
 

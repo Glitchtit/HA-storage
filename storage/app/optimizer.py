@@ -472,6 +472,17 @@ def _phase2_details(
                     pack_size = None
 
             if pack_size and pack_size > 1:
+                # Safety cap: pack_size > 24 almost certainly describes package contents
+                # (e.g. "cotton swabs 200 kpl", "tea bags 100 kpl"), not a consumer
+                # multi-pack. Cap at 24 to avoid inflating stock wildly if the AI errs.
+                _MAX_PACK_MULTIPLIER = 24
+                if pack_size > _MAX_PACK_MULTIPLIER:
+                    log(
+                        "  ~ pack_size=%d for '%s' exceeds cap (%d) — skipping stock multiply.",
+                        pack_size, product.get("name"), _MAX_PACK_MULTIPLIER,
+                    )
+                    pack_size = 1  # disable multiplication for this product
+
                 base_name = info.get("base_product_name")
                 if base_name and isinstance(base_name, str):
                     base_name = base_name.strip()
@@ -492,25 +503,26 @@ def _phase2_details(
                                 log("  -> Moved barcode '%s' from '%s' to '%s' (pack=%d).",
                                     bc["barcode"], product.get("name"), base_name, pack_size)
                             # Transfer stock to base product (amount × pack_size)
-                            stock_rows = conn.execute(
-                                "SELECT * FROM stock WHERE product_id = ?", (product_id,)
-                            ).fetchall()
-                            for se in stock_rows:
-                                transferred = float(se["amount"]) * pack_size
-                                conn.execute(
-                                    """INSERT INTO stock
-                                       (product_id, location_id, amount, unit_id, best_before_date)
-                                       VALUES (?, ?, ?, ?, ?)""",
-                                    (
-                                        base_pid,
-                                        se["location_id"],
-                                        transferred,
-                                        se["unit_id"],
-                                        se["best_before_date"],
-                                    ),
-                                )
-                                log("  -> Transferred %.0f (%.0f×%d) stock to '%s'.",
-                                    transferred, float(se["amount"]), pack_size, base_name)
+                            if pack_size > 1:
+                                stock_rows = conn.execute(
+                                    "SELECT * FROM stock WHERE product_id = ?", (product_id,)
+                                ).fetchall()
+                                for se in stock_rows:
+                                    transferred = float(se["amount"]) * pack_size
+                                    conn.execute(
+                                        """INSERT INTO stock
+                                           (product_id, location_id, amount, unit_id, best_before_date)
+                                           VALUES (?, ?, ?, ?, ?)""",
+                                        (
+                                            base_pid,
+                                            se["location_id"],
+                                            transferred,
+                                            se["unit_id"],
+                                            se["best_before_date"],
+                                        ),
+                                    )
+                                    log("  -> Transferred %.0f (%.0f×%d) stock to '%s'.",
+                                        transferred, float(se["amount"]), pack_size, base_name)
                             # Delete multi-pack product (cascades stock deletion)
                             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
                             conn.commit()
@@ -523,13 +535,27 @@ def _phase2_details(
                                 product.get("name"), base_name, exc)
                             conn.rollback()
                     elif not base_product or int(base_product["id"]) == product_id:
-                        # Rename in place
+                        # Rename in place and multiply stock × pack_size
                         if base_name and base_name != product.get("name"):
                             try:
                                 conn.execute(
                                     "UPDATE products SET name = ? WHERE id = ?",
                                     (base_name, product_id),
                                 )
+                                # Multiply existing stock entries in-place
+                                if pack_size > 1:
+                                    stock_rows = conn.execute(
+                                        "SELECT id, amount FROM stock WHERE product_id = ?",
+                                        (product_id,),
+                                    ).fetchall()
+                                    for se in stock_rows:
+                                        new_amount = float(se["amount"]) * pack_size
+                                        conn.execute(
+                                            "UPDATE stock SET amount = ? WHERE id = ?",
+                                            (new_amount, se["id"]),
+                                        )
+                                        log("  -> Updated stock to %.0f (%.0f×%d) for '%s'.",
+                                            new_amount, float(se["amount"]), pack_size, base_name)
                                 conn.commit()
                                 log("  -> Renamed '%s' -> '%s' (multi-pack normalised).",
                                     product.get("name"), base_name)
