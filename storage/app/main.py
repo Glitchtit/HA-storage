@@ -77,6 +77,8 @@ def _seed_config(conn):
     ai_provider = os.getenv("AI_PROVIDER", "")
     ollama_url = os.getenv("OLLAMA_URL", "")
     ollama_model = os.getenv("OLLAMA_MODEL", "")
+    claude_api_key = os.getenv("CLAUDE_API_KEY", "")
+    claude_model = os.getenv("CLAUDE_MODEL", "")
     if ai_provider:
         conn.execute(
             "INSERT OR IGNORE INTO config (key, value) VALUES ('ai_provider', ?)",
@@ -91,6 +93,16 @@ def _seed_config(conn):
         conn.execute(
             "INSERT OR IGNORE INTO config (key, value) VALUES ('ollama_model', ?)",
             (ollama_model,),
+        )
+    if claude_api_key:
+        conn.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('claude_api_key', ?)",
+            (claude_api_key,),
+        )
+    if claude_model:
+        conn.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('claude_model', ?)",
+            (claude_model,),
         )
 
     conn.commit()

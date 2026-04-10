@@ -39,6 +39,8 @@ def get_ai_config():
         "model": _val("gemini_model", "gemini-2.0-flash"),
         "ollama_url": _val("ollama_url"),
         "ollama_model": _val("ollama_model", "llama3"),
+        "claude_api_key": _val("claude_api_key"),
+        "claude_model": _val("claude_model", "claude-3-5-haiku-20241022"),
     }
 
 
@@ -52,9 +54,11 @@ def get_ai_key():
         return row["value"] if row and row["value"] else default
 
     provider = _val("ai_provider", "gemini")
-    # For Ollama provider, return empty key without 404 so old clients degrade gracefully
+    # For Ollama/Claude providers, return empty key without 404 so old clients degrade gracefully
     if provider == "ollama":
         return {"api_key": "", "model": _val("ollama_model", "llama3")}
+    if provider == "claude":
+        return {"api_key": _val("claude_api_key"), "model": _val("claude_model", "claude-3-5-haiku-20241022")}
 
     api_key = _val("gemini_api_key")
     if not api_key:
