@@ -1,3 +1,8 @@
+## 0.3.16
+- Optimizer now deactivates ALL parent/group-master products before the AI runs (not just inactive ones)
+- Optimizer-created group-master products are deleted immediately before AI batches (fewer tokens wasted)
+- Recipe scraper stub products are unaffected (they have no product_group_id)
+
 ## 0.3.15
 - Move optimize_batch_size setting to HA add-on config (HA Settings → Add-ons → Storage → Configuration), default 100
 - Synced from options.json at startup via sync_from_options
