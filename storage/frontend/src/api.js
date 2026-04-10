@@ -99,6 +99,11 @@ export const recipeImageUrl = (filename) =>
 export const migrateFromGrocy = (data) => api.post('/migrate/grocy', data);
 export const factoryReset = () => api.post('/reset');
 
+// ── AI Optimize ───────────────────────────────────────────────────────────
+export const startOptimize = (productIds = null) =>
+  api.post('/ai/optimize', productIds ? { product_ids: productIds } : {});
+export const getOptimizeStatus = (taskId) => api.get(`/ai/optimize/${taskId}`);
+
 // ── Scraper (proxied via /api/scraper/) ───────────────────────────────────
 const scraper = axios.create({ baseURL: `${INGRESS_PATH}/api/scraper` });
 export const scraperDiscover = () => scraper.post('/discover');

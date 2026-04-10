@@ -186,6 +186,7 @@ from routers import (
     files,
     config,
     migrate,
+    ai,
 )
 
 app.include_router(products.router, prefix="/api")
@@ -199,6 +200,7 @@ app.include_router(shopping.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
 app.include_router(migrate.router, prefix="/api")
+app.include_router(ai.router, prefix="/api")
 
 
 # ── Error handler ──────────────────────────────────────────────────────────
