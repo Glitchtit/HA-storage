@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+- Add Factory Reset button in Settings: wipes all user data (products, stock, barcodes,
+  recipes, images) and re-seeds default units, locations, and conversions
+
 ## 0.2.4
 
 - Fix Pydantic validation errors: description/note fields now accept NULL from database
