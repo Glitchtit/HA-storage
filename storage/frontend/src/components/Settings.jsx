@@ -143,13 +143,15 @@ export default function Settings() {
         setOllamaUrl(d.ollama_url ?? '');
         setOllamaModel(d.ollama_model ?? '');
         setClaudeModel(d.claude_model ?? '');
-        const entity = configRes.data?.ha_todo_entity ?? 'todo.smart_shopping_list';
+        // configRes.data is an array of {key, value} — convert to dict for easy access
+        const cfg = Object.fromEntries((configRes.data ?? []).map(c => [c.key, c.value]));
+        const entity = cfg.ha_todo_entity ?? 'todo.smart_shopping_list';
         setHaTodoEntity(entity);
         setHaTodoInput(entity);
-        const stockEntity = configRes.data?.ha_stock_entity ?? 'todo.smart_stock_list';
+        const stockEntity = cfg.ha_stock_entity ?? 'todo.smart_stock_list';
         setHaStockEntity(stockEntity);
         setHaStockInput(stockEntity);
-        const bs = parseInt(configRes.data?.optimize_batch_size ?? '100', 10) || 100;
+        const bs = parseInt(cfg.optimize_batch_size ?? '100', 10) || 100;
         setBatchSize(bs);
         setBatchSizeInput(String(bs));
         setHaStatus(haStatusRes.data);
