@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+- Smart Shopping List: products below `min_stock_amount` auto-added to shopping list; removed when restocked
+- HA To-do sync: shopping list synced to a Home Assistant To-do entity (`todo.smart_shopping_list` by default)
+- Auto-creates the HA To-do entity on first use (no manual HA setup needed)
+- `POST /api/shopping-list/ha-sync` endpoint for manual full-sync trigger
+- 🤖 badge on auto-added shopping list items in the UI
+- New "Home Assistant Shopping List" section in Settings with entity config + sync button
+- `shopping_list` table: new `auto_added` and `ha_item_name` columns (auto-migrated)
+
 ## 0.3.0
 - Add Claude AI provider support: `claude_api_key` + `claude_model` in config.json, run script, `_seed_config()`, `/config/ai` endpoint, and `/config/ai-key` endpoint
 

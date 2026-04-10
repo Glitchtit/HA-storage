@@ -362,6 +362,12 @@ function ShoppingRow({ item, productMap, unitMap, recipeMap, onToggle, onDelete 
               🍽️ {recipe.name}
             </span>
           )}
+
+          {item.auto_added && (
+            <span className="inline-flex items-center text-[11px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 leading-tight" title="Auto-added by stock tracking">
+              🤖
+            </span>
+          )}
         </div>
 
         {item.note && (

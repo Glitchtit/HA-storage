@@ -200,6 +200,16 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
         log.info("Added import_stock_amount column to barcode_queue.")
 
+    sl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(shopping_list)").fetchall()}
+    if "auto_added" not in sl_cols:
+        conn.execute("ALTER TABLE shopping_list ADD COLUMN auto_added INTEGER DEFAULT 0")
+        conn.commit()
+        log.info("Added auto_added column to shopping_list.")
+    if "ha_item_name" not in sl_cols:
+        conn.execute("ALTER TABLE shopping_list ADD COLUMN ha_item_name TEXT")
+        conn.commit()
+        log.info("Added ha_item_name column to shopping_list.")
+
 
 def init_db(conn: sqlite3.Connection) -> None:
     """Create tables if they don't exist and seed initial data."""

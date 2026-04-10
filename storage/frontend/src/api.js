@@ -83,6 +83,7 @@ export const setConfig = (key, value) =>
   api.put(`/config/${key}`, { value });
 export const getAiKey = () => api.get('/config/ai-key');
 export const getAiConfig = () => api.get('/config/ai');
+export const syncShoppingListToHa = () => api.post('/shopping-list/ha-sync');
 
 // ── Health ────────────────────────────────────────────────────────────────
 export const getHealth = () => api.get('/health');

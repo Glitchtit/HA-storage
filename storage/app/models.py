@@ -248,6 +248,8 @@ class ShoppingItem(BaseModel):
     note: str
     done: bool
     recipe_id: int | None
+    auto_added: bool = False
+    ha_item_name: str | None = None
     created_at: str
 
 # ── Barcode Queue ──────────────────────────────────────────────────────────
