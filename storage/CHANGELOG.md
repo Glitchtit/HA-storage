@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.9
+- Add `ai_provider`, `ollama_url`, `ollama_model` to addon config.json schema + options
+- `_seed_config()` now seeds Ollama env vars (AI_PROVIDER, OLLAMA_URL, OLLAMA_MODEL)
+  into SQLite using INSERT OR IGNORE so Settings UI edits survive restarts
+
 ## 0.2.8
 - VERSION now read dynamically from config.json instead of hardcoded "0.1.0"
 
