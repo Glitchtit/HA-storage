@@ -1,3 +1,6 @@
+## 0.3.20
+- Fix: optimizer pack conversion now transfers stock to base product (amount × pack_size) before deleting the multi-pack product; previously stock was lost due to CASCADE DELETE
+
 ## 0.3.19
 - Optimizer: group-master parent products referenced by recipe ingredients are no longer deleted during clean-slate pass (they are still deactivated and excluded from the AI feed)
 

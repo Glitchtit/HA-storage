@@ -491,7 +491,27 @@ def _phase2_details(
                                 )
                                 log("  -> Moved barcode '%s' from '%s' to '%s' (pack=%d).",
                                     bc["barcode"], product.get("name"), base_name, pack_size)
-                            # Delete multi-pack product
+                            # Transfer stock to base product (amount × pack_size)
+                            stock_rows = conn.execute(
+                                "SELECT * FROM stock WHERE product_id = ?", (product_id,)
+                            ).fetchall()
+                            for se in stock_rows:
+                                transferred = float(se["amount"]) * pack_size
+                                conn.execute(
+                                    """INSERT INTO stock
+                                       (product_id, location_id, amount, unit_id, best_before_date)
+                                       VALUES (?, ?, ?, ?, ?)""",
+                                    (
+                                        base_pid,
+                                        se["location_id"],
+                                        transferred,
+                                        se["unit_id"],
+                                        se["best_before_date"],
+                                    ),
+                                )
+                                log("  -> Transferred %.0f (%.0f×%d) stock to '%s'.",
+                                    transferred, float(se["amount"]), pack_size, base_name)
+                            # Delete multi-pack product (cascades stock deletion)
                             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
                             conn.commit()
                             log("  -> Deleted multi-pack '%s' (merged into '%s').",
