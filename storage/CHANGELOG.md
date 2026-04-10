@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.0
+- Add Claude AI provider support: `claude_api_key` + `claude_model` in config.json, run script, `_seed_config()`, `/config/ai` endpoint, and `/config/ai-key` endpoint
+
 ## 0.2.9
 - Add `ai_provider`, `ollama_url`, `ollama_model` to addon config.json schema + options
 - `_seed_config()` now seeds Ollama env vars (AI_PROVIDER, OLLAMA_URL, OLLAMA_MODEL)
