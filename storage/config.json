@@ -9,7 +9,7 @@
   "boot": "auto",
   "admin": false,
   "panel_admin": false,
-  "hassio_api": false,
+  "hassio_api": true,
   "ingress": true,
   "ingress_port": 8099,
   "init": false,
@@ -19,11 +19,13 @@
   "options": {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.0-flash",
-    "debug": false
+    "debug": false,
+    "scraper_url": ""
   },
   "schema": {
     "gemini_api_key": "str",
     "gemini_model": "str?",
-    "debug": "bool?"
+    "debug": "bool?",
+    "scraper_url": "str?"
   }
 }
