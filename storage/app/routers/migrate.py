@@ -33,7 +33,7 @@ def migrate_from_grocy(body: GrocyMigrationRequest):
 
     Fetches product barcodes and current stock from Grocy, then queues
     each unique barcode in the barcode queue with its stock amount.
-    Run the scraper with --discover to create products from the queue.
+    The scraper's discover flow will create products and restore stock automatically.
     """
     conn = _get_db()
     result = MigrationResult()
