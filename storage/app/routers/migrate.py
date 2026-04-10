@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import shutil
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -11,6 +13,22 @@ from models import GrocyMigrationRequest, MigrationResult
 
 router = APIRouter(tags=["migration"])
 log = logging.getLogger(__name__)
+
+_RESET_TABLES = [
+    "shopping_list",
+    "recipe_ingredients",
+    "recipes",
+    "barcode_queue",
+    "stock",
+    "unit_conversions",
+    "barcodes",
+    "products",
+    "product_groups",
+    "locations",
+    "units",
+    "config",
+    "_meta",
+]
 
 
 def _get_db():
@@ -110,3 +128,52 @@ def migrate_from_grocy(body: GrocyMigrationRequest):
         result.errors.append(str(e))
 
     return result
+
+
+@router.post("/reset")
+def factory_reset():
+    """Wipe the entire database and uploaded images, then re-seed defaults.
+
+    Deletes all user data (products, stock, barcodes, recipes, etc.),
+    resets auto-increment IDs, and re-seeds standard units, conversions,
+    and locations so the app is in a clean initial state.
+    """
+    from main import get_connection, DATA_DIR
+    from database import init_db
+
+    conn = get_connection()
+
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for table in _RESET_TABLES:
+            conn.execute(f"DELETE FROM {table}")  # noqa: S608 (controlled list)
+        # Reset auto-increment counters
+        conn.execute(
+            "DELETE FROM sqlite_sequence WHERE name IN ({})".format(
+                ",".join("?" * len(_RESET_TABLES))
+            ),
+            _RESET_TABLES,
+        )
+        conn.commit()
+
+        # Re-seed units, conversions, locations
+        init_db(conn)
+
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+    except Exception as e:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+        log.exception("Factory reset failed: %s", e)
+        raise HTTPException(500, f"Reset failed: {e}")
+
+    # Delete all uploaded images
+    for img_dir in ["images/products", "images/recipes"]:
+        p = Path(DATA_DIR) / img_dir
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
+            p.mkdir(parents=True, exist_ok=True)
+
+    log.info("Factory reset complete.")
+    return {"status": "ok", "message": "Database reset complete"}
+
