@@ -71,7 +71,8 @@ def get_product_by_barcode(barcode: str):
     bc = conn.execute("SELECT * FROM barcodes WHERE barcode = ?", (barcode,)).fetchone()
     if not bc:
         raise HTTPException(404, f"Barcode '{barcode}' not found")
-    return get_product(bc["product_id"])
+    detail = get_product(bc["product_id"])
+    return {**detail, "matched_pack_size": float(bc["pack_size"] or 1)}
 
 
 # ── Create ─────────────────────────────────────────────────────────────────

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+- Barcode lookup (`GET /products/by-barcode/{barcode}`) now returns `matched_pack_size`
+  so clients (e.g. Stock app) know how many units to add when scanning a multi-pack barcode
+
 ## 0.2.5
 - Add Factory Reset button in Settings: wipes all user data (products, stock, barcodes,
   recipes, images) and re-seeds default units, locations, and conversions
