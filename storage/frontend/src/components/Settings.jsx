@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getHealth, getAiConfig, setConfig, getConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset, syncShoppingListToHa, getHaShoppingStatus } from '../api';
+import { getHealth, getAiConfig, setConfig, getConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset, syncShoppingListToHa, getHaShoppingStatus, syncStockListToHa, getHaStockStatus } from '../api';
 
 export default function Settings() {
   // Database info
@@ -36,6 +36,15 @@ export default function Settings() {
   const [haSyncing, setHaSyncing] = useState(false);
   const [haSyncResult, setHaSyncResult] = useState(null);
   const [haStatus, setHaStatus] = useState(null); // {token_available, entity_id, entity_exists}
+
+  // HA stock list sync
+  const [haStockEntity, setHaStockEntity] = useState('');
+  const [haStockInput, setHaStockInput] = useState('');
+  const [editingHaStock, setEditingHaStock] = useState(false);
+  const [savingHaStock, setSavingHaStock] = useState(false);
+  const [haStockSyncing, setHaStockSyncing] = useState(false);
+  const [haStockSyncResult, setHaStockSyncResult] = useState(null);
+  const [haStockStatus, setHaStockStatus] = useState(null);
 
   const handleReset = async () => {
     setResetting(true);
@@ -84,6 +93,37 @@ export default function Settings() {
     }
   };
 
+  const handleSaveHaStock = async () => {
+    setSavingHaStock(true);
+    try {
+      const val = haStockInput.trim() || 'todo.smart_stock_list';
+      await setConfig('ha_stock_entity', val);
+      setHaStockEntity(val);
+      setEditingHaStock(false);
+      const statusRes = await getHaStockStatus();
+      setHaStockStatus(statusRes.data);
+    } catch (err) {
+      console.error('Failed to save HA stock entity', err);
+    } finally {
+      setSavingHaStock(false);
+    }
+  };
+
+  const handleHaStockSync = async () => {
+    setHaStockSyncing(true);
+    setHaStockSyncResult(null);
+    try {
+      const res = await syncStockListToHa();
+      setHaStockSyncResult({ success: true, data: res.data });
+      const statusRes = await getHaStockStatus();
+      setHaStockStatus(statusRes.data);
+    } catch (err) {
+      setHaStockSyncResult({ error: err.response?.data?.detail ?? err.message ?? 'Sync failed' });
+    } finally {
+      setHaStockSyncing(false);
+    }
+  };
+
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
@@ -92,8 +132,8 @@ export default function Settings() {
     let cancelled = false;
     const load = async () => {
       try {
-        const [healthRes, aiRes, configRes, haStatusRes] = await Promise.all([
-          getHealth(), getAiConfig(), getConfig(), getHaShoppingStatus(),
+        const [healthRes, aiRes, configRes, haStatusRes, haStockStatusRes] = await Promise.all([
+          getHealth(), getAiConfig(), getConfig(), getHaShoppingStatus(), getHaStockStatus(),
         ]);
         if (cancelled) return;
         setHealth(healthRes.data);
@@ -106,10 +146,14 @@ export default function Settings() {
         const entity = configRes.data?.ha_todo_entity ?? 'todo.smart_shopping_list';
         setHaTodoEntity(entity);
         setHaTodoInput(entity);
+        const stockEntity = configRes.data?.ha_stock_entity ?? 'todo.smart_stock_list';
+        setHaStockEntity(stockEntity);
+        setHaStockInput(stockEntity);
         const bs = parseInt(configRes.data?.optimize_batch_size ?? '100', 10) || 100;
         setBatchSize(bs);
         setBatchSizeInput(String(bs));
         setHaStatus(haStatusRes.data);
+        setHaStockStatus(haStockStatusRes.data);
       } catch (err) {
         console.error('Failed to load settings', err);
       }
@@ -473,6 +517,102 @@ export default function Settings() {
           )}
           {haSyncResult?.error && (
             <span className="text-xs text-red-400">Error: {haSyncResult.error}</span>
+          )}
+        </div>
+      </div>
+
+      {/* HA Stock List card */}
+      <div className="bg-gray-800 rounded-lg p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Home Assistant Stock List</h3>
+        <p className="text-sm text-gray-400">
+          Mirror all currently in-stock products to a Home Assistant To-do entity.
+          Useful for automations and AI Assistant queries about what's available.
+          The list is read-only — Storage always controls it.
+        </p>
+
+        {haStockStatus && (
+          haStockStatus.entity_exists ? (
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-emerald-400">
+              ✅ Connected to <span className="font-mono">{haStockStatus.entity_id}</span>
+            </div>
+          ) : (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-3 space-y-2">
+              <p className="text-sm font-medium text-amber-400">⚠️ To-do list not found in Home Assistant</p>
+              <p className="text-xs text-amber-300/80">
+                Create it once in HA:&nbsp;
+                <strong>Settings → Devices &amp; Services → Add Integration → Local to-do</strong>
+                &nbsp;— name the list&nbsp;<span className="font-mono">"{haStockStatus.entity_id.replace('todo.', '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}"</span>
+                &nbsp;and the entity <span className="font-mono">{haStockStatus.entity_id}</span> will be created automatically.
+              </p>
+              {!haStockStatus.token_available && (
+                <p className="text-xs text-red-400">ℹ️ SUPERVISOR_TOKEN not available — addon may need to be restarted after updating.</p>
+              )}
+            </div>
+          )
+        )}
+
+        {!editingHaStock ? (
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Entity ID</p>
+              <p className="text-sm text-gray-200 font-mono">{haStockEntity || 'todo.smart_stock_list'}</p>
+            </div>
+            <button
+              onClick={() => { setHaStockInput(haStockEntity); setEditingHaStock(true); setHaStockSyncResult(null); }}
+              className="text-sm text-blue-400 hover:text-blue-300 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">HA To-do Entity ID</label>
+              <input
+                type="text"
+                value={haStockInput}
+                onChange={(e) => setHaStockInput(e.target.value)}
+                placeholder="todo.smart_stock_list"
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Must match the entity ID of a Local to-do list you created in HA.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveHaStock}
+                disabled={savingHaStock}
+                className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              >
+                {savingHaStock ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                onClick={() => setEditingHaStock(false)}
+                disabled={savingHaStock}
+                className="px-4 py-2 rounded text-sm text-gray-400 hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="pt-1 flex items-center gap-3">
+          <button
+            onClick={handleHaStockSync}
+            disabled={haStockSyncing}
+            className="bg-emerald-700 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+          >
+            {haStockSyncing ? 'Syncing…' : 'Sync to HA now'}
+          </button>
+          {haStockSyncResult?.success && (
+            <span className="text-xs text-emerald-400">
+              ✅ Synced — {haStockSyncResult.data?.added ?? 0} added, {haStockSyncResult.data?.removed ?? 0} removed
+            </span>
+          )}
+          {haStockSyncResult?.error && (
+            <span className="text-xs text-red-400">Error: {haStockSyncResult.error}</span>
           )}
         </div>
       </div>

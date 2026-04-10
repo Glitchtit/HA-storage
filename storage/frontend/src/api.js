@@ -85,6 +85,8 @@ export const getAiKey = () => api.get('/config/ai-key');
 export const getAiConfig = () => api.get('/config/ai');
 export const syncShoppingListToHa = () => api.post('/shopping-list/ha-sync');
 export const getHaShoppingStatus = () => api.get('/shopping-list/ha-status');
+export const syncStockListToHa = () => api.post('/stock-list/ha-sync');
+export const getHaStockStatus = () => api.get('/stock-list/ha-status');
 
 // ── Health ────────────────────────────────────────────────────────────────
 export const getHealth = () => api.get('/health');
