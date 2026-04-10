@@ -1,3 +1,6 @@
+## 0.3.19
+- Optimizer: group-master parent products referenced by recipe ingredients are no longer deleted during clean-slate pass (they are still deactivated and excluded from the AI feed)
+
 ## 0.3.18
 - Fix: remove redundant sub_filter_types text/html in nginx.conf (duplicate MIME type warning)
 
