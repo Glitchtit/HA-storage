@@ -431,7 +431,10 @@ def _phase2_details(
             '  "base_product_name": (string) Finnish name of the base single-unit product when '
             "pack_size > 1, else null.\n\n"
             "Guidelines:\n"
-            "- Location: dairy/meat/fresh produce/drinks -> refrigerator; cleaning/laundry -> "
+            "- Location: dairy/meat/fresh produce -> refrigerator; "
+            "ALL drinks of ANY kind (juice, soda, energy drink, sports drink, water, beer, wine, "
+            "cider, alcopop, coffee drink, milk drink — ALWAYS refrigerator, no exceptions); "
+            "cleaning/laundry -> "
             "cleaning cabinet; hygiene/personal care/bathroom items (cotton swabs, toothbrush, "
             "toothpaste, shampoo, soap, deodorant, etc.) -> bathroom; dry goods/canned/packaged/"
             "eggs -> pantry/cupboard. If a product shows [current location], preserve it unless "
