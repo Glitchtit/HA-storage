@@ -19,8 +19,10 @@ logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/"
 _GEMINI_DEFAULT_MODEL = "gemini-2.0-flash"
-_BATCH_SIZE = 100
+_BATCH_SIZE = 100  # kept for backward-compat imports
 _MAX_RETRIES = 4
+_BATCH_SIZE_MIN = 10
+_BATCH_SIZE_MAX = 500
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +44,16 @@ def _get_ai_config(conn: sqlite3.Connection) -> dict[str, str]:
         "claude_api_key": _val("claude_api_key"),
         "claude_model": _val("claude_model", "claude-3-5-haiku-20241022"),
     }
+
+
+def get_batch_size(conn: sqlite3.Connection) -> int:
+    """Return the configured optimize batch size (clamped to 10–500, default 100)."""
+    row = conn.execute("SELECT value FROM config WHERE key = 'optimize_batch_size'").fetchone()
+    try:
+        val = int(row["value"]) if row and row["value"] else _BATCH_SIZE
+    except (ValueError, TypeError):
+        val = _BATCH_SIZE
+    return max(_BATCH_SIZE_MIN, min(_BATCH_SIZE_MAX, val))
 
 
 # ---------------------------------------------------------------------------
