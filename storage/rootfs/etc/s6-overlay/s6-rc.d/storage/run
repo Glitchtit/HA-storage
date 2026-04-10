@@ -2,70 +2,67 @@
 
 bashio::log.info "Starting Storage nginx on port 8099..."
 
-# ── Grocy Scraper auto-detect ────────────────────────────────────────────
+# ── Hostname-derived repo prefix ──────────────────────────────────────────
+MY_HOSTNAME="${HOSTNAME:-}"
+[ -z "${MY_HOSTNAME}" ] && MY_HOSTNAME=$(hostname 2>/dev/null) || true
+MY_HOSTNAME_NORM=$(echo "${MY_HOSTNAME:-}" | tr '_' '-')
+REPO_PREFIX="${MY_HOSTNAME_NORM%%-ha-storage}"
+
+# ── Scraper detection function (silent — no logging) ─────────────────────
+_detect_scraper() {
+    local _url=""
+    # Strategy 1: hostname-derived
+    if [ -n "${REPO_PREFIX}" ] && [ "${REPO_PREFIX}" != "${MY_HOSTNAME_NORM}" ]; then
+        for _c in "${REPO_PREFIX}-grocy-scraper" "${REPO_PREFIX}_grocy_scraper"; do
+            if curl -sf --max-time 3 "http://${_c}:8099/api/config" >/dev/null 2>&1; then
+                _url="http://${_c}:8099"
+                break
+            fi
+        done
+    fi
+    # Strategy 2: Supervisor API
+    if [ -z "${_url}" ] && [ -n "${SUPERVISOR_TOKEN}" ]; then
+        local _slug=""
+        _slug=$(curl -sf --max-time 5 \
+            -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+            http://supervisor/addons \
+            | jq -r '[.data.addons[]? | select(.slug | test("grocy.scraper"; "i"))][0].slug // empty') || true
+        if [ -n "${_slug}" ]; then
+            local _ip=""
+            _ip=$(curl -sf --max-time 5 \
+                -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+                "http://supervisor/addons/${_slug}/info" \
+                | jq -r '.data.ip_address // empty') || true
+            if [ -n "${_ip}" ]; then
+                _url="http://${_ip}:8099"
+            elif curl -sf --max-time 3 "http://${_slug}:8099/api/config" >/dev/null 2>&1; then
+                _url="http://${_slug}:8099"
+            fi
+        fi
+    fi
+    echo "${_url}"
+}
+
+# ── Grocy Scraper initial detection ──────────────────────────────────────
+_SCRAPER_PLACEHOLDER="http://127.0.0.1:1"
+SCRAPER_AUTODETECT=0
 SCRAPER_URL=""
 
 if bashio::config.has_value 'scraper_url'; then
     SCRAPER_URL=$(bashio::config 'scraper_url')
     bashio::log.info "Scraper URL (from config): ${SCRAPER_URL}"
 else
-    bashio::log.info "Attempting auto-detect of Grocy Scraper addon..."
-
-    MY_HOSTNAME="${HOSTNAME:-}"
-    [ -z "${MY_HOSTNAME}" ] && MY_HOSTNAME=$(hostname 2>/dev/null) || true
-
-    if [ -n "${MY_HOSTNAME}" ]; then
-        MY_HOSTNAME_NORM=$(echo "${MY_HOSTNAME}" | tr '_' '-')
-        REPO_PREFIX="${MY_HOSTNAME_NORM%%-ha-storage}"
-        if [ "${REPO_PREFIX}" != "${MY_HOSTNAME_NORM}" ] && [ -n "${REPO_PREFIX}" ]; then
-            for CANDIDATE in "${REPO_PREFIX}-grocy-scraper" "${REPO_PREFIX}_grocy_scraper"; do
-                bashio::log.info "Probing scraper at ${CANDIDATE}:8099 ..."
-                if curl -sf --max-time 3 "http://${CANDIDATE}:8099/api/config" >/dev/null 2>&1; then
-                    SCRAPER_URL="http://${CANDIDATE}:8099"
-                    bashio::log.info "Scraper URL (auto-detected via hostname): ${SCRAPER_URL}"
-                    break
-                fi
-            done
-        fi
-    fi
-
-    if [ -z "${SCRAPER_URL}" ] && [ -n "${SUPERVISOR_TOKEN}" ]; then
-        SCRAPER_SLUG=""
-        SCRAPER_SLUG=$(curl -sf --max-time 5 \
-            -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-            http://supervisor/addons \
-            | jq -r '
-                [.data.addons[]?
-                 | select(.slug | test("grocy.scraper"; "i"))
-                ][0].slug // empty
-            ' \
-        ) || true
-
-        if [ -n "${SCRAPER_SLUG}" ]; then
-            SCRAPER_IP=$(curl -sf --max-time 5 \
-                -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-                "http://supervisor/addons/${SCRAPER_SLUG}/info" \
-                | jq -r '.data.ip_address // empty' \
-            ) || true
-
-            if [ -n "${SCRAPER_IP}" ]; then
-                SCRAPER_URL="http://${SCRAPER_IP}:8099"
-                bashio::log.info "Scraper URL (auto-detected via API): ${SCRAPER_URL}"
-            elif curl -sf --max-time 3 "http://${SCRAPER_SLUG}:8099/api/config" >/dev/null 2>&1; then
-                SCRAPER_URL="http://${SCRAPER_SLUG}:8099"
-                bashio::log.info "Scraper URL (auto-detected via slug): ${SCRAPER_URL}"
-            fi
-        fi
-    fi
-
-    if [ -z "${SCRAPER_URL}" ]; then
-        bashio::log.info "Grocy Scraper addon not found — discover integration disabled."
+    SCRAPER_AUTODETECT=1
+    bashio::log.info "Attempting auto-detect of Grocy Scraper addon (hostname: '${MY_HOSTNAME}')..."
+    SCRAPER_URL=$(_detect_scraper)
+    if [ -n "${SCRAPER_URL}" ]; then
+        bashio::log.info "Scraper URL (auto-detected): ${SCRAPER_URL}"
+    else
+        bashio::log.info "Grocy Scraper addon not found — will retry in background every 30 s."
     fi
 fi
 
-if [ -z "${SCRAPER_URL}" ]; then
-    SCRAPER_URL="http://127.0.0.1:1"
-fi
+[ -z "${SCRAPER_URL}" ] && SCRAPER_URL="${_SCRAPER_PLACEHOLDER}"
 export SCRAPER_URL
 
 # Generate nginx config from template
@@ -82,4 +79,21 @@ for i in $(seq 1 30); do
 done
 
 bashio::log.info "Scraper URL: ${SCRAPER_URL}"
+
+# ── Background re-probe (only when not manually configured and not yet found)
+if [ "${SCRAPER_AUTODETECT}" = "1" ] && [ "${SCRAPER_URL}" = "${_SCRAPER_PLACEHOLDER}" ]; then
+    (
+        while sleep 30; do
+            _new=$(_detect_scraper)
+            if [ -n "${_new}" ]; then
+                bashio::log.info "Scraper found at ${_new} — reloading nginx."
+                SCRAPER_URL="${_new}"
+                envsubst '${SCRAPER_URL}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+                nginx -s reload
+                break
+            fi
+        done
+    ) &
+fi
+
 exec nginx -g "daemon off;"

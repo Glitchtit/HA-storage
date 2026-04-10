@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.4
+- Persistent service probing: if Scraper addon is not found at startup, retry every 30 s in background; reload nginx automatically when found
+
 ## 0.3.3
 - Fix version always showing 0.0.0: copy config.json into Docker image at /config.json
 
