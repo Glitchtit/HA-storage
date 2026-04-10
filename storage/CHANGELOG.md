@@ -1,3 +1,10 @@
+## 0.3.6
+- AI Optimize tab: full 2-phase AI product optimization moved from Scraper to Storage app
+- New backend modules: ai_client.py (Gemini/Claude/Ollama calling), optimizer.py (2-phase pipeline)
+- New endpoint: POST /api/ai/optimize (fire-and-poll background job), GET /api/ai/optimize/{task_id}
+- New frontend component: Optimize tab with live log streaming and result summary
+- Added requests and anthropic to requirements
+
 ## 0.3.5
 - Persistent service health monitoring: background loop never stops; re-detects scraper if it goes down or moves, reloads nginx only when URL changes
 
