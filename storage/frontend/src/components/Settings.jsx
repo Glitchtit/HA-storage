@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getHealth, getAiConfig, setConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset } from '../api';
+import { getHealth, getAiConfig, setConfig, migrateFromGrocy, scraperDiscover, scraperTask, factoryReset, syncShoppingListToHa } from '../api';
 
 export default function Settings() {
   // Database info
@@ -31,6 +31,14 @@ export default function Settings() {
   const [resetting, setResetting] = useState(false);
   const [resetResult, setResetResult] = useState(null);
 
+  // HA shopping list sync
+  const [haTodoEntity, setHaTodoEntity] = useState('');
+  const [haTodoInput, setHaTodoInput] = useState('');
+  const [editingHaTodo, setEditingHaTodo] = useState(false);
+  const [savingHaTodo, setSavingHaTodo] = useState(false);
+  const [haSyncing, setHaSyncing] = useState(false);
+  const [haSyncResult, setHaSyncResult] = useState(null);
+
   const handleReset = async () => {
     setResetting(true);
     setResetResult(null);
@@ -46,6 +54,32 @@ export default function Settings() {
     }
   };
 
+  const handleSaveHaTodo = async () => {
+    setSavingHaTodo(true);
+    try {
+      await setConfig('ha_todo_entity', haTodoInput.trim() || 'todo.smart_shopping_list');
+      setHaTodoEntity(haTodoInput.trim() || 'todo.smart_shopping_list');
+      setEditingHaTodo(false);
+    } catch (err) {
+      console.error('Failed to save HA todo entity', err);
+    } finally {
+      setSavingHaTodo(false);
+    }
+  };
+
+  const handleHaSync = async () => {
+    setHaSyncing(true);
+    setHaSyncResult(null);
+    try {
+      const res = await syncShoppingListToHa();
+      setHaSyncResult({ success: true, data: res.data });
+    } catch (err) {
+      setHaSyncResult({ error: err.response?.data?.detail ?? err.message ?? 'Sync failed' });
+    } finally {
+      setHaSyncing(false);
+    }
+  };
+
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
@@ -54,7 +88,7 @@ export default function Settings() {
     let cancelled = false;
     const load = async () => {
       try {
-        const [healthRes, aiRes] = await Promise.all([getHealth(), getAiConfig()]);
+        const [healthRes, aiRes, configRes] = await Promise.all([getHealth(), getAiConfig(), getConfig()]);
         if (cancelled) return;
         setHealth(healthRes.data);
         const d = aiRes.data;
@@ -63,6 +97,9 @@ export default function Settings() {
         setAiModel(d.model ?? '');
         setOllamaUrl(d.ollama_url ?? '');
         setOllamaModel(d.ollama_model ?? '');
+        const entity = configRes.data?.ha_todo_entity ?? 'todo.smart_shopping_list';
+        setHaTodoEntity(entity);
+        setHaTodoInput(entity);
       } catch (err) {
         console.error('Failed to load settings', err);
       }
@@ -445,6 +482,80 @@ export default function Settings() {
           </div>
         )}
       </div>
+      {/* HA Shopping List card */}
+      <div className="bg-gray-800 rounded-lg p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Home Assistant Shopping List</h3>
+        <p className="text-sm text-gray-400">
+          Sync the shopping list to a Home Assistant To-do entity. Products below their minimum stock
+          amount are auto-added; when restocked they are removed. The HA entity is created automatically.
+        </p>
+
+        {!editingHaTodo ? (
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Entity ID</p>
+              <p className="text-sm text-gray-200 font-mono">{haTodoEntity || 'todo.smart_shopping_list'}</p>
+            </div>
+            <button
+              onClick={() => { setHaTodoInput(haTodoEntity); setEditingHaTodo(true); setHaSyncResult(null); }}
+              className="text-sm text-blue-400 hover:text-blue-300 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">HA To-do Entity ID</label>
+              <input
+                type="text"
+                value={haTodoInput}
+                onChange={(e) => setHaTodoInput(e.target.value)}
+                placeholder="todo.smart_shopping_list"
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                The entity is auto-created in HA if it doesn't exist.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveHaTodo}
+                disabled={savingHaTodo}
+                className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              >
+                {savingHaTodo ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                onClick={() => setEditingHaTodo(false)}
+                disabled={savingHaTodo}
+                className="px-4 py-2 rounded text-sm text-gray-400 hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="pt-1 flex items-center gap-3">
+          <button
+            onClick={handleHaSync}
+            disabled={haSyncing}
+            className="bg-emerald-700 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+          >
+            {haSyncing ? 'Syncing…' : 'Sync to HA now'}
+          </button>
+          {haSyncResult?.success && (
+            <span className="text-xs text-emerald-400">
+              ✅ Synced — {haSyncResult.data?.added ?? 0} added, {haSyncResult.data?.completed ?? 0} completed
+            </span>
+          )}
+          {haSyncResult?.error && (
+            <span className="text-xs text-red-400">Error: {haSyncResult.error}</span>
+          )}
+        </div>
+      </div>
+
       {/* Danger Zone card */}
       <div className="bg-gray-800 rounded-lg border border-red-800/60 p-5 space-y-4">
         <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wide">Danger Zone</h3>
