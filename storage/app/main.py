@@ -24,6 +24,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     stream=sys.stdout,
 )
+# Ensure app loggers are not silenced if uvicorn reconfigures the root level
+for _mod in ("optimizer", "ai_client", "main"):
+    logging.getLogger(_mod).setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────

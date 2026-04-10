@@ -531,6 +531,15 @@ def _phase2_details(
 
             # --- Parent + category (from Phase 1) ---
             group_name = product_group_name.get(product_id)
+            if not group_name:
+                log("  ~ No group assigned for '%s' (AI returned null).", product.get("name"))
+            else:
+                parent_id = parent_name_to_id.get(group_name)
+                if parent_id is None:
+                    log("  ~ No parent product found for group '%s' (product: '%s').",
+                        group_name, product.get("name"))
+                elif parent_id == product_id:
+                    log("  ~ Skipped self-parenting for '%s'.", product.get("name"))
             if group_name:
                 parent_id = parent_name_to_id.get(group_name)
                 if parent_id is not None and parent_id != product_id:
@@ -668,6 +677,25 @@ def run_optimize(
         initial_category_name_to_group_id = {
             g["name"]: g["id"] for g in groups if g.get("name")
         }
+    else:
+        # Full mode: seed Phase 1 with old parent names so the AI reuses them
+        # (names collected from in-memory all_products AFTER strip deleted them from DB)
+        initial_parent_names = sorted({
+            p.get("name", "") for p in all_products
+            if int(p["id"]) in old_parent_ids and p.get("name")
+        })
+        initial_parent_name_to_id = {}  # IDs are stale/deleted; new products created
+        groups = _load_product_groups(conn)
+        initial_category_names = sorted({
+            g["name"] for g in groups
+            if g.get("name") and g["name"] != "Group master"
+        })
+        initial_category_name_to_group_id = {
+            g["name"]: g["id"] for g in groups if g.get("name")
+        }
+        if initial_parent_names:
+            log("Seeding Phase 1 with %d existing parent name(s) for consistency.",
+                len(initial_parent_names))
 
     # --- Phase 1: structure ---
     # Merge enforced_categories into initial list so AI strongly prefers them

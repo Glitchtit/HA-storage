@@ -1,3 +1,10 @@
+## 0.3.17
+- Fix: optimizer full-mode now seeds Phase 1 with old parent names (collected before deletion) so AI reuses consistent group names across batches instead of inventing fresh ones
+- Fix: optimizer loads existing categories as initial context in full mode (same as incremental mode)
+- Fix: Phase 2 now logs diagnostic messages when a product is skipped (null group, missing parent ID, self-parenting)
+- Fix: set PYTHONUNBUFFERED=1 in s6 run script so optimizer logs appear in HA APP log immediately
+- Fix: explicitly pin INFO level on optimizer/ai_client loggers so uvicorn startup config cannot silence them
+
 ## 0.3.16
 - Optimizer now deactivates ALL parent/group-master products before the AI runs (not just inactive ones)
 - Optimizer-created group-master products are deleted immediately before AI batches (fewer tokens wasted)
