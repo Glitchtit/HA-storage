@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.8
+- VERSION now read dynamically from config.json instead of hardcoded "0.1.0"
+
 ## 0.2.7
 - Add `GET /api/config/ai` endpoint returning provider-agnostic AI config
   (`provider`, `api_key`, `model`, `ollama_url`, `ollama_model`)

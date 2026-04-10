@@ -28,7 +28,17 @@ log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
-VERSION = "0.1.0"
+def _read_version() -> str:
+    """Read version from config.json next to this file, fallback to '0.0.0'."""
+    try:
+        import json as _json
+        cfg = Path(__file__).parent.parent / "config.json"
+        return _json.loads(cfg.read_text()).get("version", "0.0.0")
+    except Exception:
+        return "0.0.0"
+
+
+VERSION = _read_version()
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "storage.db"
 
