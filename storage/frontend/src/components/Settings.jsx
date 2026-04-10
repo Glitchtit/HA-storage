@@ -4,23 +4,12 @@ import { getHealth, getAiConfig, setConfig, getConfig, migrateFromGrocy, scraper
 export default function Settings() {
   // Database info
   const [health, setHealth] = useState(null);
-  // AI config
+  // AI config (read-only display)
   const [aiProvider, setAiProvider] = useState('gemini');
-  const [aiKey, setAiKey] = useState('');
   const [aiModel, setAiModel] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('');
   const [ollamaModel, setOllamaModel] = useState('');
-  const [editingAi, setEditingAi] = useState(false);
-  const [editProvider, setEditProvider] = useState('gemini');
-  const [aiKeyInput, setAiKeyInput] = useState('');
-  const [aiModelInput, setAiModelInput] = useState('');
-  const [ollamaUrlInput, setOllamaUrlInput] = useState('');
-  const [ollamaModelInput, setOllamaModelInput] = useState('');
-  const [claudeKey, setClaudeKey] = useState('');
   const [claudeModel, setClaudeModel] = useState('');
-  const [claudeKeyInput, setClaudeKeyInput] = useState('');
-  const [claudeModelInput, setClaudeModelInput] = useState('');
-  const [savingAi, setSavingAi] = useState(false);
   // Grocy import
   const [grocyUrl, setGrocyUrl] = useState('');
   const [grocyApiKey, setGrocyApiKey] = useState('');
@@ -106,11 +95,9 @@ export default function Settings() {
         setHealth(healthRes.data);
         const d = aiRes.data;
         setAiProvider(d.provider ?? 'gemini');
-        setAiKey(d.api_key ?? '');
         setAiModel(d.model ?? '');
         setOllamaUrl(d.ollama_url ?? '');
         setOllamaModel(d.ollama_model ?? '');
-        setClaudeKey(d.claude_api_key ?? '');
         setClaudeModel(d.claude_model ?? '');
         const entity = configRes.data?.ha_todo_entity ?? 'todo.smart_shopping_list';
         setHaTodoEntity(entity);
@@ -123,59 +110,6 @@ export default function Settings() {
     load();
     return () => { cancelled = true; };
   }, []);
-
-  const maskKey = (key) => {
-    if (!key) return '–';
-    if (key.length <= 4) return '••••';
-    return '••••••••' + key.slice(-4);
-  };
-
-  const handleSaveAi = async () => {
-    setSavingAi(true);
-    try {
-      await setConfig('ai_provider', editProvider);
-      setAiProvider(editProvider);
-      if (editProvider === 'gemini') {
-        if (aiKeyInput.trim()) {
-          await setConfig('gemini_api_key', aiKeyInput.trim());
-          setAiKey(aiKeyInput.trim());
-        }
-        if (aiModelInput.trim()) {
-          await setConfig('gemini_model', aiModelInput.trim());
-          setAiModel(aiModelInput.trim());
-        }
-      } else if (editProvider === 'ollama') {
-        if (ollamaUrlInput.trim()) {
-          await setConfig('ollama_url', ollamaUrlInput.trim());
-          setOllamaUrl(ollamaUrlInput.trim());
-        }
-        if (ollamaModelInput.trim()) {
-          await setConfig('ollama_model', ollamaModelInput.trim());
-          setOllamaModel(ollamaModelInput.trim());
-        }
-      } else if (editProvider === 'claude') {
-        if (claudeKeyInput.trim()) {
-          await setConfig('claude_api_key', claudeKeyInput.trim());
-          setClaudeKey(claudeKeyInput.trim());
-        }
-        if (claudeModelInput.trim()) {
-          await setConfig('claude_model', claudeModelInput.trim());
-          setClaudeModel(claudeModelInput.trim());
-        }
-      }
-      setEditingAi(false);
-      setAiKeyInput('');
-      setAiModelInput('');
-      setOllamaUrlInput('');
-      setOllamaModelInput('');
-      setClaudeKeyInput('');
-      setClaudeModelInput('');
-    } catch (err) {
-      console.error('Failed to save AI settings', err);
-    } finally {
-      setSavingAi(false);
-    }
-  };
 
   const handleImport = async () => {
     if (!grocyUrl.trim() || !grocyApiKey.trim()) return;
@@ -277,177 +211,34 @@ export default function Settings() {
       </div>
 
       {/* AI configuration card */}
-      <div className="bg-gray-800 rounded-lg border border-gray-700 p-5 space-y-4">
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-5 space-y-3">
         <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">AI Configuration</h3>
-
-        {!editingAi ? (
-          <>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="text-gray-400 block text-xs">Provider</span>
-                <span className="font-medium capitalize">{aiProvider}</span>
-              </div>
-              {aiProvider === 'gemini' ? (
-                <>
-                  <div>
-                    <span className="text-gray-400 block text-xs">API Key</span>
-                    <span className="font-mono text-sm">{maskKey(aiKey)}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-400 block text-xs">Model</span>
-                    <span className="font-medium">{aiModel || '–'}</span>
-                  </div>
-                </>
-              ) : aiProvider === 'claude' ? (
-                <>
-                  <div>
-                    <span className="text-gray-400 block text-xs">Claude API Key</span>
-                    <span className="font-mono text-sm">{claudeKey ? '••••' + claudeKey.slice(-4) : '–'}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-400 block text-xs">Model</span>
-                    <span className="font-medium">{claudeModel || '–'}</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <span className="text-gray-400 block text-xs">Ollama URL</span>
-                    <span className="font-mono text-sm">{ollamaUrl || '–'}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-400 block text-xs">Model</span>
-                    <span className="font-medium">{ollamaModel || '–'}</span>
-                  </div>
-                </>
-              )}
-            </div>
-            <button
-              onClick={() => {
-                setEditingAi(true);
-                setEditProvider(aiProvider);
-                setAiKeyInput('');
-                setAiModelInput(aiModel);
-                setOllamaUrlInput(ollamaUrl);
-                setOllamaModelInput(ollamaModel);
-                setClaudeKeyInput('');
-                setClaudeModelInput(claudeModel);
-              }}
-              className="text-sm text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
-            >
-              Edit
-            </button>
-          </>
-        ) : (
-          <div className="space-y-3">
-            {/* Provider selector */}
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Provider</label>
-              <div className="flex gap-2">
-                {['gemini', 'ollama', 'claude'].map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setEditProvider(p)}
-                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors capitalize ${
-                      editProvider === p
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {editProvider === 'gemini' ? (
-              <>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Gemini API Key</label>
-                  <input
-                    type="password"
-                    value={aiKeyInput}
-                    onChange={(e) => setAiKeyInput(e.target.value)}
-                    placeholder="New API key"
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Model</label>
-                  <input
-                    type="text"
-                    value={aiModelInput}
-                    onChange={(e) => setAiModelInput(e.target.value)}
-                    placeholder="gemini-2.0-flash"
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </>
-            ) : editProvider === 'claude' ? (
-              <>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Claude API Key</label>
-                  <input
-                    type="password"
-                    value={claudeKeyInput}
-                    onChange={(e) => setClaudeKeyInput(e.target.value)}
-                    placeholder="New API key"
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Model</label>
-                  <input
-                    type="text"
-                    value={claudeModelInput}
-                    onChange={(e) => setClaudeModelInput(e.target.value)}
-                    placeholder="claude-3-5-haiku-20241022"
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Ollama URL</label>
-                  <input
-                    type="text"
-                    value={ollamaUrlInput}
-                    onChange={(e) => setOllamaUrlInput(e.target.value)}
-                    placeholder="http://192.168.1.100:11434"
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Model</label>
-                  <input
-                    type="text"
-                    value={ollamaModelInput}
-                    onChange={(e) => setOllamaModelInput(e.target.value)}
-                    placeholder="llama3"
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </>
-            )}
-
-            <div className="flex gap-2">
-              <button
-                onClick={handleSaveAi}
-                disabled={savingAi}
-                className="bg-emerald-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {savingAi ? 'Saving…' : 'Save'}
-              </button>
-              <button
-                onClick={() => setEditingAi(false)}
-                className="px-4 py-2 rounded text-sm font-medium text-gray-400 hover:bg-gray-700 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <span className="text-gray-400 block text-xs">Provider</span>
+            <span className="font-medium capitalize">{aiProvider}</span>
           </div>
-        )}
+          {aiProvider === 'ollama' ? (
+            <>
+              <div>
+                <span className="text-gray-400 block text-xs">Ollama URL</span>
+                <span className="font-mono text-sm">{ollamaUrl || '–'}</span>
+              </div>
+              <div>
+                <span className="text-gray-400 block text-xs">Model</span>
+                <span className="font-medium">{ollamaModel || '–'}</span>
+              </div>
+            </>
+          ) : (
+            <div>
+              <span className="text-gray-400 block text-xs">Model</span>
+              <span className="font-medium">
+                {aiProvider === 'claude' ? (claudeModel || '–') : (aiModel || '–')}
+              </span>
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-gray-500">Configure in the add-on options (HA Settings → Add-ons).</p>
       </div>
 
       {/* Grocy import card */}
