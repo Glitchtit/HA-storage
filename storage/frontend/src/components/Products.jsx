@@ -577,6 +577,7 @@ export default function Products() {
   const [expandedId, setExpandedId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [error, setError] = useState(null);
 
   /* ─ data loading ─ */
   const loadRef = useCallback(async () => {
@@ -660,6 +661,8 @@ export default function Products() {
       loadProducts();
     } catch (err) {
       console.error('Delete product failed', err);
+      setConfirmDelete(null);
+      setError(err.response?.data?.detail || 'Failed to delete product');
     }
   };
 
@@ -806,6 +809,14 @@ export default function Products() {
           onYes={handleDelete}
           onNo={() => setConfirmDelete(null)}
         />
+      )}
+
+      {/* Error toast */}
+      {error && (
+        <div className="fixed bottom-4 right-4 z-50 bg-red-900/90 text-red-100 px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 max-w-md">
+          <span className="text-sm">{error}</span>
+          <button onClick={() => setError(null)} className="text-red-300 hover:text-white font-bold">✕</button>
+        </div>
       )}
     </div>
   );

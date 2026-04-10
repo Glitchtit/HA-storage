@@ -137,5 +137,8 @@ def delete_product(product_id: int):
     existing = conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
     if not existing:
         raise HTTPException(404, f"Product {product_id} not found")
+    # Clean up references that lack ON DELETE CASCADE
+    conn.execute("DELETE FROM recipe_ingredients WHERE product_id = ?", (product_id,))
+    conn.execute("DELETE FROM shopping_list WHERE product_id = ?", (product_id,))
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()

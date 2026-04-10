@@ -3,6 +3,8 @@
 ## 0.2.2
 
 - Fix product image upload returning 404 (nginx static asset regex was intercepting /api/files/ requests)
+- Fix product delete failing silently when product has recipe ingredients or shopping list entries
+- Show error toast when product delete fails
 
 ## 0.2.1
 
