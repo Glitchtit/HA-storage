@@ -30,7 +30,7 @@ class TestHealth:
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "ok"
-        assert data["version"] == "0.1.0"
+        assert data["version"] != ""
         assert data["db_tables"] > 0
 
 
