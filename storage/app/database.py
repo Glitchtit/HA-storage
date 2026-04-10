@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS recipes (
 CREATE TABLE IF NOT EXISTS recipe_ingredients (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     recipe_id  INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
-    product_id INTEGER NOT NULL REFERENCES products(id),
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     amount     REAL NOT NULL DEFAULT 1,
     unit_id    INTEGER NOT NULL REFERENCES units(id),
     note       TEXT DEFAULT '',
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
 
 CREATE TABLE IF NOT EXISTS shopping_list (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id INTEGER NOT NULL REFERENCES products(id),
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     amount     REAL NOT NULL DEFAULT 1,
     unit_id    INTEGER REFERENCES units(id),
     note       TEXT DEFAULT '',
