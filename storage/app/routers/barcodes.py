@@ -89,8 +89,8 @@ def list_barcode_queue(status: str | None = None):
 def enqueue_barcode(body: BarcodeQueueCreate):
     conn = _get_db()
     cur = conn.execute(
-        "INSERT INTO barcode_queue (barcode, source) VALUES (?, ?)",
-        (body.barcode, body.source),
+        "INSERT INTO barcode_queue (barcode, source, import_stock_amount) VALUES (?, ?, ?)",
+        (body.barcode, body.source, body.import_stock_amount),
     )
     conn.commit()
     return conn.execute("SELECT * FROM barcode_queue WHERE id = ?", (cur.lastrowid,)).fetchone()

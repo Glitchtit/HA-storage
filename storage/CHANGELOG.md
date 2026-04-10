@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- Fix Pydantic validation errors: description/note fields now accept NULL from database
+- Rewrite Grocy migration: imports barcodes and stock amounts only (products created via Scraper --discover)
+- Add import_stock_amount field to barcode queue for preserving stock during migration
+- Schema migration adds import_stock_amount column to existing databases
+
 ## 0.2.3
 
 - Add "Include inactive" toggle to Products page
