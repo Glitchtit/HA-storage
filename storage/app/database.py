@@ -189,6 +189,7 @@ def get_db(db_path: str | Path) -> sqlite3.Connection:
     conn.row_factory = _row_factory
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

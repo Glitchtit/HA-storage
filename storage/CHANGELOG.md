@@ -1,3 +1,10 @@
+## 0.3.24
+- Stability: single-flight optimize guard — rejects concurrent optimize requests with HTTP 409 instead of running overlapping jobs
+- Stability: SQLite busy_timeout set to 5s (prevents "database is locked" under thread contention)
+- Stability: explicit SAVEPOINT/ROLLBACK for pack merge, pack rename, stub merge, orphan repair, and dedup cleanup in optimizer
+- Stability: factory reset now uses savepoint to prevent partial wipes on error, with guaranteed foreign_keys restoration in finally block
+- Logging: optimize task failures now logged with full traceback
+
 ## 0.3.23
 - Optimizer Phase 3: recipe integrity repair — merges recipe stubs into matching parent products, fixes orphaned recipe ingredients, deduplicates entries
 - Fix: recipe-linked group-master products now preserved in parent name lookup (prevents duplicate parent creation after optimize)
