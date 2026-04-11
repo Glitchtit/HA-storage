@@ -1,3 +1,8 @@
+## 0.3.27
+- Fix: recipe ingredients no longer break after optimize — fixed name_to_product collision where duplicate-name parents caused recipe-linked parents to be lost from the lookup, resulting in new parent IDs that orphaned recipe references
+- Fix: Phase 3 recipe repair now re-links stale recipe ingredient product_ids to current parent products when IDs change after optimize restructuring
+- Fix: Phase 3 re-link handles deduplication (won't create duplicate recipe_id + product_id rows)
+
 ## 0.3.26
 - Feature: "Fresh naming" checkbox in Optimize — when checked, the AI invents all parent product names from scratch instead of being seeded with previous parent names
 
