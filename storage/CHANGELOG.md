@@ -1,3 +1,6 @@
+## 0.3.26
+- Feature: "Fresh naming" checkbox in Optimize — when checked, the AI invents all parent product names from scratch instead of being seeded with previous parent names
+
 ## 0.3.25
 - Fix: Phase 2 optimizer now returns a JSON object example in prompt to prevent Gemini from returning a list
 - Fix: Phase 1 + Phase 2 now recover automatically when AI returns a list with "id" fields (list→dict reshape) instead of silently skipping the batch

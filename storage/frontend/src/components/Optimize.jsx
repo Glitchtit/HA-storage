@@ -15,6 +15,7 @@ export default function Optimize() {
   const [categories, setCategories] = useState([]);
   const [catInput, setCatInput] = useState('');
   const [catSaving, setCatSaving] = useState(false);
+  const [freshSeed, setFreshSeed] = useState(false);
 
   useEffect(() => {
     getOptimizeCategories()
@@ -67,7 +68,7 @@ export default function Optimize() {
   const handleStart = async () => {
     setError(''); setLogs([]); setUpdated(0); setStatus('running');
     try {
-      const { data } = await startOptimize();
+      const { data } = await startOptimize(null, freshSeed);
       setTaskId(data.task_id);
       startPolling(data.task_id);
     } catch (err) {
@@ -106,6 +107,24 @@ export default function Optimize() {
         <p className="text-yellow-400 text-xs pt-1">
           Full optimize rewrites all parent-product groupings from scratch. Configure your AI provider in Settings first.
         </p>
+      </div>
+
+      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={freshSeed}
+            onChange={(e) => setFreshSeed(e.target.checked)}
+            className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
+          />
+          <div>
+            <div className="text-sm font-medium text-white">Fresh naming (ignore previous parent names)</div>
+            <p className="text-xs text-gray-400 mt-0.5">
+              By default, the AI is seeded with the previous parent product names for naming consistency.
+              Enable this to let the AI invent all parent names from scratch on a clean slate.
+            </p>
+          </div>
+        </label>
       </div>
 
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">

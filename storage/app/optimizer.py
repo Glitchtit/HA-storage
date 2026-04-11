@@ -901,6 +901,7 @@ def run_optimize(
     product_ids: list[int] | None = None,
     emit: Callable[[str], None] | None = None,
     enforced_categories: list[str] | None = None,
+    fresh_seed: bool = False,
 ) -> dict[str, int]:
     """Run the full AI optimize pipeline.
 
@@ -988,10 +989,14 @@ def run_optimize(
     else:
         # Full mode: seed Phase 1 with old parent names so the AI reuses them
         # (names collected from in-memory all_products AFTER strip deleted them from DB)
-        initial_parent_names = sorted({
-            p.get("name", "") for p in all_products
-            if int(p["id"]) in old_parent_ids and p.get("name")
-        })
+        if fresh_seed:
+            initial_parent_names = []
+            log("Fresh-seed mode: skipping old parent name seed.")
+        else:
+            initial_parent_names = sorted({
+                p.get("name", "") for p in all_products
+                if int(p["id"]) in old_parent_ids and p.get("name")
+            })
         initial_parent_name_to_id = {}  # IDs are stale/deleted; new products created
         groups = _load_product_groups(conn)
         initial_category_names = sorted({
@@ -1001,7 +1006,7 @@ def run_optimize(
         initial_category_name_to_group_id = {
             g["name"]: g["id"] for g in groups if g.get("name")
         }
-        if initial_parent_names:
+        if initial_parent_names and not fresh_seed:
             log("Seeding Phase 1 with %d existing parent name(s) for consistency.",
                 len(initial_parent_names))
 
