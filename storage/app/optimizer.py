@@ -503,6 +503,7 @@ def _phase2_details(
                     if base_product and int(base_product["id"]) != product_id:
                         base_pid = int(base_product["id"])
                         try:
+                            conn.execute("SAVEPOINT pack_merge")
                             # Move barcodes
                             bc_rows = conn.execute(
                                 "SELECT id, barcode, pack_size FROM barcodes WHERE product_id = ?",
@@ -542,7 +543,6 @@ def _phase2_details(
                                 (product_id,),
                             ).fetchall()
                             for ri in ri_rows:
-                                # Avoid duplicate (same recipe + same product)
                                 dup = conn.execute(
                                     "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
                                     (ri["recipe_id"], base_pid),
@@ -559,6 +559,7 @@ def _phase2_details(
                                     len(ri_rows), product.get("name"), base_name)
                             # Delete multi-pack product (cascades stock deletion)
                             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+                            conn.execute("RELEASE pack_merge")
                             conn.commit()
                             log("  -> Deleted multi-pack '%s' (merged into '%s').",
                                 product.get("name"), base_name)
@@ -567,11 +568,16 @@ def _phase2_details(
                         except Exception as exc:
                             log("  ! Could not merge '%s' into '%s': %s",
                                 product.get("name"), base_name, exc)
-                            conn.rollback()
+                            try:
+                                conn.execute("ROLLBACK TO pack_merge")
+                                conn.execute("RELEASE pack_merge")
+                            except Exception:
+                                conn.rollback()
                     elif not base_product or int(base_product["id"]) == product_id:
                         # Rename in place and multiply stock × pack_size
                         if base_name and base_name != product.get("name"):
                             try:
+                                conn.execute("SAVEPOINT pack_rename")
                                 conn.execute(
                                     "UPDATE products SET name = ? WHERE id = ?",
                                     (base_name, product_id),
@@ -590,6 +596,7 @@ def _phase2_details(
                                         )
                                         log("  -> Updated stock to %.0f (%.0f×%d) for '%s'.",
                                             new_amount, float(se["amount"]), pack_size, base_name)
+                                conn.execute("RELEASE pack_rename")
                                 conn.commit()
                                 log("  -> Renamed '%s' -> '%s' (multi-pack normalised).",
                                     product.get("name"), base_name)
@@ -598,7 +605,11 @@ def _phase2_details(
                                 updated += 1
                             except Exception as exc:
                                 log("  ! Could not rename '%s': %s", product.get("name"), exc)
-                                conn.rollback()
+                                try:
+                                    conn.execute("ROLLBACK TO pack_rename")
+                                    conn.execute("RELEASE pack_rename")
+                                except Exception:
+                                    conn.rollback()
 
             # --- Location ---
             loc_id = info.get("location_id")
@@ -746,35 +757,42 @@ def _phase3_recipe_repair(
             stub_id = int(stub["id"])
             target_id = int(target["id"])
 
-            # Move recipe_ingredients from stub to target
-            ri_rows = conn.execute(
-                "SELECT id, recipe_id FROM recipe_ingredients WHERE product_id = ?",
-                (stub_id,),
-            ).fetchall()
-            moved = 0
-            for ri in ri_rows:
-                dup = conn.execute(
-                    "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
-                    (ri["recipe_id"], target_id),
-                ).fetchone()
-                if dup:
-                    conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],))
-                else:
-                    conn.execute(
-                        "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
-                        (target_id, ri["id"]),
-                    )
-                moved += 1
-
-            # Delete the stub product
             try:
+                conn.execute("SAVEPOINT stub_merge")
+                # Move recipe_ingredients from stub to target
+                ri_rows = conn.execute(
+                    "SELECT id, recipe_id FROM recipe_ingredients WHERE product_id = ?",
+                    (stub_id,),
+                ).fetchall()
+                moved = 0
+                for ri in ri_rows:
+                    dup = conn.execute(
+                        "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
+                        (ri["recipe_id"], target_id),
+                    ).fetchone()
+                    if dup:
+                        conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],))
+                    else:
+                        conn.execute(
+                            "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
+                            (target_id, ri["id"]),
+                        )
+                    moved += 1
+
+                # Delete the stub product
                 conn.execute("DELETE FROM products WHERE id = ?", (stub_id,))
+                conn.execute("RELEASE stub_merge")
                 log("  -> Merged recipe stub '%s' (ID %d) → '%s' (ID %d): %d ingredient(s) moved.",
                     stub["name"], stub_id, target["name"], target_id, moved)
                 merged += 1
                 repaired += moved
             except Exception as exc:
-                log("  ! Could not delete stub '%s': %s", stub["name"], exc)
+                log("  ! Could not merge stub '%s': %s", stub["name"], exc)
+                try:
+                    conn.execute("ROLLBACK TO stub_merge")
+                    conn.execute("RELEASE stub_merge")
+                except Exception:
+                    conn.rollback()
 
         conn.commit()
         if merged:
@@ -789,11 +807,21 @@ def _phase3_recipe_repair(
     ).fetchall()
     if orphans:
         log("Recipe repair: found %d orphaned recipe ingredient(s).", len(orphans))
-        for orph in orphans:
-            conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (orph["id"],))
-            repaired += 1
-        conn.commit()
-        log("Recipe repair: removed %d orphaned ingredient(s).", len(orphans))
+        conn.execute("SAVEPOINT orphan_repair")
+        try:
+            for orph in orphans:
+                conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (orph["id"],))
+                repaired += 1
+            conn.execute("RELEASE orphan_repair")
+            conn.commit()
+            log("Recipe repair: removed %d orphaned ingredient(s).", len(orphans))
+        except Exception as exc:
+            log("  ! Orphan repair failed: %s", exc)
+            try:
+                conn.execute("ROLLBACK TO orphan_repair")
+                conn.execute("RELEASE orphan_repair")
+            except Exception:
+                conn.rollback()
 
     # --- 3. Duplicate cleanup ---
     duplicates = conn.execute(
@@ -804,22 +832,31 @@ def _phase3_recipe_repair(
     ).fetchall()
     if duplicates:
         deduped = 0
-        for dup in duplicates:
-            # Keep the row with the highest amount, delete the rest
-            keeper = conn.execute(
-                "SELECT id FROM recipe_ingredients "
-                "WHERE recipe_id = ? AND product_id = ? "
-                "ORDER BY amount DESC LIMIT 1",
-                (dup["recipe_id"], dup["product_id"]),
-            ).fetchone()
-            if keeper:
-                conn.execute(
-                    "DELETE FROM recipe_ingredients "
-                    "WHERE recipe_id = ? AND product_id = ? AND id != ?",
-                    (dup["recipe_id"], dup["product_id"], keeper["id"]),
-                )
-                deduped += 1
-        conn.commit()
+        conn.execute("SAVEPOINT dedup_repair")
+        try:
+            for dup in duplicates:
+                keeper = conn.execute(
+                    "SELECT id FROM recipe_ingredients "
+                    "WHERE recipe_id = ? AND product_id = ? "
+                    "ORDER BY amount DESC LIMIT 1",
+                    (dup["recipe_id"], dup["product_id"]),
+                ).fetchone()
+                if keeper:
+                    conn.execute(
+                        "DELETE FROM recipe_ingredients "
+                        "WHERE recipe_id = ? AND product_id = ? AND id != ?",
+                        (dup["recipe_id"], dup["product_id"], keeper["id"]),
+                    )
+                    deduped += 1
+            conn.execute("RELEASE dedup_repair")
+            conn.commit()
+        except Exception as exc:
+            log("  ! Dedup repair failed: %s", exc)
+            try:
+                conn.execute("ROLLBACK TO dedup_repair")
+                conn.execute("RELEASE dedup_repair")
+            except Exception:
+                conn.rollback()
         if deduped:
             log("Recipe repair: deduplicated %d recipe-product pair(s).", deduped)
             repaired += deduped
