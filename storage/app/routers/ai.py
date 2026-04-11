@@ -9,30 +9,33 @@ GET  /api/ai/optimize/{task_id}     — poll status and streaming logs
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter(tags=["ai"])
+logger = logging.getLogger(__name__)
 
 _CONFIG_KEY = "optimize_categories"
 
 # ---------------------------------------------------------------------------
-# In-memory task registry (fire-and-poll, same pattern as scraper ingress)
+# In-memory task registry — single-flight optimized
 # ---------------------------------------------------------------------------
 
 _tasks: dict[str, dict[str, Any]] = {}
 _tasks_lock = threading.Lock()
 _MAX_TASKS = 20
+# Tracks the currently running optimize job; None when idle
+_running_task_id: str | None = None
 
 
 def _store_task(task_id: str, data: dict[str, Any]) -> None:
     with _tasks_lock:
         _tasks[task_id] = data
-        # Evict oldest completed tasks when over limit
         if len(_tasks) > _MAX_TASKS:
             done_ids = [
                 k for k, v in _tasks.items()
@@ -68,7 +71,7 @@ def _read_enforced_categories(conn) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Background worker
+# Background worker (single-flight: releases _running_task_id on exit)
 # ---------------------------------------------------------------------------
 
 def _run_optimize_task(
@@ -76,6 +79,8 @@ def _run_optimize_task(
     product_ids: list[int] | None,
     enforced_categories: list[str] | None,
 ) -> None:
+    global _running_task_id
+
     def emit(msg: str) -> None:
         _append_log(task_id, msg)
 
@@ -99,12 +104,17 @@ def _run_optimize_task(
                 t["finished_at"] = time.time()
 
     except Exception as exc:
+        logger.exception("Optimize task %s failed", task_id)
         emit(f"ERROR: {exc}")
         with _tasks_lock:
             t = _tasks.get(task_id)
             if t:
                 t["status"] = "error"
                 t["finished_at"] = time.time()
+    finally:
+        with _tasks_lock:
+            if _running_task_id == task_id:
+                _running_task_id = None
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +139,6 @@ def set_optimize_categories(body: dict[str, Any]):
     from main import get_connection
     cats = body.get("categories", [])
     if not isinstance(cats, list):
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="'categories' must be a list")
     cats = [str(c).strip() for c in cats if str(c).strip()]
     conn = get_connection()
@@ -143,7 +152,9 @@ def set_optimize_categories(body: dict[str, Any]):
 
 @router.post("/ai/optimize")
 def start_optimize(body: dict[str, Any] = None):  # type: ignore[assignment]
-    """Start a background AI optimize job.
+    """Start a background AI optimize job (single-flight).
+
+    Returns 409 if an optimize job is already running.
 
     Body (optional JSON):
         product_ids: list[int]  — if provided, only those products are optimized (incremental mode)
@@ -151,17 +162,33 @@ def start_optimize(body: dict[str, Any] = None):  # type: ignore[assignment]
     Returns:
         task_id: str
     """
+    global _running_task_id
+
     if body is None:
         body = {}
 
     product_ids: list[int] | None = body.get("product_ids") or None
+
+    with _tasks_lock:
+        # Reject if another optimize is already running
+        if _running_task_id is not None:
+            existing = _tasks.get(_running_task_id)
+            if existing and existing.get("status") == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Optimize already running (task {_running_task_id})",
+                )
+            # Stale running state (crash/restart) — clear it
+            _running_task_id = None
+
+        task_id = str(uuid.uuid4())[:8]
+        _running_task_id = task_id
 
     # Read enforced categories from DB
     from main import get_connection
     conn = get_connection()
     enforced_categories = _read_enforced_categories(conn)
 
-    task_id = str(uuid.uuid4())[:8]
     _store_task(task_id, {
         "task_id": task_id,
         "status": "running",
@@ -188,6 +215,5 @@ def get_optimize_status(task_id: str):
     """Poll the status of a running or completed optimize job."""
     task = _get_task(task_id)
     if task is None:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Task not found")
     return task

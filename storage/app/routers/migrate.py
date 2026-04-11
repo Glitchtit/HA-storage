@@ -144,28 +144,34 @@ def factory_reset():
     conn = get_connection()
 
     try:
+        # foreign_keys pragma must be set outside a transaction
         conn.execute("PRAGMA foreign_keys = OFF")
-        for table in _RESET_TABLES:
-            conn.execute(f"DELETE FROM {table}")  # noqa: S608 (controlled list)
-        # Reset auto-increment counters
-        conn.execute(
-            "DELETE FROM sqlite_sequence WHERE name IN ({})".format(
-                ",".join("?" * len(_RESET_TABLES))
-            ),
-            _RESET_TABLES,
-        )
-        conn.commit()
+        conn.execute("SAVEPOINT factory_reset")
+        try:
+            for table in _RESET_TABLES:
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608 (controlled list)
+            conn.execute(
+                "DELETE FROM sqlite_sequence WHERE name IN ({})".format(
+                    ",".join("?" * len(_RESET_TABLES))
+                ),
+                _RESET_TABLES,
+            )
+            conn.execute("RELEASE factory_reset")
+            conn.commit()
+        except Exception:
+            conn.execute("ROLLBACK TO factory_reset")
+            conn.execute("RELEASE factory_reset")
+            raise
 
         # Re-seed units, conversions, locations
         init_db(conn)
 
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.commit()
     except Exception as e:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.commit()
         log.exception("Factory reset failed: %s", e)
         raise HTTPException(500, f"Reset failed: {e}")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
 
     # Delete all uploaded images
     for img_dir in ["images/products", "images/recipes"]:
