@@ -316,7 +316,20 @@ def _phase1_structure(
             log("AI structure batch %d failed: %s", batch_idx + 1, exc)
             continue
 
-        if not isinstance(mapping, dict):
+        if isinstance(mapping, list):
+            # Recover: AI returned a list of objects — try to reshape into id→obj dict
+            recovered: dict[str, Any] = {}
+            for item in mapping:
+                if isinstance(item, dict) and "id" in item:
+                    item_id = str(item.pop("id"))
+                    recovered[item_id] = item
+            if recovered:
+                log("AI structure batch %d: recovered list→dict (%d entries).", batch_idx + 1, len(recovered))
+                mapping = recovered
+            else:
+                log("AI structure batch %d: expected dict, got list — cannot recover, skipping.", batch_idx + 1)
+                continue
+        elif not isinstance(mapping, dict):
             log("AI structure batch %d: expected dict, got %s -- skipping.", batch_idx + 1, type(mapping).__name__)
             continue
 
@@ -454,7 +467,9 @@ def _phase2_details(
             "cleaning/laundry ~1095d.\n"
             "- Pack: detect ONLY genuine multi-packs: 4-pack, 6x0.33l, monipakkaus, 6kpl Sprite. "
             "NOT when number describes package contents.\n\n"
-            "Return ONLY valid JSON.\n\n"
+            "Return ONLY a valid JSON object (not a list). Example:\n"
+            '{\"1\": {\"location_id\": 2, \"best_before_days\": 7, '
+            '\"pack_size\": null, \"pack_unit\": null, \"base_product_name\": null}}\n\n'
             "Products:\n"
             f"{product_lines}"
         )
@@ -465,7 +480,19 @@ def _phase2_details(
             log("AI details batch %d failed: %s", batch_idx + 1, exc)
             continue
 
-        if not isinstance(mapping, dict):
+        if isinstance(mapping, list):
+            recovered = {}
+            for item in mapping:
+                if isinstance(item, dict) and "id" in item:
+                    item_id = str(item.pop("id"))
+                    recovered[item_id] = item
+            if recovered:
+                log("AI details batch %d: recovered list→dict (%d entries).", batch_idx + 1, len(recovered))
+                mapping = recovered
+            else:
+                log("AI details batch %d: expected dict, got list — cannot recover, skipping.", batch_idx + 1)
+                continue
+        elif not isinstance(mapping, dict):
             log("AI details batch %d: expected dict, got %s -- skipping.", batch_idx + 1, type(mapping).__name__)
             continue
 

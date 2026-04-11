@@ -1,3 +1,8 @@
+## 0.3.25
+- Fix: Phase 2 optimizer now returns a JSON object example in prompt to prevent Gemini from returning a list
+- Fix: Phase 1 + Phase 2 now recover automatically when AI returns a list with "id" fields (list→dict reshape) instead of silently skipping the batch
+- Fix: Phase 1 recovery path logs "recovered list→dict (N entries)" so the behavior is visible in logs
+
 ## 0.3.24
 - Stability: single-flight optimize guard — rejects concurrent optimize requests with HTTP 409 instead of running overlapping jobs
 - Stability: SQLite busy_timeout set to 5s (prevents "database is locked" under thread contention)
