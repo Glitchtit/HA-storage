@@ -39,7 +39,11 @@ def get_recipe(recipe_id: int):
         SELECT ri.*,
                p.name as product_name,
                u.abbreviation as unit_abbreviation,
-               COALESCE((SELECT SUM(s.amount) FROM stock s WHERE s.product_id = ri.product_id), 0) as stock_amount,
+               COALESCE((
+                   SELECT SUM(s.amount) FROM stock s
+                   WHERE s.product_id = ri.product_id
+                      OR s.product_id IN (SELECT id FROM products WHERE parent_id = ri.product_id)
+               ), 0) as stock_amount,
                p.unit_id as stock_unit_id
         FROM recipe_ingredients ri
         JOIN products p ON p.id = ri.product_id
