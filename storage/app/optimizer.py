@@ -888,6 +888,81 @@ def _phase3_recipe_repair(
             log("Recipe repair: deduplicated %d recipe-product pair(s).", deduped)
             repaired += deduped
 
+    # --- 4. Re-link stale recipe ingredient product_ids ---
+    # After optimize, recipe ingredients may point to old parent IDs while the
+    # current parent with the same name has a different ID (children point to
+    # the new one).  Find mismatches and update recipe_ingredients.
+    all_products_now = conn.execute(
+        "SELECT id, name, parent_id, product_group_id, active FROM products"
+    ).fetchall()
+    all_products_now = [dict(r) for r in all_products_now]
+
+    # Build current parent→children map
+    current_parents: set[int] = set()
+    for p in all_products_now:
+        if p.get("parent_id"):
+            current_parents.add(int(p["parent_id"]))
+
+    # Map name (lowercase) → current parent product (prefer products that
+    # actually have children pointing to them)
+    name_to_current_parent: dict[str, dict] = {}
+    products_by_id_now = {p["id"]: p for p in all_products_now}
+    for pid in current_parents:
+        pp = products_by_id_now.get(pid)
+        if pp:
+            name_to_current_parent[pp["name"].lower().strip()] = pp
+
+    # Also include group-master products that may not have children yet
+    for p in all_products_now:
+        key = p["name"].lower().strip()
+        if key not in name_to_current_parent and not p.get("active"):
+            if p.get("product_group_id") is not None:
+                name_to_current_parent[key] = p
+
+    ri_all = conn.execute(
+        "SELECT id, recipe_id, product_id FROM recipe_ingredients"
+    ).fetchall()
+
+    relinked = 0
+    conn.execute("SAVEPOINT relink_repair")
+    try:
+        for ri in ri_all:
+            ri_pid = int(ri["product_id"])
+            product = products_by_id_now.get(ri_pid)
+            if product is None:
+                continue  # handled by orphan repair above
+            pname_key = product["name"].lower().strip()
+            current = name_to_current_parent.get(pname_key)
+            if current and int(current["id"]) != ri_pid:
+                # Recipe points to an old product; update to the current parent
+                dup_check = conn.execute(
+                    "SELECT id FROM recipe_ingredients "
+                    "WHERE recipe_id = ? AND product_id = ?",
+                    (ri["recipe_id"], current["id"]),
+                ).fetchone()
+                if dup_check:
+                    conn.execute(
+                        "DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
+                        (current["id"], ri["id"]),
+                    )
+                relinked += 1
+        conn.execute("RELEASE relink_repair")
+        conn.commit()
+    except Exception as exc:
+        log("  ! Re-link repair failed: %s", exc)
+        try:
+            conn.execute("ROLLBACK TO relink_repair")
+            conn.execute("RELEASE relink_repair")
+        except Exception:
+            conn.rollback()
+    if relinked:
+        log("Recipe repair: re-linked %d ingredient(s) to current parent product(s).", relinked)
+        repaired += relinked
+
     return repaired
 
 
@@ -949,6 +1024,14 @@ def run_optimize(
             pid = int(p["id"])
             if pid in old_parent_ids and pid not in recipe_linked_ids:
                 name_to_product.pop(p.get("name", ""), None)
+        # Re-add recipe-linked parents that may have been overwritten by
+        # non-recipe-linked duplicates with the same name (dict collision fix).
+        for p in all_products:
+            pid = int(p["id"])
+            if pid in recipe_linked_ids:
+                pname = p.get("name", "")
+                if pname and pname not in name_to_product:
+                    name_to_product[pname] = p
     else:
         allowed = set(product_ids)
         products = [p for p in all_products if int(p["id"]) in allowed]
