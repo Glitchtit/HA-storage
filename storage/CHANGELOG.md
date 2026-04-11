@@ -1,3 +1,9 @@
+## 0.3.23
+- Optimizer Phase 3: recipe integrity repair — merges recipe stubs into matching parent products, fixes orphaned recipe ingredients, deduplicates entries
+- Fix: recipe-linked group-master products now preserved in parent name lookup (prevents duplicate parent creation after optimize)
+- Fix: case-insensitive parent product matching in optimizer (e.g. "sitruuna" reuses "Sitruuna")
+- Fix: pack merge now moves recipe_ingredients to base product before deletion (prevents silent cascade-delete of recipe links)
+
 ## 0.3.22
 - Optimizer: ALL drinks of any kind always assigned to Fridge/refrigerator (explicit rule, no exceptions)
 

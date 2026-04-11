@@ -47,14 +47,14 @@ def _load_products(conn: sqlite3.Connection, product_ids: list[int] | None = Non
     if product_ids:
         placeholders = ",".join("?" * len(product_ids))
         rows = conn.execute(
-            f"SELECT id, name, parent_id, location_id, product_group_id, unit_id, "
+            f"SELECT id, name, description, parent_id, location_id, product_group_id, unit_id, "
             f"default_best_before_days, min_stock_amount, active FROM products "
             f"WHERE id IN ({placeholders})",
             product_ids,
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, name, parent_id, location_id, product_group_id, unit_id, "
+            "SELECT id, name, description, parent_id, location_id, product_group_id, unit_id, "
             "default_best_before_days, min_stock_amount, active FROM products"
         ).fetchall()
     return [dict(r) for r in rows]
@@ -100,8 +100,18 @@ def _ensure_parent_product(
     unit_id: int,
     group_master_id: int | None,
 ) -> int:
-    """Return the ID of a parent product with *name*, creating it if needed."""
+    """Return the ID of a parent product with *name*, creating it if needed.
+
+    Uses case-insensitive fallback so "sitruuna" matches "Sitruuna".
+    """
     existing = name_to_product.get(name)
+    if not existing:
+        # Case-insensitive fallback
+        name_lower = name.lower()
+        for key, val in name_to_product.items():
+            if key.lower() == name_lower:
+                existing = val
+                break
     if existing:
         pid = int(existing["id"])
         # Ensure it's inactive (parent placeholder) if it has no min_stock_amount
@@ -131,7 +141,7 @@ def _strip_parents(
     products: list[dict],
     log: Callable[..., None],
     group_master_id: int | None = None,
-) -> set[int]:
+) -> tuple[set[int], set[int]]:
     """Remove all parent_id links, deactivate parent placeholders, and delete
     group-master products before the AI runs.
 
@@ -143,8 +153,8 @@ def _strip_parents(
     ingredient — those are kept (but deactivated) so recipe links are preserved.
     All identified parents are marked active=0 to exclude them from the AI feed.
 
-    Returns the full set of identified parent IDs so the caller can filter them
-    out of the working product list.
+    Returns a tuple of (all_parent_ids, recipe_linked_ids) so the caller can
+    preserve recipe-linked parents in name_to_product for reuse.
     """
     # 1. Products referenced as a parent by any other product
     has_children: set[int] = set()
@@ -208,7 +218,7 @@ def _strip_parents(
         "(%d preserved — referenced by recipes).",
         stripped, len(all_parent_ids), deleted, len(recipe_linked),
     )
-    return all_parent_ids
+    return all_parent_ids, recipe_linked
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +536,27 @@ def _phase2_details(
                                     )
                                     log("  -> Transferred %.0f (%.0f×%d) stock to '%s'.",
                                         transferred, float(se["amount"]), pack_size, base_name)
+                            # Move recipe_ingredients to base product before cascade delete
+                            ri_rows = conn.execute(
+                                "SELECT id, recipe_id, product_id FROM recipe_ingredients WHERE product_id = ?",
+                                (product_id,),
+                            ).fetchall()
+                            for ri in ri_rows:
+                                # Avoid duplicate (same recipe + same product)
+                                dup = conn.execute(
+                                    "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
+                                    (ri["recipe_id"], base_pid),
+                                ).fetchone()
+                                if dup:
+                                    conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],))
+                                else:
+                                    conn.execute(
+                                        "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
+                                        (base_pid, ri["id"]),
+                                    )
+                            if ri_rows:
+                                log("  -> Moved %d recipe ingredient(s) from '%s' to '%s'.",
+                                    len(ri_rows), product.get("name"), base_name)
                             # Delete multi-pack product (cascades stock deletion)
                             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
                             conn.commit()
@@ -654,6 +685,149 @@ def _phase2_details(
 
 
 # ---------------------------------------------------------------------------
+# Phase 3: recipe repair (stub→parent migration, orphan fix, dedup)
+# ---------------------------------------------------------------------------
+
+_RECIPE_STUB_DESCRIPTION = "Auto-created by recipe scraper"
+
+
+def _phase3_recipe_repair(
+    conn: sqlite3.Connection,
+    log: Callable[..., None],
+) -> int:
+    """Repair recipe integrity after optimizer restructuring.
+
+    1. Stub→parent migration: find recipe stubs whose name matches an
+       optimizer-created parent (case-insensitive). Migrate recipe_ingredients
+       from the stub to the parent, then delete the stub.
+    2. Orphan repair: detect recipe_ingredients pointing to deleted products,
+       attempt name-based replacement via the products table.
+    3. Duplicate cleanup: remove duplicate recipe_ingredients
+       (same recipe_id + product_id), keeping the row with the highest amount.
+
+    Returns the number of recipe ingredients repaired.
+    """
+    repaired = 0
+
+    # --- 1. Stub → parent migration ---
+    all_products = conn.execute(
+        "SELECT id, name, description, parent_id, product_group_id, active FROM products"
+    ).fetchall()
+    all_products = [dict(r) for r in all_products]
+
+    stubs: list[dict] = []
+    non_stubs: list[dict] = []
+    for p in all_products:
+        desc = (p.get("description") or "").strip()
+        if _RECIPE_STUB_DESCRIPTION in desc:
+            stubs.append(p)
+        else:
+            non_stubs.append(p)
+
+    if stubs:
+        # Build case-insensitive name → non-stub product map (prefer parents)
+        parent_ids = {int(p["parent_id"]) for p in all_products if p.get("parent_id")}
+        name_to_target: dict[str, dict] = {}
+        for p in non_stubs:
+            key = p["name"].lower().strip()
+            existing = name_to_target.get(key)
+            if existing is None:
+                name_to_target[key] = p
+            elif int(p["id"]) in parent_ids and int(existing["id"]) not in parent_ids:
+                name_to_target[key] = p
+
+        merged = 0
+        for stub in stubs:
+            stub_key = stub["name"].lower().strip()
+            target = name_to_target.get(stub_key)
+            if not target:
+                continue
+
+            stub_id = int(stub["id"])
+            target_id = int(target["id"])
+
+            # Move recipe_ingredients from stub to target
+            ri_rows = conn.execute(
+                "SELECT id, recipe_id FROM recipe_ingredients WHERE product_id = ?",
+                (stub_id,),
+            ).fetchall()
+            moved = 0
+            for ri in ri_rows:
+                dup = conn.execute(
+                    "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
+                    (ri["recipe_id"], target_id),
+                ).fetchone()
+                if dup:
+                    conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],))
+                else:
+                    conn.execute(
+                        "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
+                        (target_id, ri["id"]),
+                    )
+                moved += 1
+
+            # Delete the stub product
+            try:
+                conn.execute("DELETE FROM products WHERE id = ?", (stub_id,))
+                log("  -> Merged recipe stub '%s' (ID %d) → '%s' (ID %d): %d ingredient(s) moved.",
+                    stub["name"], stub_id, target["name"], target_id, moved)
+                merged += 1
+                repaired += moved
+            except Exception as exc:
+                log("  ! Could not delete stub '%s': %s", stub["name"], exc)
+
+        conn.commit()
+        if merged:
+            log("Recipe repair: merged %d stub product(s).", merged)
+
+    # --- 2. Orphan repair ---
+    orphans = conn.execute(
+        "SELECT ri.id, ri.recipe_id, ri.product_id "
+        "FROM recipe_ingredients ri "
+        "LEFT JOIN products p ON ri.product_id = p.id "
+        "WHERE p.id IS NULL"
+    ).fetchall()
+    if orphans:
+        log("Recipe repair: found %d orphaned recipe ingredient(s).", len(orphans))
+        for orph in orphans:
+            conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (orph["id"],))
+            repaired += 1
+        conn.commit()
+        log("Recipe repair: removed %d orphaned ingredient(s).", len(orphans))
+
+    # --- 3. Duplicate cleanup ---
+    duplicates = conn.execute(
+        "SELECT recipe_id, product_id, COUNT(*) AS cnt, MAX(amount) AS max_amount "
+        "FROM recipe_ingredients "
+        "GROUP BY recipe_id, product_id "
+        "HAVING cnt > 1"
+    ).fetchall()
+    if duplicates:
+        deduped = 0
+        for dup in duplicates:
+            # Keep the row with the highest amount, delete the rest
+            keeper = conn.execute(
+                "SELECT id FROM recipe_ingredients "
+                "WHERE recipe_id = ? AND product_id = ? "
+                "ORDER BY amount DESC LIMIT 1",
+                (dup["recipe_id"], dup["product_id"]),
+            ).fetchone()
+            if keeper:
+                conn.execute(
+                    "DELETE FROM recipe_ingredients "
+                    "WHERE recipe_id = ? AND product_id = ? AND id != ?",
+                    (dup["recipe_id"], dup["product_id"], keeper["id"]),
+                )
+                deduped += 1
+        conn.commit()
+        if deduped:
+            log("Recipe repair: deduplicated %d recipe-product pair(s).", deduped)
+            repaired += deduped
+
+    return repaired
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -698,14 +872,17 @@ def run_optimize(
 
     # --- Determine working set ---
     old_parent_ids: set[int] = set()
+    recipe_linked_ids: set[int] = set()
     if product_ids is None:
         # Full mode: strip all parents, exclude old parent placeholders
-        old_parent_ids = _strip_parents(conn, all_products, log, group_master_id)
+        old_parent_ids, recipe_linked_ids = _strip_parents(conn, all_products, log, group_master_id)
         products = [p for p in all_products if int(p["id"]) not in old_parent_ids]
         # Purge deleted/deactivated parents from name lookup so _ensure_parent_product
-        # creates fresh entries rather than referencing stale (possibly deleted) IDs.
+        # creates fresh entries — BUT keep recipe-linked parents so the AI can
+        # reuse them instead of creating duplicates.
         for p in all_products:
-            if int(p["id"]) in old_parent_ids:
+            pid = int(p["id"])
+            if pid in old_parent_ids and pid not in recipe_linked_ids:
                 name_to_product.pop(p.get("name", ""), None)
     else:
         allowed = set(product_ids)
@@ -806,6 +983,14 @@ def run_optimize(
         name_to_product=name_to_product,
         batch_size=batch_size,
     )
+
+    # --- Phase 3: recipe repair ---
+    log("Phase 3: repairing recipe integrity…")
+    recipe_repaired = _phase3_recipe_repair(conn, log)
+    if recipe_repaired:
+        log("Recipe repair: %d ingredient(s) repaired.", recipe_repaired)
+    else:
+        log("Recipe repair: no issues found.")
 
     log("Optimize complete — %d field(s) updated.", updated)
     return {"updated": updated}
