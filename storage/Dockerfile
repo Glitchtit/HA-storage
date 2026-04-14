@@ -11,7 +11,7 @@ RUN npm run build
 # ── Stage 2: Runtime ───────────────────────────────────────────────────────
 FROM $BUILD_FROM
 
-RUN apk add --no-cache python3 py3-pip nginx jq curl gettext
+RUN apk add --no-cache python3 py3-pip nginx jq curl gettext jpeg-dev zlib-dev
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
