@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getStock,
   getProductStock,
@@ -53,6 +53,116 @@ function Modal({ title, onClose, children }) {
         </div>
         <div className="p-4">{children}</div>
       </div>
+    </div>
+  );
+}
+
+/* ── ProductCombobox ─────────────────────────────────────────────────────── */
+
+function fuzzyMatch(query, name) {
+  const q = query.toLowerCase();
+  const n = name.toLowerCase();
+  if (n.includes(q)) return true;
+  // Allow characters to appear in order (fuzzy)
+  let qi = 0;
+  for (let i = 0; i < n.length && qi < q.length; i++) {
+    if (n[i] === q[qi]) qi++;
+  }
+  return qi === q.length;
+}
+
+function fuzzyScore(query, name) {
+  const q = query.toLowerCase();
+  const n = name.toLowerCase();
+  if (n.startsWith(q)) return 0;
+  if (n.includes(q)) return 1;
+  return 2;
+}
+
+// Combobox: text input + dropdown suggestions. Calls onChange(id) when a
+// product is selected. products: [{id, name}]
+function ProductCombobox({ products, value, onChange, placeholder = 'Search product…', required }) {
+  const [inputVal, setInputVal] = useState('');
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const containerRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Sync display value when value is set externally (e.g. reset)
+  useEffect(() => {
+    if (!value) { setInputVal(''); return; }
+    const p = products.find((p) => String(p.id) === String(value));
+    if (p) setInputVal(p.name);
+  }, [value, products]);
+
+  const suggestions = inputVal.length === 0
+    ? products.slice(0, 8)
+    : products
+        .filter((p) => fuzzyMatch(inputVal, p.name))
+        .sort((a, b) => fuzzyScore(inputVal, a.name) - fuzzyScore(inputVal, b.name))
+        .slice(0, 8);
+
+  const select = (p) => {
+    setInputVal(p.name);
+    onChange(String(p.id));
+    setOpen(false);
+  };
+
+  const handleInput = (e) => {
+    setInputVal(e.target.value);
+    onChange(''); // clear selection when user edits
+    setActiveIdx(0);
+    setOpen(true);
+  };
+
+  const handleKeyDown = (e) => {
+    if (!open) { if (e.key === 'ArrowDown' || e.key === 'Enter') setOpen(true); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, suggestions.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (suggestions[activeIdx]) select(suggestions[activeIdx]); }
+    else if (e.key === 'Escape') setOpen(false);
+  };
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        ref={inputRef}
+        type="text"
+        value={inputVal}
+        onChange={handleInput}
+        onFocus={() => setOpen(true)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        required={required}
+        autoComplete="off"
+        className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      />
+      {/* Hidden input to hold the actual ID for form required validation */}
+      <input type="hidden" value={value} required={required} />
+      {open && suggestions.length > 0 && (
+        <ul className="absolute z-50 mt-1 w-full bg-gray-700 border border-gray-600 rounded-lg shadow-xl max-h-52 overflow-y-auto text-sm">
+          {suggestions.map((p, i) => (
+            <li
+              key={p.id}
+              onMouseDown={(e) => { e.preventDefault(); select(p); }}
+              className={`px-3 py-2 cursor-pointer truncate ${
+                i === activeIdx ? 'bg-emerald-600 text-white' : 'text-gray-100 hover:bg-gray-600'
+              }`}
+            >
+              {p.name}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -378,17 +488,12 @@ export default function Stock() {
             {!modal.productId && (
               <label className="block">
                 <span className="text-sm text-gray-400">Product</span>
-                <select
+                <ProductCombobox
+                  products={products}
                   value={formProduct}
-                  onChange={(e) => setFormProduct(e.target.value)}
+                  onChange={setFormProduct}
                   required
-                  className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="">Select product…</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
+                />
               </label>
             )}
             <label className="block">
@@ -484,18 +589,15 @@ export default function Stock() {
             {!modal.productId && (
               <label className="block">
                 <span className="text-sm text-gray-400">Product</span>
-                <select
+                <ProductCombobox
+                  products={stock.map((s) => ({
+                    id: s.product_id ?? s.product?.id,
+                    name: s.product_name || s.product?.name,
+                  }))}
                   value={formProduct}
-                  onChange={(e) => setFormProduct(e.target.value)}
+                  onChange={setFormProduct}
                   required
-                  className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="">Select product…</option>
-                  {stock.map((s) => {
-                    const sid = s.product_id ?? s.product?.id;
-                    return <option key={sid} value={sid}>{s.product_name || s.product?.name}</option>;
-                  })}
-                </select>
+                />
               </label>
             )}
             <label className="block">

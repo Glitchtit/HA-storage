@@ -1,3 +1,6 @@
+## 0.3.30
+- Feature: "Add to Stock" and "Transfer" product selector replaced with fuzzy-search combobox — type to filter with instant suggestions, keyboard-navigable, replaces the full product dropdown
+
 ## 0.3.29
 - Feature: Product image thumbnail endpoint `GET /api/files/products/thumb/{filename}` — serves a 128×128 JPEG compressed thumbnail; generated lazily on first request and cached; backwards compatible with all existing product images; thumbnails also generated eagerly on new uploads; thumbnail removed automatically when original is deleted
 
