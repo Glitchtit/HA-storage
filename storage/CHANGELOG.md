@@ -1,4 +1,7 @@
-## 0.3.27
+## 0.3.29
+- Feature: Product image thumbnail endpoint `GET /api/files/products/thumb/{filename}` — serves a 128×128 JPEG compressed thumbnail; generated lazily on first request and cached; backwards compatible with all existing product images; thumbnails also generated eagerly on new uploads; thumbnail removed automatically when original is deleted
+
+## 0.3.28
 - Fix: recipe ingredients no longer break after optimize — fixed name_to_product collision where duplicate-name parents caused recipe-linked parents to be lost from the lookup, resulting in new parent IDs that orphaned recipe references
 - Fix: Phase 3 recipe repair now re-links stale recipe ingredient product_ids to current parent products when IDs change after optimize restructuring
 - Fix: Phase 3 re-link handles deduplication (won't create duplicate recipe_id + product_id rows)
