@@ -1,3 +1,8 @@
+## 0.3.31
+- Apply GlitchyRee design system: brand orange active tabs, cobalt primary "Add Product" button, self-hosted Space Grotesk/Inter/JetBrains Mono
+- Add CSS design tokens at src/styles/design-tokens.css
+- Wire Tailwind theme.extend to expose brand.* / semantic.* / font-display utilities
+
 ## 0.3.30
 - Feature: "Add to Stock" and "Transfer" product selector replaced with fuzzy-search combobox — type to filter with instant suggestions, keyboard-navigable, replaces the full product dropdown
 

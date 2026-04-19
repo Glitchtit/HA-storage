@@ -706,7 +706,7 @@ export default function Products() {
           />
           <button
             onClick={() => setShowCreate(true)}
-            className="px-4 py-2 text-sm rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 whitespace-nowrap"
+            className="px-4 py-2 text-sm rounded-xl bg-brand-cobalt text-white hover:bg-brand-cobalt-600 whitespace-nowrap"
           >
             ➕ Add Product
           </button>
