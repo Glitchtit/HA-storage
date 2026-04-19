@@ -1,3 +1,6 @@
+## 0.3.32
+- `ai_provider` schema changed to dropdown (list) — renders as radio buttons in HA add-on options instead of free text
+
 ## 0.3.31
 - Apply GlitchyRee design system: brand orange active tabs, cobalt primary "Add Product" button, self-hosted Space Grotesk/Inter/JetBrains Mono
 - Add CSS design tokens at src/styles/design-tokens.css
