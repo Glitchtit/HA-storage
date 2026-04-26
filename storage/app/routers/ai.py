@@ -220,3 +220,23 @@ def get_optimize_status(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@router.get("/ai/optimize")
+def get_current_optimize_status():
+    """Return the running or most-recent optimize task — `idle` if none."""
+    with _tasks_lock:
+        if _running_task_id and _running_task_id in _tasks:
+            return _tasks[_running_task_id]
+        if not _tasks:
+            return {
+                "status": "idle",
+                "task_id": None,
+                "started_at": None,
+                "finished_at": None,
+                "logs": [],
+                "updated": 0,
+            }
+        # Most recent by started_at
+        latest = max(_tasks.values(), key=lambda t: t.get("started_at") or 0)
+        return latest

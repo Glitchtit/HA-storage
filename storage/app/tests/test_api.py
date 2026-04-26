@@ -453,3 +453,164 @@ class TestConfig:
         r = client.get("/api/config/ai-key")
         # May be 404 if no key set or 200 if env var was set
         assert r.status_code in (200, 404)
+
+
+# ── Stock Entries (aggregate, used by HACS integration) ────────────────────
+
+class TestStockEntries:
+    def _make_product_with_location(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"StockEntries_{id(self)}", "unit_id": kpl, "location_id": loc
+        }).json()
+        return p["id"], kpl, loc
+
+    def test_lists_all_entries_with_product_name(self):
+        pid, _, _ = self._make_product_with_location()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": "2099-01-01"})
+        r = client.get("/api/stock/entries")
+        assert r.status_code == 200
+        rows = r.json()
+        assert any(e["product_id"] == pid and e["product_name"].startswith("StockEntries_") for e in rows)
+
+    def test_filter_expiring_within_days(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product_with_location()
+        soon = (date.today() + timedelta(days=3)).isoformat()
+        far = (date.today() + timedelta(days=60)).isoformat()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": soon})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": far})
+
+        r = client.get("/api/stock/entries?expiring_within_days=7")
+        assert r.status_code == 200
+        dates = [e["best_before_date"] for e in r.json() if e["product_id"] == pid]
+        assert soon in dates
+        assert far not in dates
+
+    def test_filter_expired(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product_with_location()
+        gone = (date.today() - timedelta(days=2)).isoformat()
+        future = (date.today() + timedelta(days=10)).isoformat()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": gone})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": future})
+
+        r = client.get("/api/stock/entries?expired=true")
+        assert r.status_code == 200
+        dates = [e["best_before_date"] for e in r.json() if e["product_id"] == pid]
+        assert gone in dates
+        assert future not in dates
+
+    def test_expiring_today_is_included(self):
+        from datetime import date
+        pid, _, _ = self._make_product_with_location()
+        today = date.today().isoformat()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": today})
+
+        r = client.get("/api/stock/entries?expiring_within_days=0")
+        assert r.status_code == 200
+        dates = [e["best_before_date"] for e in r.json() if e["product_id"] == pid]
+        assert today in dates
+
+
+# ── AI Optimize Status (no task id) ────────────────────────────────────────
+
+class TestOptimizeStatusEndpoint:
+    def test_idle_when_nothing_ever_ran(self):
+        # This test depends on test order — if any optimize task has run earlier,
+        # we'll get a most-recent task instead of idle. So accept either shape and
+        # only assert the schema.
+        r = client.get("/api/ai/optimize")
+        assert r.status_code == 200
+        data = r.json()
+        assert "status" in data
+        assert data["status"] in ("idle", "running", "done", "error")
+        assert "task_id" in data
+
+    def test_reports_running_task(self):
+        from routers import ai as ai_mod
+        import time
+        # Inject a fake running task
+        with ai_mod._tasks_lock:
+            ai_mod._tasks["fake-running"] = {
+                "task_id": "fake-running",
+                "status": "running",
+                "logs": [],
+                "updated": 0,
+                "started_at": time.time(),
+                "finished_at": None,
+                "mode": "full",
+            }
+            ai_mod._running_task_id = "fake-running"
+        try:
+            r = client.get("/api/ai/optimize")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["status"] == "running"
+            assert data["task_id"] == "fake-running"
+        finally:
+            with ai_mod._tasks_lock:
+                ai_mod._running_task_id = None
+                ai_mod._tasks.pop("fake-running", None)
+
+    def test_reports_most_recent_when_idle(self):
+        from routers import ai as ai_mod
+        import time
+        with ai_mod._tasks_lock:
+            ai_mod._tasks["older"] = {
+                "task_id": "older",
+                "status": "done",
+                "logs": [],
+                "updated": 1,
+                "started_at": 100.0,
+                "finished_at": 200.0,
+                "mode": "full",
+            }
+            ai_mod._tasks["newer"] = {
+                "task_id": "newer",
+                "status": "done",
+                "logs": [],
+                "updated": 2,
+                "started_at": 300.0,
+                "finished_at": 400.0,
+                "mode": "incremental",
+            }
+            ai_mod._running_task_id = None
+        try:
+            r = client.get("/api/ai/optimize")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["status"] == "done"
+            assert data["task_id"] == "newer"
+        finally:
+            with ai_mod._tasks_lock:
+                ai_mod._tasks.pop("older", None)
+                ai_mod._tasks.pop("newer", None)
+
+
+# ── Removed ha_sync routes (clean break for HACS integration) ──────────────
+
+class TestRemovedHaSyncRoutes:
+    def test_shopping_ha_sync_gone(self):
+        # Path may be intercepted by /shopping-list/{item_id} template → 405; either is "gone".
+        r = client.post("/api/shopping-list/ha-sync")
+        assert r.status_code in (404, 405)
+
+    def test_shopping_ha_status_gone(self):
+        r = client.get("/api/shopping-list/ha-status")
+        assert r.status_code in (404, 405)
+
+    def test_stock_ha_sync_gone(self):
+        r = client.post("/api/stock-list/ha-sync")
+        assert r.status_code in (404, 405)
+
+    def test_stock_ha_status_gone(self):
+        r = client.get("/api/stock-list/ha-status")
+        assert r.status_code in (404, 405)
+
+    def test_add_shopping_item_still_works(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        pid = client.post("/api/products", json={"name": "PostHaSync", "unit_id": kpl}).json()["id"]
+        r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 201

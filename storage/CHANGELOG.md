@@ -1,3 +1,9 @@
+## 0.4.0
+- Companion HACS integration `ha_storage` now ships side-by-side at the repo root — install via HACS to get the Storage sidebar panel, sensors (`products_total`, `low_stock`, `expiring_soon`, `expired`, `shopping_pending`, `barcode_queue`, `optimize_status`), a `todo.storage_shopping_list` entity, and the `ha_storage.add_to_shopping_list` / `consume_stock` / `run_optimize` services
+- API: new `GET /api/stock/entries` endpoint returns all stock entries joined with product name; supports `expiring_within_days` and `expired` filters
+- API: new `GET /api/ai/optimize` endpoint (no task id) returns the running or most recent optimize task summary, or `idle`
+- Breaking: removed the legacy in-add-on HA bridge (`ha_sync.py`) and the `/api/shopping-list/ha-sync`, `/api/shopping-list/ha-status`, `/api/stock-list/ha-sync`, `/api/stock-list/ha-status` endpoints — use the new HACS integration instead
+
 ## 0.3.32
 - `ai_provider` schema changed to dropdown (list) — renders as radio buttons in HA add-on options instead of free text
 

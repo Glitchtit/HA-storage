@@ -141,10 +141,6 @@ async def lifespan(app: FastAPI):
         "SELECT count(*) as cnt FROM sqlite_master WHERE type='table'"
     ).fetchone()
     log.info("Storage v%s ready — %d tables in DB.", VERSION, tables["cnt"])
-    # Sync shopping list for all products with a minimum stock level
-    import ha_sync as _ha
-    _ha.startup_sync(conn)
-    _ha.startup_sync_stock(conn)
     yield
     # Shutdown
     global _db

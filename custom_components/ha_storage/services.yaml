@@ -1,0 +1,77 @@
+add_to_shopping_list:
+  name: Add to shopping list
+  description: Add a product to the Storage shopping list.
+  fields:
+    product_id:
+      name: Product ID
+      description: Storage product ID to add.
+      required: true
+      example: 42
+      selector:
+        number:
+          mode: box
+    amount:
+      name: Amount
+      description: How many to add. Defaults to 1.
+      required: false
+      default: 1
+      example: 2
+      selector:
+        number:
+          min: 0
+          mode: box
+    unit_id:
+      name: Unit ID
+      description: Optional Storage unit ID to override the product's default unit.
+      required: false
+      selector:
+        number:
+          mode: box
+    note:
+      name: Note
+      description: Free-text note attached to the entry.
+      required: false
+      example: Buy organic
+      selector:
+        text:
+
+consume_stock:
+  name: Consume stock
+  description: Consume N of a product from stock (FIFO by best-before date).
+  fields:
+    product_id:
+      name: Product ID
+      description: Storage product ID to consume from.
+      required: true
+      example: 42
+      selector:
+        number:
+          mode: box
+    amount:
+      name: Amount
+      description: How many to consume.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 0
+          mode: box
+
+run_optimize:
+  name: Run AI optimize
+  description: Trigger the Storage AI optimize background job. 409 if already running.
+  fields:
+    product_ids:
+      name: Product IDs
+      description: Optional list of product IDs to optimize. If omitted, runs full optimize.
+      required: false
+      example: "[12, 34]"
+      selector:
+        object:
+    fresh_seed:
+      name: Fresh seed
+      description: Reseed all category data before running.
+      required: false
+      default: false
+      selector:
+        boolean:
