@@ -7,7 +7,15 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException
 
-from models import StockAdd, StockConsume, StockEntry, StockOpen, StockSummary, StockTransfer
+from models import (
+    StockAdd,
+    StockConsume,
+    StockEntry,
+    StockEntryWithProduct,
+    StockOpen,
+    StockSummary,
+    StockTransfer,
+)
 
 router = APIRouter(tags=["stock"])
 log = logging.getLogger(__name__)
@@ -16,19 +24,6 @@ log = logging.getLogger(__name__)
 def _get_db():
     from main import get_connection
     return get_connection()
-
-
-def _sync_shopping_list(conn: sqlite3.Connection, product_id: int) -> None:
-    import ha_sync
-    ha_sync.sync_product_shopping_list(conn, product_id)
-
-
-def _sync_stock_list(conn: sqlite3.Connection, product_id: int) -> None:
-    import ha_sync
-    try:
-        ha_sync.sync_product_stock_list(conn, product_id)
-    except Exception as exc:
-        log.warning("Stock list sync failed for product %d: %s", product_id, exc)
 
 
 @router.get("/stock", response_model=list[StockSummary])
@@ -58,6 +53,34 @@ def list_stock():
             product=product,
         ))
     return result
+
+
+@router.get("/stock/entries", response_model=list[StockEntryWithProduct])
+def list_stock_entries(expiring_within_days: int | None = None, expired: bool | None = None):
+    """All stock entries joined with product name. Supports expiry filters.
+
+    - expiring_within_days=N → entries with best_before_date between today and today+N (inclusive)
+    - expired=true → entries whose best_before_date is strictly before today
+    """
+    conn = _get_db()
+    where = ["s.amount > 0"]
+    params: list = []
+    if expired:
+        where.append("s.best_before_date IS NOT NULL AND s.best_before_date < date('now')")
+    elif expiring_within_days is not None:
+        where.append(
+            "s.best_before_date IS NOT NULL "
+            "AND s.best_before_date >= date('now') "
+            "AND s.best_before_date <= date('now', '+' || ? || ' days')"
+        )
+        params.append(expiring_within_days)
+    sql = (
+        "SELECT s.*, p.name AS product_name FROM stock s "
+        "JOIN products p ON p.id = s.product_id "
+        "WHERE " + " AND ".join(where) + " "
+        "ORDER BY s.best_before_date IS NULL, s.best_before_date"
+    )
+    return conn.execute(sql, params).fetchall()
 
 
 @router.get("/stock/product/{product_id}", response_model=list[StockEntry])
@@ -103,8 +126,6 @@ def add_stock(body: StockAdd):
     conn.commit()
     log.info("Added %.1f to stock for product %d.", body.amount, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
-    _sync_shopping_list(conn, body.product_id)
-    _sync_stock_list(conn, body.product_id)
     return entry
 
 
@@ -137,8 +158,6 @@ def consume_stock(body: StockConsume):
 
     log.info("Consumed %.1f from product %d (%.1f remaining to consume).",
              consumed, body.product_id, remaining)
-    _sync_shopping_list(conn, body.product_id)
-    _sync_stock_list(conn, body.product_id)
     return {"consumed": consumed, "remaining_to_consume": remaining}
 
 
@@ -204,17 +223,13 @@ def transfer_stock(body: StockTransfer):
         transferred += take
 
     conn.commit()
-    _sync_shopping_list(conn, body.product_id)
-    _sync_stock_list(conn, body.product_id)
     return {"transferred": transferred}
+
+
 @router.delete("/stock/{entry_id}", status_code=204)
 def delete_stock_entry(entry_id: int):
     conn = _get_db()
-    entry = conn.execute("SELECT product_id FROM stock WHERE id = ?", (entry_id,)).fetchone()
-    if not entry:
+    if not conn.execute("SELECT id FROM stock WHERE id = ?", (entry_id,)).fetchone():
         raise HTTPException(404, f"Stock entry {entry_id} not found")
-    product_id = entry["product_id"]
     conn.execute("DELETE FROM stock WHERE id = ?", (entry_id,))
     conn.commit()
-    _sync_shopping_list(conn, product_id)
-    _sync_stock_list(conn, product_id)

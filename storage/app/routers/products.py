@@ -127,9 +127,6 @@ def update_product(product_id: int, body: ProductUpdate):
         params,
     )
     conn.commit()
-    if "min_stock_amount" in updates:
-        import ha_sync
-        ha_sync.sync_product_shopping_list(conn, product_id)
     return conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
 
 
