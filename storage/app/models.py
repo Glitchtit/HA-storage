@@ -146,6 +146,10 @@ class StockSummary(BaseModel):
     min_stock_amount: float
     product: Product
 
+class StockEntryWithProduct(StockEntry):
+    """Stock entry joined with its product name — used by aggregate listings."""
+    product_name: str
+
 # ── Unit Conversions ───────────────────────────────────────────────────────
 
 class ConversionCreate(BaseModel):

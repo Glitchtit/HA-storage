@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Storage Add-on Connection",
+        "description": "Enter the URL of the Storage add-on (e.g. http://homeassistant.local:8099). The integration will poll the REST API to expose sensors, a shopping todo list, and services.",
+        "data": {
+          "addon_url": "Add-on URL",
+          "expiring_within_days": "Expiring soon window (days)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the Storage add-on. Make sure it is installed and running."
+    },
+    "abort": {
+      "already_configured": "Storage is already configured."
+    }
+  },
+  "services": {
+    "add_to_shopping_list": {
+      "name": "Add to shopping list",
+      "description": "Add a product to the Storage shopping list."
+    },
+    "consume_stock": {
+      "name": "Consume stock",
+      "description": "Consume N of a product from stock (FIFO)."
+    },
+    "run_optimize": {
+      "name": "Run AI optimize",
+      "description": "Trigger the Storage AI optimize background job."
+    }
+  }
+}
