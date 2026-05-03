@@ -167,11 +167,11 @@ def consume_stock(body: StockConsume):
     if consumed == 0:
         raise HTTPException(400, f"No stock available for product {body.product_id}")
 
-    # Aggregate consume event (single row per request, matching request intent)
+    # Aggregate consume/spoil event (single row per request, matching request intent)
     log_event(
         conn,
         product_id=body.product_id,
-        event_type="consume",
+        event_type="spoil" if body.spoiled else "consume",
         amount=consumed,
         note=body.note,
     )
