@@ -39,9 +39,9 @@ def add_shopping_item(body: ShoppingItemCreate):
     if not product:
         raise HTTPException(400, f"Product {body.product_id} not found")
     cur = conn.execute(
-        "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (body.product_id, body.amount, body.unit_id, body.note, body.recipe_id, product["name"]),
+        "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (body.product_id, body.amount, body.unit_id, body.note, body.recipe_id, product["name"], int(body.auto_added)),
     )
     conn.commit()
     return conn.execute("SELECT * FROM shopping_list WHERE id = ?", (cur.lastrowid,)).fetchone()

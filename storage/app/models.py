@@ -111,20 +111,24 @@ class StockAdd(BaseModel):
     unit_id: int | None = None
     location_id: int | None = None
     best_before_date: str | None = None
+    note: str = ""
 
 class StockConsume(BaseModel):
     product_id: int
     amount: float = 1
+    note: str = ""
 
 class StockOpen(BaseModel):
     product_id: int
     amount: float = 1
+    note: str = ""
 
 class StockTransfer(BaseModel):
     product_id: int
     amount: float
     from_location_id: int
     to_location_id: int
+    note: str = ""
 
 class StockEntry(BaseModel):
     id: int
@@ -149,6 +153,53 @@ class StockSummary(BaseModel):
 class StockEntryWithProduct(StockEntry):
     """Stock entry joined with its product name — used by aggregate listings."""
     product_name: str
+
+# ── Stock History & Statistics ─────────────────────────────────────────────
+
+class StockHistoryEntry(BaseModel):
+    id: int
+    product_id: int
+    event_type: str  # 'purchase' | 'consume' | 'open' | 'transfer' | 'spoil'
+    amount: float
+    unit_id: int | None = None
+    location_id: int | None = None
+    from_location_id: int | None = None
+    stock_id: int | None = None
+    note: str = ""
+    created_at: str
+
+class StockHistoryEntryWithProduct(StockHistoryEntry):
+    product_name: str
+
+class StatsSummary(BaseModel):
+    events_total: int
+    events_7d: int
+    events_30d: int
+    products_purchased_30d: int
+    products_consumed_30d: int
+    spoiled_30d: int
+
+class StatsTopItem(BaseModel):
+    product_id: int
+    product_name: str
+    total_amount: float
+    event_count: int
+
+class StatsTimelinePoint(BaseModel):
+    day: str  # YYYY-MM-DD
+    amount: float
+    event_count: int
+
+class StatsProductSummary(BaseModel):
+    product_id: int
+    purchased_total: float = 0
+    consumed_total: float = 0
+    spoiled_total: float = 0
+    purchase_count: int = 0
+    consume_count: int = 0
+    avg_days_between_consumes: float | None = None
+    last_purchase: str | None = None
+    last_consume: str | None = None
 
 # ── Unit Conversions ───────────────────────────────────────────────────────
 
@@ -238,6 +289,7 @@ class ShoppingItemCreate(BaseModel):
     unit_id: int | None = None
     note: str = ""
     recipe_id: int | None = None
+    auto_added: bool = False
 
 class ShoppingItemUpdate(BaseModel):
     amount: float | None = None
