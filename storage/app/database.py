@@ -131,6 +131,19 @@ CREATE TABLE IF NOT EXISTS config (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS stock_history (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id       INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    event_type       TEXT NOT NULL,
+    amount           REAL NOT NULL,
+    unit_id          INTEGER REFERENCES units(id) ON DELETE SET NULL,
+    location_id      INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+    from_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+    stock_id         INTEGER,
+    note             TEXT DEFAULT '',
+    created_at       TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_id);
 CREATE INDEX IF NOT EXISTS idx_products_group ON products(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_products_location ON products(location_id);
@@ -144,6 +157,9 @@ CREATE INDEX IF NOT EXISTS idx_unit_conversions_from ON unit_conversions(from_un
 CREATE INDEX IF NOT EXISTS idx_unit_conversions_product ON unit_conversions(product_id);
 CREATE INDEX IF NOT EXISTS idx_shopping_list_product ON shopping_list(product_id);
 CREATE INDEX IF NOT EXISTS idx_barcode_queue_status ON barcode_queue(status);
+CREATE INDEX IF NOT EXISTS idx_stock_history_product ON stock_history(product_id);
+CREATE INDEX IF NOT EXISTS idx_stock_history_created ON stock_history(created_at);
+CREATE INDEX IF NOT EXISTS idx_stock_history_event ON stock_history(event_type);
 """
 
 # Standard Finnish measurement units
@@ -210,6 +226,56 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE shopping_list ADD COLUMN ha_item_name TEXT")
         conn.commit()
         log.info("Added ha_item_name column to shopping_list.")
+
+    # stock_history table for older databases that pre-date it
+    has_history = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_history'"
+    ).fetchone()
+    if not has_history:
+        conn.executescript("""
+            CREATE TABLE stock_history (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id       INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                event_type       TEXT NOT NULL,
+                amount           REAL NOT NULL,
+                unit_id          INTEGER REFERENCES units(id) ON DELETE SET NULL,
+                location_id      INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+                from_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+                stock_id         INTEGER,
+                note             TEXT DEFAULT '',
+                created_at       TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX idx_stock_history_product ON stock_history(product_id);
+            CREATE INDEX idx_stock_history_created ON stock_history(created_at);
+            CREATE INDEX idx_stock_history_event ON stock_history(event_type);
+        """)
+        conn.commit()
+        log.info("Created stock_history table.")
+
+    # One-shot backfill of existing stock rows as 'purchase' events
+    backfilled = conn.execute(
+        "SELECT value FROM _meta WHERE key = 'history_backfilled'"
+    ).fetchone()
+    if not backfilled:
+        rows = conn.execute(
+            "SELECT id, product_id, location_id, amount, unit_id, "
+            "       COALESCE(purchased_date || ' 00:00:00', created_at) AS ts "
+            "FROM stock WHERE amount > 0"
+        ).fetchall()
+        for r in rows:
+            conn.execute(
+                "INSERT INTO stock_history "
+                "(product_id, event_type, amount, unit_id, location_id, stock_id, note, created_at) "
+                "VALUES (?, 'purchase', ?, ?, ?, ?, 'backfill', ?)",
+                (r["product_id"], r["amount"], r["unit_id"], r["location_id"], r["id"], r["ts"]),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('history_backfilled', ?)",
+            (str(len(rows)),),
+        )
+        conn.commit()
+        if rows:
+            log.info("Backfilled %d stock rows into stock_history.", len(rows))
 
 
 def init_db(conn: sqlite3.Connection) -> None:

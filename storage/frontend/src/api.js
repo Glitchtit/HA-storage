@@ -20,7 +20,20 @@ export const addStock = (data) => api.post('/stock/add', data);
 export const consumeStock = (data) => api.post('/stock/consume', data);
 export const openStock = (data) => api.post('/stock/open', data);
 export const transferStock = (data) => api.post('/stock/transfer', data);
-export const deleteStockEntry = (id) => api.delete(`/stock/${id}`);
+export const deleteStockEntry = (id, reason) =>
+  api.delete(`/stock/${id}`, { params: reason ? { reason } : undefined });
+
+// ── History & Stats ──────────────────────────────────────────────────────
+export const getHistory = (params) => api.get('/history', { params });
+export const getProductHistory = (productId, params) =>
+  api.get(`/history/product/${productId}`, { params });
+export const deleteHistoryEntry = (id) => api.delete(`/history/${id}`);
+export const getStatsSummary = () => api.get('/stats/summary');
+export const getTopConsumed = (params) => api.get('/stats/top-consumed', { params });
+export const getTopPurchased = (params) => api.get('/stats/top-purchased', { params });
+export const getSpoilage = (params) => api.get('/stats/spoilage', { params });
+export const getStatsTimeline = (params) => api.get('/stats/timeline', { params });
+export const getProductStats = (productId) => api.get(`/stats/product/${productId}`);
 
 // ── Barcodes ──────────────────────────────────────────────────────────────
 export const getBarcodes = () => api.get('/barcodes');

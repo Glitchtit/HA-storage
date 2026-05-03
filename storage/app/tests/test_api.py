@@ -614,3 +614,187 @@ class TestRemovedHaSyncRoutes:
         pid = client.post("/api/products", json={"name": "PostHaSync", "unit_id": kpl}).json()["id"]
         r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1})
         assert r.status_code == 201
+
+
+# ── History & Stats ────────────────────────────────────────────────────────
+
+class TestHistory:
+    def _make(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        locs = client.get("/api/locations").json()
+        loc = locs[0]["id"]
+        pid = client.post("/api/products", json={
+            "name": f"Hist_{id(self)}", "unit_id": kpl, "location_id": loc
+        }).json()["id"]
+        return pid, kpl, loc, locs
+
+    def test_purchase_event_created(self):
+        pid, *_ = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 4})
+        events = client.get(f"/api/history?product_id={pid}").json()
+        assert any(e["event_type"] == "purchase" and e["amount"] == 4 for e in events)
+
+    def test_consume_event_created(self):
+        pid, *_ = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 3, "note": "lunch"})
+        events = client.get(f"/api/history?product_id={pid}&event_type=consume").json()
+        assert len(events) == 1
+        assert events[0]["amount"] == 3
+        assert events[0]["note"] == "lunch"
+
+    def test_open_event_created(self):
+        pid, *_ = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2})
+        client.post("/api/stock/open", json={"product_id": pid, "amount": 1})
+        events = client.get(f"/api/history?product_id={pid}&event_type=open").json()
+        assert len(events) == 1
+        assert events[0]["amount"] == 1
+
+    def test_transfer_event_created(self):
+        pid, _, loc, locs = self._make()
+        to_loc = locs[1]["id"]
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5, "location_id": loc})
+        client.post("/api/stock/transfer", json={
+            "product_id": pid, "amount": 2,
+            "from_location_id": loc, "to_location_id": to_loc,
+        })
+        events = client.get(f"/api/history?product_id={pid}&event_type=transfer").json()
+        assert len(events) == 1
+        assert events[0]["from_location_id"] == loc
+        assert events[0]["location_id"] == to_loc
+
+    def test_spoil_event_on_delete_with_reason(self):
+        pid, *_ = self._make()
+        entry = client.post("/api/stock/add", json={"product_id": pid, "amount": 3}).json()
+        client.delete(f"/api/stock/{entry['id']}?reason=spoiled")
+        events = client.get(f"/api/history?product_id={pid}&event_type=spoil").json()
+        assert len(events) == 1
+        assert events[0]["amount"] == 3
+        assert events[0]["note"] == "spoiled"
+
+    def test_no_spoil_when_delete_without_reason(self):
+        pid, *_ = self._make()
+        entry = client.post("/api/stock/add", json={"product_id": pid, "amount": 3}).json()
+        client.delete(f"/api/stock/{entry['id']}")
+        events = client.get(f"/api/history?product_id={pid}&event_type=spoil").json()
+        assert events == []
+
+    def test_product_history_endpoint(self):
+        pid, *_ = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
+        events = client.get(f"/api/history/product/{pid}").json()
+        assert len(events) >= 2
+
+    def test_invalid_event_type_filter(self):
+        r = client.get("/api/history?event_type=bogus")
+        assert r.status_code == 400
+
+    def test_delete_history_entry(self):
+        pid, *_ = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1})
+        events = client.get(f"/api/history?product_id={pid}").json()
+        eid = events[0]["id"]
+        r = client.delete(f"/api/history/{eid}")
+        assert r.status_code == 204
+
+
+class TestStats:
+    def _make(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        return client.post("/api/products", json={
+            "name": f"Stats_{id(self)}", "unit_id": kpl
+        }).json()["id"]
+
+    def test_summary(self):
+        pid = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2})
+        s = client.get("/api/stats/summary").json()
+        for key in ("events_total", "events_7d", "events_30d",
+                    "products_purchased_30d", "products_consumed_30d", "spoiled_30d"):
+            assert key in s
+        assert s["events_total"] >= 1
+
+    def test_top_consumed_ordering(self):
+        a = self._make()
+        b = self._make()
+        client.post("/api/stock/add", json={"product_id": a, "amount": 100})
+        client.post("/api/stock/add", json={"product_id": b, "amount": 100})
+        client.post("/api/stock/consume", json={"product_id": a, "amount": 5})
+        client.post("/api/stock/consume", json={"product_id": b, "amount": 20})
+        rows = client.get("/api/stats/top-consumed?days=1&limit=10").json()
+        names = [r["product_id"] for r in rows]
+        assert b in names
+        # b should rank above a
+        assert names.index(b) < names.index(a)
+
+    def test_top_purchased(self):
+        pid = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 7})
+        rows = client.get("/api/stats/top-purchased?days=1&limit=10").json()
+        assert any(r["product_id"] == pid for r in rows)
+
+    def test_timeline(self):
+        pid = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 3})
+        rows = client.get("/api/stats/timeline?days=1").json()
+        assert len(rows) >= 1
+        assert "day" in rows[0]
+        assert "amount" in rows[0]
+
+    def test_product_stats(self):
+        pid = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 10})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 4})
+        s = client.get(f"/api/stats/product/{pid}").json()
+        assert s["purchased_total"] == 10
+        assert s["consumed_total"] == 4
+        assert s["purchase_count"] == 1
+        assert s["consume_count"] == 1
+
+
+class TestHistoryBackfill:
+    def test_backfill_from_existing_stock(self, tmp_path, monkeypatch):
+        """Fresh DB with pre-seeded stock rows should backfill purchase events."""
+        import sqlite3
+        from database import get_db, init_db
+
+        db_path = tmp_path / "backfill.db"
+        # Stage 1: create schema and seed minimal data WITHOUT triggering backfill yet,
+        # by manually inserting stock rows after init.
+        conn = get_db(db_path)
+        init_db(conn)
+        # Find a unit + location + create a product
+        kpl_id = conn.execute("SELECT id FROM units WHERE abbreviation='kpl'").fetchone()["id"]
+        loc_id = conn.execute("SELECT id FROM locations LIMIT 1").fetchone()["id"]
+        cur = conn.execute(
+            "INSERT INTO products (name, unit_id, location_id) VALUES ('BF', ?, ?)",
+            (kpl_id, loc_id),
+        )
+        prod_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO stock (product_id, location_id, amount, unit_id, purchased_date) "
+            "VALUES (?, ?, 8, ?, '2024-01-15')",
+            (prod_id, loc_id, kpl_id),
+        )
+        # Clear the backfill marker so the next init re-runs it
+        conn.execute("DELETE FROM _meta WHERE key='history_backfilled'")
+        conn.execute("DELETE FROM stock_history")
+        conn.commit()
+        conn.close()
+
+        # Stage 2: re-open and re-init — backfill should fire
+        conn2 = get_db(db_path)
+        init_db(conn2)
+        rows = conn2.execute(
+            "SELECT * FROM stock_history WHERE product_id = ?", (prod_id,)
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["event_type"] == "purchase"
+        assert rows[0]["amount"] == 8
+        marker = conn2.execute(
+            "SELECT value FROM _meta WHERE key='history_backfilled'"
+        ).fetchone()
+        assert marker is not None
+        conn2.close()

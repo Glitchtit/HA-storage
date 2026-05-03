@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   getProducts,
   getProduct,
+  getProductHistory,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -361,6 +362,55 @@ function BarcodeSection({ barcodes, productId, units, onChanged }) {
 
 /* ── Detail / edit panel ────────────────────────────────────────────────── */
 
+function ProductHistorySection({ productId }) {
+  const META = {
+    purchase: { label: 'Purchase', emoji: '🛒', cls: 'text-emerald-400' },
+    consume: { label: 'Consume', emoji: '🍴', cls: 'text-blue-400' },
+    open: { label: 'Open', emoji: '📂', cls: 'text-purple-400' },
+    transfer: { label: 'Transfer', emoji: '🔀', cls: 'text-yellow-400' },
+    spoil: { label: 'Spoil', emoji: '🗑️', cls: 'text-red-400' },
+  };
+  const [events, setEvents] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    getProductHistory(productId, { limit: 25 })
+      .then(({ data }) => { if (!cancelled) setEvents(data); })
+      .catch(() => { if (!cancelled) setEvents([]); });
+    return () => { cancelled = true; };
+  }, [productId]);
+
+  return (
+    <div>
+      <h4 className="text-sm font-semibold text-gray-400 mb-2">📜 Recent History</h4>
+      {events === null ? (
+        <p className="text-xs text-gray-500">Loading…</p>
+      ) : events.length === 0 ? (
+        <p className="text-xs text-gray-500">No history yet for this product.</p>
+      ) : (
+        <ul className="text-sm divide-y divide-gray-700">
+          {events.map((e) => {
+            const m = META[e.event_type] ?? { label: e.event_type, emoji: '•', cls: 'text-gray-400' };
+            return (
+              <li key={e.id} className="py-1.5 flex items-center gap-2">
+                <span className={`text-xs font-medium ${m.cls}`}>
+                  {m.emoji} {m.label}
+                </span>
+                <span className="text-gray-100 font-mono text-xs">{e.amount}</span>
+                <span className="text-gray-500 text-xs ml-auto">
+                  {(e.created_at || '').slice(0, 16).replace('T', ' ')}
+                </span>
+                {e.note && (
+                  <span className="text-gray-500 text-xs italic">— {e.note}</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function DetailPanel({ product, groups, locations, units, products, onClose, onSaved }) {
   const [detail, setDetail] = useState(null);
   const [form, setForm] = useState(null);
@@ -506,6 +556,11 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
               units={units}
               onChanged={load}
             />
+          </div>
+
+          {/* History */}
+          <div className="bg-gray-800 rounded-lg p-4 mb-4 border border-gray-600">
+            <ProductHistorySection productId={product.id} />
           </div>
 
           {/* Children */}

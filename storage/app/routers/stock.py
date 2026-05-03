@@ -16,6 +16,7 @@ from models import (
     StockSummary,
     StockTransfer,
 )
+from routers.history import log_event
 
 router = APIRouter(tags=["stock"])
 log = logging.getLogger(__name__)
@@ -123,6 +124,16 @@ def add_stock(body: StockAdd):
            VALUES (?, ?, ?, ?, ?)""",
         (body.product_id, location_id, body.amount, unit_id, best_before),
     )
+    log_event(
+        conn,
+        product_id=body.product_id,
+        event_type="purchase",
+        amount=body.amount,
+        unit_id=unit_id,
+        location_id=location_id,
+        stock_id=cur.lastrowid,
+        note=body.note,
+    )
     conn.commit()
     log.info("Added %.1f to stock for product %d.", body.amount, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -156,6 +167,16 @@ def consume_stock(body: StockConsume):
     if consumed == 0:
         raise HTTPException(400, f"No stock available for product {body.product_id}")
 
+    # Aggregate consume event (single row per request, matching request intent)
+    log_event(
+        conn,
+        product_id=body.product_id,
+        event_type="consume",
+        amount=consumed,
+        note=body.note,
+    )
+    conn.commit()
+
     log.info("Consumed %.1f from product %d (%.1f remaining to consume).",
              consumed, body.product_id, remaining)
     return {"consumed": consumed, "remaining_to_consume": remaining}
@@ -185,6 +206,14 @@ def open_stock(body: StockOpen):
         remaining -= take
         opened += take
 
+    if opened > 0:
+        log_event(
+            conn,
+            product_id=body.product_id,
+            event_type="open",
+            amount=opened,
+            note=body.note,
+        )
     conn.commit()
     return {"opened": opened}
 
@@ -222,14 +251,38 @@ def transfer_stock(body: StockTransfer):
         remaining -= take
         transferred += take
 
+    if transferred > 0:
+        log_event(
+            conn,
+            product_id=body.product_id,
+            event_type="transfer",
+            amount=transferred,
+            location_id=body.to_location_id,
+            from_location_id=body.from_location_id,
+            note=body.note,
+        )
     conn.commit()
     return {"transferred": transferred}
 
 
 @router.delete("/stock/{entry_id}", status_code=204)
-def delete_stock_entry(entry_id: int):
+def delete_stock_entry(entry_id: int, reason: str | None = None):
+    """Delete a stock entry. If reason is supplied (e.g., 'spoiled'), log a
+    spoil history event with the deleted amount."""
     conn = _get_db()
-    if not conn.execute("SELECT id FROM stock WHERE id = ?", (entry_id,)).fetchone():
+    entry = conn.execute("SELECT * FROM stock WHERE id = ?", (entry_id,)).fetchone()
+    if not entry:
         raise HTTPException(404, f"Stock entry {entry_id} not found")
     conn.execute("DELETE FROM stock WHERE id = ?", (entry_id,))
+    if reason:
+        log_event(
+            conn,
+            product_id=entry["product_id"],
+            event_type="spoil",
+            amount=entry["amount"],
+            unit_id=entry["unit_id"],
+            location_id=entry["location_id"],
+            stock_id=entry_id,
+            note=reason,
+        )
     conn.commit()

@@ -11,11 +11,13 @@ import Groups from './components/Groups';
 import BarcodeQueue from './components/BarcodeQueue';
 import Settings from './components/Settings';
 import Optimize from './components/Optimize';
+import History from './components/History';
 
 const TABS = [
   { id: 'dashboard', label: '📊 Dashboard', component: Dashboard },
   { id: 'products', label: '📦 Products', component: Products },
   { id: 'stock', label: '🏪 Stock', component: Stock },
+  { id: 'history', label: '📜 History', component: History },
   { id: 'recipes', label: '🍽️ Recipes', component: Recipes },
   { id: 'shopping', label: '🛒 Shopping List', component: ShoppingList },
   { id: 'units', label: '📏 Units', component: Units },

@@ -1,3 +1,17 @@
+## 0.4.1
+- API: `POST /api/shopping-list` now accepts and persists an `auto_added` flag (default `false`); previously the column was always written as `0` even when callers asked for `true`, so the flag did not survive a re-fetch
+
+## 0.5.0
+- Feature: stock movement history — every purchase, consume, open, transfer and spoil event is now recorded in a new `stock_history` table
+- API: `GET /api/history`, `GET /api/history/product/{id}`, `DELETE /api/history/{id}` for the audit log (filters: product_id, event_type, since, until, limit)
+- API: `GET /api/stats/summary`, `/stats/top-consumed`, `/stats/top-purchased`, `/stats/spoilage`, `/stats/timeline`, `/stats/product/{id}` for analytics
+- API: `DELETE /api/stock/{id}?reason=spoiled` now logs a `spoil` event with the discarded amount
+- API: `note` field accepted on `/api/stock/add`, `/consume`, `/open`, `/transfer` and stored on the matching history event
+- UI: new History tab with filter UI (product, event type, date range)
+- UI: Dashboard now shows Top Consumed (30d) and Recent Purchases widgets
+- UI: Product detail panel includes a Recent History section
+- Migration: existing stock rows are backfilled as `purchase` events on first start (gated via `_meta.history_backfilled`)
+
 ## 0.4.0
 - Companion HACS integration `ha_storage` now ships side-by-side at the repo root — install via HACS to get the Storage sidebar panel, sensors (`products_total`, `low_stock`, `expiring_soon`, `expired`, `shopping_pending`, `barcode_queue`, `optimize_status`), a `todo.storage_shopping_list` entity, and the `ha_storage.add_to_shopping_list` / `consume_stock` / `run_optimize` services
 - API: new `GET /api/stock/entries` endpoint returns all stock entries joined with product name; supports `expiring_within_days` and `expired` filters
