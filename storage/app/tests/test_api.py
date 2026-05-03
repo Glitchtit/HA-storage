@@ -643,6 +643,19 @@ class TestHistory:
         assert events[0]["amount"] == 3
         assert events[0]["note"] == "lunch"
 
+    def test_consume_spoiled_logs_spoil_event(self):
+        pid, *_ = self._make()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5})
+        client.post("/api/stock/consume", json={
+            "product_id": pid, "amount": 1, "spoiled": True, "note": "moldy",
+        })
+        spoils = client.get(f"/api/history?product_id={pid}&event_type=spoil").json()
+        consumes = client.get(f"/api/history?product_id={pid}&event_type=consume").json()
+        assert len(spoils) == 1
+        assert spoils[0]["amount"] == 1
+        assert spoils[0]["note"] == "moldy"
+        assert len(consumes) == 0
+
     def test_open_event_created(self):
         pid, *_ = self._make()
         client.post("/api/stock/add", json={"product_id": pid, "amount": 2})
