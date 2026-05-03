@@ -171,6 +171,25 @@ def start_optimize(body: dict[str, Any] = None):  # type: ignore[assignment]
 
     product_ids: list[int] | None = body.get("product_ids") or None
     fresh_seed: bool = bool(body.get("fresh_seed", False))
+    ungrouped_only: bool = bool(body.get("ungrouped_only", False))
+
+    # When ungrouped_only is set (and no explicit product_ids), restrict the
+    # incremental run to active products that currently have no product_group_id.
+    # Parent placeholders (active=0, min_stock_amount=0) are excluded so the AI
+    # focuses on real items the user can see in the UI.
+    if ungrouped_only and not product_ids:
+        from main import get_connection as _get_conn
+        _conn = _get_conn()
+        rows = _conn.execute(
+            "SELECT id FROM products "
+            "WHERE active = 1 AND product_group_id IS NULL"
+        ).fetchall()
+        product_ids = [int(r["id"]) for r in rows]
+        if not product_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="No ungrouped products to optimize.",
+            )
 
     with _tasks_lock:
         # Reject if another optimize is already running

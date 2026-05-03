@@ -16,6 +16,7 @@ export default function Optimize() {
   const [catInput, setCatInput] = useState('');
   const [catSaving, setCatSaving] = useState(false);
   const [freshSeed, setFreshSeed] = useState(false);
+  const [ungroupedOnly, setUngroupedOnly] = useState(false);
 
   useEffect(() => {
     getOptimizeCategories()
@@ -68,7 +69,7 @@ export default function Optimize() {
   const handleStart = async () => {
     setError(''); setLogs([]); setUpdated(0); setStatus('running');
     try {
-      const { data } = await startOptimize(null, freshSeed);
+      const { data } = await startOptimize(null, freshSeed, ungroupedOnly);
       setTaskId(data.task_id);
       startPolling(data.task_id);
     } catch (err) {
@@ -109,19 +110,35 @@ export default function Optimize() {
         </p>
       </div>
 
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={ungroupedOnly}
+            onChange={(e) => setUngroupedOnly(e.target.checked)}
+            className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
+          />
+          <div>
+            <div className="text-sm font-medium text-white">Ungrouped only</div>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Only optimize products that currently have no product group. The AI is seeded with the existing groups and parent products and will try to slot each ungrouped product into the best-fitting one — nothing else is changed.
+            </p>
+          </div>
+        </label>
         <label className="flex items-start gap-3 cursor-pointer">
           <input
             type="checkbox"
             checked={freshSeed}
             onChange={(e) => setFreshSeed(e.target.checked)}
-            className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
+            disabled={ungroupedOnly}
+            className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0 disabled:opacity-40"
           />
           <div>
-            <div className="text-sm font-medium text-white">Fresh naming (ignore previous parent names)</div>
+            <div className={"text-sm font-medium " + (ungroupedOnly ? "text-gray-500" : "text-white")}>Fresh naming (ignore previous parent names)</div>
             <p className="text-xs text-gray-400 mt-0.5">
               By default, the AI is seeded with the previous parent product names for naming consistency.
               Enable this to let the AI invent all parent names from scratch on a clean slate.
+              {ungroupedOnly && " (Disabled in 'Ungrouped only' mode.)"}
             </p>
           </div>
         </label>
