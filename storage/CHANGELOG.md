@@ -1,3 +1,8 @@
+## 0.5.3
+- Optimize page: new "Ungrouped only" checkbox runs an incremental AI optimize that targets only the products that currently have no `product_group_id`, seeding the AI with the existing groups and parent products so each ungrouped item is slotted into the best-fitting existing group instead of inventing new ones
+- API: `POST /api/ai/optimize` accepts `{"ungrouped_only": true}` — server resolves the candidate set server-side; returns 400 when there are no ungrouped products
+- UI: "Fresh naming" checkbox is disabled while "Ungrouped only" is on (no-op for incremental runs) so the two modes don't appear conflicting
+
 ## 0.5.2
 - Fix: AI optimize incremental run could leave a newly-added product ungrouped even though it returned a category. The `product_group_id` write was nested inside the "has external parent" branch, so it was skipped whenever the AI returned `group_name: null` (truly unique product) or a parent name that resolved to the product itself (self-parent skip — common for a single freshly-added product). The category assignment is now persisted independently of parent linkage so single-fire optimize properly slots new products into the best-fitting existing product group, and still parents them when applicable
 

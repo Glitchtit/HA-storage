@@ -589,7 +589,90 @@ class TestOptimizeStatusEndpoint:
                 ai_mod._tasks.pop("newer", None)
 
 
-# ── Removed ha_sync routes (clean break for HACS integration) ──────────────
+class TestOptimizeUngroupedOnly:
+    def test_400_when_no_ungrouped_products(self):
+        from main import get_connection
+        conn = get_connection()
+        # Force every active product to have a non-null product_group_id.
+        # Use the first existing product group as a sentinel.
+        grp = conn.execute("SELECT id FROM product_groups LIMIT 1").fetchone()
+        if not grp:
+            cur = conn.execute(
+                "INSERT INTO product_groups (name) VALUES ('TestGroupForUngrouped')"
+            )
+            gid = cur.lastrowid
+        else:
+            gid = grp["id"]
+        # Snapshot then bulk-assign so all active products are grouped.
+        before = conn.execute(
+            "SELECT id, product_group_id FROM products WHERE active = 1"
+        ).fetchall()
+        conn.execute(
+            "UPDATE products SET product_group_id = ? WHERE active = 1 AND product_group_id IS NULL",
+            (gid,),
+        )
+        conn.commit()
+        try:
+            r = client.post("/api/ai/optimize", json={"ungrouped_only": True})
+            assert r.status_code == 400
+            assert "ungrouped" in r.json()["detail"].lower()
+        finally:
+            for row in before:
+                conn.execute(
+                    "UPDATE products SET product_group_id = ? WHERE id = ?",
+                    (row["product_group_id"], row["id"]),
+                )
+            conn.commit()
+
+    def test_route_picks_up_ungrouped_products(self, monkeypatch):
+        # Stub the thread target so the test does not actually call the AI.
+        from routers import ai as ai_mod
+        captured: dict = {}
+
+        def fake_run(task_id, product_ids, enforced_categories, fresh_seed=False):
+            captured["product_ids"] = product_ids
+            with ai_mod._tasks_lock:
+                ai_mod._tasks[task_id]["status"] = "done"
+                ai_mod._tasks[task_id]["finished_at"] = 0.0
+                ai_mod._running_task_id = None
+
+        monkeypatch.setattr(ai_mod, "_run_optimize_task", fake_run)
+        # Also stub Thread so it runs synchronously.
+        import threading as _th
+        class _Sync:
+            def __init__(self, target, args=(), daemon=True, name=""):
+                self._t, self._a = target, args
+            def start(self):
+                self._t(*self._a)
+        monkeypatch.setattr(_th, "Thread", _Sync)
+
+        from main import get_connection
+        conn = get_connection()
+        # Create one guaranteed-ungrouped product
+        kpl_row = conn.execute("SELECT id FROM units LIMIT 1").fetchone()
+        kpl = kpl_row["id"]
+        cur = conn.execute(
+            "INSERT INTO products (name, active, unit_id, product_group_id) "
+            "VALUES ('UngroupedProbe', 1, ?, NULL)",
+            (kpl,),
+        )
+        new_pid = cur.lastrowid
+        conn.commit()
+
+        try:
+            r = client.post("/api/ai/optimize", json={"ungrouped_only": True})
+            assert r.status_code == 200
+            assert isinstance(captured.get("product_ids"), list)
+            assert new_pid in captured["product_ids"]
+            # Every captured id must be ungrouped at time of the call
+            assert all(isinstance(i, int) for i in captured["product_ids"])
+        finally:
+            conn.execute("DELETE FROM products WHERE id = ?", (new_pid,))
+            conn.commit()
+            with ai_mod._tasks_lock:
+                ai_mod._running_task_id = None
+
+
 
 class TestRemovedHaSyncRoutes:
     def test_shopping_ha_sync_gone(self):

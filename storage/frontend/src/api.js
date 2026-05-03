@@ -115,8 +115,12 @@ export const migrateFromGrocy = (data) => api.post('/migrate/grocy', data);
 export const factoryReset = () => api.post('/reset');
 
 // ── AI Optimize ───────────────────────────────────────────────────────────
-export const startOptimize = (productIds = null, freshSeed = false) =>
-  api.post('/ai/optimize', { ...(productIds ? { product_ids: productIds } : {}), ...(freshSeed ? { fresh_seed: true } : {}) });
+export const startOptimize = (productIds = null, freshSeed = false, ungroupedOnly = false) =>
+  api.post('/ai/optimize', {
+    ...(productIds ? { product_ids: productIds } : {}),
+    ...(freshSeed ? { fresh_seed: true } : {}),
+    ...(ungroupedOnly ? { ungrouped_only: true } : {}),
+  });
 export const getOptimizeStatus = (taskId) => api.get(`/ai/optimize/${taskId}`);
 export const getOptimizeCategories = () => api.get('/ai/optimize/categories');
 export const setOptimizeCategories = (categories) =>
