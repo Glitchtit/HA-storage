@@ -117,6 +117,7 @@ class StockConsume(BaseModel):
     product_id: int
     amount: float = 1
     note: str = ""
+    spoiled: bool = False
 
 class StockOpen(BaseModel):
     product_id: int
