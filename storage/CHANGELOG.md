@@ -1,3 +1,6 @@
+## 0.5.2
+- Fix: AI optimize incremental run could leave a newly-added product ungrouped even though it returned a category. The `product_group_id` write was nested inside the "has external parent" branch, so it was skipped whenever the AI returned `group_name: null` (truly unique product) or a parent name that resolved to the product itself (self-parent skip — common for a single freshly-added product). The category assignment is now persisted independently of parent linkage so single-fire optimize properly slots new products into the best-fitting existing product group, and still parents them when applicable
+
 ## 0.5.1
 - API: `POST /api/stock/consume` now accepts a `spoiled: true` flag — when set, the operation is recorded in history as a `spoil` event instead of `consume` so spoilage statistics include quantity-based discards (not just full-row deletes)
 

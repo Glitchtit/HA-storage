@@ -666,6 +666,24 @@ def _phase2_details(
                     log("  ! Could not set best-before for '%s': %s", product.get("name"), exc)
 
             # --- Parent + category (from Phase 1) ---
+            # Persist product_group_id from the assigned category INDEPENDENTLY of
+            # parent linkage. Previously this was nested inside the "has parent"
+            # branch, so a product whose AI response had no group_name (truly
+            # unique product) or whose group_name resolved to the product itself
+            # (self-parent skip — common for a freshly added single product) ended
+            # up ungrouped even when a valid category had been assigned.
+            cat_name = product_category.get(product_id)
+            cg_id = category_name_to_group_id.get(cat_name) if cat_name else None
+            if cg_id is not None:
+                try:
+                    conn.execute(
+                        "UPDATE products SET product_group_id = ? WHERE id = ?",
+                        (cg_id, product_id),
+                    )
+                    updated += 1
+                except Exception as exc:
+                    log("  ! Could not set product_group for '%s': %s", product.get("name"), exc)
+
             group_name = product_group_name.get(product_id)
             if not group_name:
                 log("  ~ No group assigned for '%s' (AI returned null).", product.get("name"))
@@ -676,42 +694,19 @@ def _phase2_details(
                         group_name, product.get("name"))
                 elif parent_id == product_id:
                     log("  ~ Skipped self-parenting for '%s'.", product.get("name"))
-            if group_name:
-                parent_id = parent_name_to_id.get(group_name)
-                if parent_id is not None and parent_id != product_id:
-                    if float(product.get("min_stock_amount") or 0) > 0:
-                        # Has tracked stock: assign group but skip parent
-                        cat_name = product_category.get(product_id)
-                        if cat_name:
-                            cg_id = category_name_to_group_id.get(cat_name)
-                            if cg_id is not None:
-                                try:
-                                    conn.execute(
-                                        "UPDATE products SET product_group_id = ? WHERE id = ?",
-                                        (cg_id, product_id),
-                                    )
-                                    updated += 1
-                                except Exception:
-                                    pass
-                    else:
-                        child_update_cols = ["parent_id = ?"]
-                        child_update_vals: list[Any] = [parent_id]
-                        cat_name = product_category.get(product_id)
-                        if cat_name:
-                            cg_id = category_name_to_group_id.get(cat_name)
-                            if cg_id is not None:
-                                child_update_cols.append("product_group_id = ?")
-                                child_update_vals.append(cg_id)
-                        child_update_vals.append(product_id)
-                        try:
-                            conn.execute(
-                                f"UPDATE products SET {', '.join(child_update_cols)} WHERE id = ?",
-                                child_update_vals,
-                            )
-                            log("  -> Grouped '%s' under '%s'.", product.get("name"), group_name)
-                            updated += 1
-                        except Exception as exc:
-                            log("  ! Could not group '%s': %s", product.get("name"), exc)
+                elif float(product.get("min_stock_amount") or 0) > 0:
+                    # Tracked-in-stock product: keep its own identity, do not link to a parent.
+                    pass
+                else:
+                    try:
+                        conn.execute(
+                            "UPDATE products SET parent_id = ? WHERE id = ?",
+                            (parent_id, product_id),
+                        )
+                        log("  -> Grouped '%s' under '%s'.", product.get("name"), group_name)
+                        updated += 1
+                    except Exception as exc:
+                        log("  ! Could not group '%s': %s", product.get("name"), exc)
 
         conn.commit()
         log(
