@@ -5,6 +5,8 @@ import {
   getRecipes,
   getShoppingList,
   getBarcodeQueue,
+  getTopConsumed,
+  getHistory,
 } from '../api';
 
 function StatCard({ icon, label, value, accent = 'blue' }) {
@@ -46,6 +48,8 @@ export default function Dashboard() {
   const [lowStock, setLowStock] = useState([]);
   const [expiring, setExpiring] = useState([]);
   const [pendingBarcodes, setPendingBarcodes] = useState(0);
+  const [topConsumed, setTopConsumed] = useState([]);
+  const [recentPurchases, setRecentPurchases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -54,13 +58,16 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const [productsRes, stockRes, recipesRes, shoppingRes, barcodeRes] =
+      const [productsRes, stockRes, recipesRes, shoppingRes, barcodeRes,
+             topConsumedRes, recentPurchasesRes] =
         await Promise.all([
           getProducts(),
           getStock(),
           getRecipes(),
           getShoppingList(),
           getBarcodeQueue({ status: 'pending' }),
+          getTopConsumed({ days: 30, limit: 5 }).catch(() => ({ data: [] })),
+          getHistory({ event_type: 'purchase', limit: 5 }).catch(() => ({ data: [] })),
         ]);
 
       const products = productsRes.data;
@@ -109,6 +116,8 @@ export default function Dashboard() {
       }
 
       setPendingBarcodes(Array.isArray(barcodes) ? barcodes.length : 0);
+      setTopConsumed(Array.isArray(topConsumedRes.data) ? topConsumedRes.data : []);
+      setRecentPurchases(Array.isArray(recentPurchasesRes.data) ? recentPurchasesRes.data : []);
     } catch (err) {
       console.error('Dashboard fetch error:', err);
       setError('Failed to load data.');
@@ -270,6 +279,90 @@ export default function Dashboard() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Top consumed (30d) */}
+      <section>
+        <h2 className="text-lg font-semibold text-gray-100 mb-3">
+          🍴 Top Consumed (30d)
+        </h2>
+        {topConsumed.length === 0 ? (
+          <div className="bg-gray-800 rounded-lg p-4 text-gray-500 text-sm">
+            No consume events in the last 30 days.
+          </div>
+        ) : (
+          <div className="bg-gray-800 rounded-lg shadow overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-800/50 text-gray-400 text-xs uppercase">
+                <tr>
+                  <th className="text-left px-4 py-2 font-medium">Product</th>
+                  <th className="text-right px-4 py-2 font-medium">Amount</th>
+                  <th className="text-right px-4 py-2 font-medium">Events</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700">
+                {topConsumed.map((item) => {
+                  const max = topConsumed[0]?.total_amount || 1;
+                  const pct = Math.max(4, Math.round((item.total_amount / max) * 100));
+                  return (
+                    <tr key={item.product_id}>
+                      <td className="px-4 py-2 text-gray-100">
+                        <div className="font-medium">{item.product_name}</div>
+                        <div className="mt-1 h-1.5 rounded-full bg-gray-700 overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </td>
+                      <td className="px-4 py-2 text-right text-gray-100 font-mono">
+                        {item.total_amount}
+                      </td>
+                      <td className="px-4 py-2 text-right text-gray-400">
+                        {item.event_count}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Recent purchases */}
+      <section>
+        <h2 className="text-lg font-semibold text-gray-100 mb-3">
+          🛒 Recent Purchases
+        </h2>
+        {recentPurchases.length === 0 ? (
+          <div className="bg-gray-800 rounded-lg p-4 text-gray-500 text-sm">
+            No purchases recorded yet.
+          </div>
+        ) : (
+          <div className="bg-gray-800 rounded-lg shadow overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-800/50 text-gray-400 text-xs uppercase">
+                <tr>
+                  <th className="text-left px-4 py-2 font-medium">When</th>
+                  <th className="text-left px-4 py-2 font-medium">Product</th>
+                  <th className="text-right px-4 py-2 font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700">
+                {recentPurchases.map((e) => (
+                  <tr key={e.id}>
+                    <td className="px-4 py-2 text-gray-400 whitespace-nowrap">
+                      {(e.created_at || '').slice(0, 16).replace('T', ' ')}
+                    </td>
+                    <td className="px-4 py-2 text-gray-100">{e.product_name}</td>
+                    <td className="px-4 py-2 text-right text-gray-100 font-mono">{e.amount}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
