@@ -17,11 +17,81 @@ def _get_db():
     return get_connection()
 
 
+def sync_auto_shopping(conn) -> dict:
+    """Reconcile auto-added shopping list rows against current stock levels.
+
+    For every active product with `min_stock_amount > 0`:
+
+    * If current total stock is **below** the threshold and the product has no
+      shopping_list row at all, insert one with ``auto_added = 1``.
+    * If current total stock is **at or above** the threshold, delete any
+      existing ``auto_added = 1`` row that is **not yet done** — the user has
+      already restocked, so the auto-added entry is stale.
+
+    Rows the user added manually (``auto_added = 0``) are never removed here,
+    and rows that are already ``done = 1`` are preserved so we don't yank
+    items out from under an active shopping trip.
+
+    Returns a dict with ``added`` and ``removed`` counts for callers/logging.
+    """
+    rows = conn.execute(
+        """
+        SELECT p.id, p.name, p.unit_id, p.min_stock_amount,
+               COALESCE(SUM(s.amount), 0) AS total_amount
+        FROM products p
+        LEFT JOIN stock s ON s.product_id = p.id
+        WHERE p.active = 1 AND p.min_stock_amount > 0
+        GROUP BY p.id
+        """
+    ).fetchall()
+
+    added = 0
+    removed = 0
+    for r in rows:
+        pid = r["id"]
+        min_amt = float(r["min_stock_amount"] or 0)
+        have = float(r["total_amount"] or 0)
+        if have < min_amt:
+            existing = conn.execute(
+                "SELECT 1 FROM shopping_list WHERE product_id = ? LIMIT 1",
+                (pid,),
+            ).fetchone()
+            if existing:
+                continue
+            need = max(1.0, min_amt - have)
+            conn.execute(
+                "INSERT INTO shopping_list (product_id, amount, unit_id, ha_item_name, auto_added)"
+                " VALUES (?, ?, ?, ?, 1)",
+                (pid, need, r["unit_id"], r["name"]),
+            )
+            added += 1
+        else:
+            cur = conn.execute(
+                "DELETE FROM shopping_list WHERE product_id = ? AND auto_added = 1 AND done = 0",
+                (pid,),
+            )
+            if cur.rowcount:
+                removed += cur.rowcount
+
+    if added or removed:
+        conn.commit()
+        log.info("Shopping auto-sync: added=%d, removed=%d", added, removed)
+    return {"added": added, "removed": removed}
+
+
 @router.get("/shopping-list", response_model=list[ShoppingItem])
 def list_shopping():
     return _get_db().execute(
         "SELECT * FROM shopping_list ORDER BY done, created_at DESC"
     ).fetchall()
+
+
+@router.post("/shopping-list/sync", status_code=200)
+def sync_shopping():
+    """Reconcile auto-added rows with current stock — adds rows for products
+    that fell below their `min_stock_amount` and removes auto-added rows for
+    products that are now back at or above the threshold."""
+    return sync_auto_shopping(_get_db())
 
 
 @router.delete("/shopping-list/done", status_code=204)

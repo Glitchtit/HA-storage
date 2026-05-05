@@ -17,6 +17,7 @@ from models import (
     StockTransfer,
 )
 from routers.history import log_event
+from routers.shopping import sync_auto_shopping
 
 router = APIRouter(tags=["stock"])
 log = logging.getLogger(__name__)
@@ -137,6 +138,7 @@ def add_stock(body: StockAdd):
     conn.commit()
     log.info("Added %.1f to stock for product %d.", body.amount, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
+    sync_auto_shopping(conn)
     return entry
 
 
@@ -179,6 +181,7 @@ def consume_stock(body: StockConsume):
 
     log.info("Consumed %.1f from product %d (%.1f remaining to consume).",
              consumed, body.product_id, remaining)
+    sync_auto_shopping(conn)
     return {"consumed": consumed, "remaining_to_consume": remaining}
 
 
@@ -286,3 +289,4 @@ def delete_stock_entry(entry_id: int, reason: str | None = None):
             note=reason,
         )
     conn.commit()
+    sync_auto_shopping(conn)
