@@ -388,6 +388,58 @@ class TestShoppingList:
         r = client.delete("/api/shopping-list/done")
         assert r.status_code == 204
 
+    def test_auto_sync_adds_and_removes(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        # Pick an existing default location so /stock/add succeeds
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        # Product tracked with min_stock_amount = 2, no stock yet
+        pid = client.post(
+            "/api/products",
+            json={"name": f"Auto_{id(self)}", "unit_id": kpl, "min_stock_amount": 2},
+        ).json()["id"]
+
+        # Sync — should auto-add (have=0 < min=2)
+        r = client.post("/api/shopping-list/sync")
+        assert r.status_code == 200
+        assert r.json()["added"] >= 1
+
+        items = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(items) == 1
+        assert items[0]["auto_added"] is True
+
+        # Idempotent: a second sync at the same stock level changes nothing
+        r2 = client.post("/api/shopping-list/sync").json()
+        assert r2["added"] == 0 and r2["removed"] == 0
+
+        # Restock above threshold — implicit sync inside /stock/add removes the row
+        client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 5, "location_id": loc_id},
+        )
+        items_after = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert items_after == []
+
+    def test_auto_sync_keeps_done_rows(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"AutoDone_{id(self)}", "unit_id": kpl, "min_stock_amount": 1},
+        ).json()["id"]
+
+        # Auto-added by sync, then user marks it done
+        client.post("/api/shopping-list/sync")
+        item = next(i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid)
+        client.put(f"/api/shopping-list/{item['id']}", json={"done": True})
+
+        # Restock — sync must NOT delete a done row (preserves shopping trip history)
+        client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 3, "location_id": loc_id},
+        )
+        kept = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(kept) == 1 and kept[0]["done"] is True
+
 
 # ── Barcode Queue ──────────────────────────────────────────────────────────
 

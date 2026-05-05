@@ -1,3 +1,10 @@
+## 0.5.4
+- Fix: shopping list now correctly removes auto-added rows when stock is replenished. Previously items would only be added when stock dropped below `min_stock_amount` and lingered on the list forever, even after restocking
+- Feature: backend-side shopping list reconciliation. Adds a row (with `auto_added = 1`) for every active product whose total stock is below `min_stock_amount` and has no existing shopping_list entry, and deletes auto-added rows whose product is back at or above the threshold (and not yet checked off)
+- API: `POST /api/shopping-list/sync` runs the reconciliation on demand and returns `{added, removed}` counts
+- Hook: `/stock/add`, `/stock/consume` and `/stock/{id}` (delete with spoil reason) automatically trigger the sync, so scanning a barcode or consuming stock keeps the list in sync without polling
+- Integration: HA-Storage custom component pings `/shopping-list/sync` at the start of every coordinator refresh so the periodic 5-minute poll catches drift even when no scan happens
+
 ## 0.5.3
 - Optimize page: new "Ungrouped only" checkbox runs an incremental AI optimize that targets only the products that currently have no `product_group_id`, seeding the AI with the existing groups and parent products so each ungrouped item is slotted into the best-fitting existing group instead of inventing new ones
 - API: `POST /api/ai/optimize` accepts `{"ungrouped_only": true}` — server resolves the candidate set server-side; returns 400 when there are no ungrouped products

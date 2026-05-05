@@ -32,6 +32,14 @@ class StorageCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
+                # Reconcile auto-added shopping rows against current stock
+                # before fetching the list, so the snapshot we expose to HA
+                # reflects the latest min_stock thresholds.
+                try:
+                    await client.post(f"{self.addon_url}/api/shopping-list/sync")
+                except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+                    _LOGGER.debug("Shopping auto-sync skipped: %s", exc)
+
                 results = await asyncio.gather(
                     client.get(f"{self.addon_url}/api/health"),
                     client.get(f"{self.addon_url}/api/products"),
