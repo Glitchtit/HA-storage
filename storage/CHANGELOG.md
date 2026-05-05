@@ -1,3 +1,8 @@
+## 0.5.5
+- Fix: shopping list auto-sync now runs server-side every 5 minutes, independent of the HA integration. Previously the only triggers were `/stock/*` writes and the integration coordinator, so users without the integration could see stale auto-added rows linger forever after restocking via the UI's stock-amount picker or after lowering `min_stock_amount`
+- Fix: editing `min_stock_amount` or `active` on a product now triggers an immediate sync — raising the threshold adds rows, lowering it (or deactivating the product) removes auto-added rows for products that are now considered fine
+- Background task: a `_periodic_shopping_sync` coroutine starts in the FastAPI lifespan, runs the first reconciliation 15s after startup, then every 300s
+
 ## 0.5.4
 - Fix: shopping list now correctly removes auto-added rows when stock is replenished. Previously items would only be added when stock dropped below `min_stock_amount` and lingered on the list forever, even after restocking
 - Feature: backend-side shopping list reconciliation. Adds a row (with `auto_added = 1`) for every active product whose total stock is below `min_stock_amount` and has no existing shopping_list entry, and deletes auto-added rows whose product is back at or above the threshold (and not yet checked off)
