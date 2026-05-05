@@ -127,6 +127,9 @@ def update_product(product_id: int, body: ProductUpdate):
         params,
     )
     conn.commit()
+    if "min_stock_amount" in updates or "active" in updates:
+        from routers.shopping import sync_auto_shopping
+        sync_auto_shopping(conn)
     return conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
 
 

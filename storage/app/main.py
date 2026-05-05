@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -141,12 +142,39 @@ async def lifespan(app: FastAPI):
         "SELECT count(*) as cnt FROM sqlite_master WHERE type='table'"
     ).fetchone()
     log.info("Storage v%s ready — %d tables in DB.", VERSION, tables["cnt"])
+
+    # Periodic shopping-list reconciliation. Runs every 5 minutes regardless
+    # of whether the HA integration is installed, so auto-added rows are
+    # cleared even if stock was changed via /stock/* hooks were missed (DB
+    # tooling, restored backups, raised min_stock_amount, etc.).
+    sync_task = asyncio.create_task(_periodic_shopping_sync())
+
     yield
+
     # Shutdown
+    sync_task.cancel()
+    try:
+        await sync_task
+    except asyncio.CancelledError:
+        pass
     global _db
     if _db:
         _db.close()
         _db = None
+
+
+async def _periodic_shopping_sync() -> None:
+    """Background loop that reconciles auto-added shopping rows every 5 min."""
+    from routers.shopping import sync_auto_shopping
+
+    # First run shortly after startup so a stale list is cleaned up quickly.
+    await asyncio.sleep(15)
+    while True:
+        try:
+            await asyncio.to_thread(sync_auto_shopping, get_connection())
+        except Exception as exc:  # noqa: BLE001 — never let the loop die
+            log.warning("Periodic shopping sync failed: %s", exc)
+        await asyncio.sleep(300)
 
 
 app = FastAPI(
