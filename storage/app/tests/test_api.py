@@ -1004,6 +1004,47 @@ class TestExpiryMigration:
         assert row["best_before_days"] == 14
         assert row["purchased_date"] is not None
 
+    def test_repair_pass_recomputes_mismatched_bb_days(self):
+        """0.9.0-era rows where best_before_days was stamped from the product
+        default but the (purchased_date, best_before_date) pair tells a different
+        story must be repaired to the date-pair-derived value."""
+        from main import get_connection
+        from database import _migrate_schema
+
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"Repair_{id(self)}",
+            "unit_id": kpl,
+            "default_best_before_days": 365,
+        }).json()
+
+        conn = get_connection()
+        # Simulate a 0.9.0-style mis-stamped row: 2999 sentinel expiry, real
+        # purchased_date, bb_days stamped from product default. created_at is
+        # backdated so the repair's "created_at < cutoff" clause matches.
+        cur = conn.execute(
+            "INSERT INTO stock (product_id, location_id, amount, unit_id, "
+            "best_before_date, best_before_days, purchased_date, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 day'))",
+            (p["id"], loc, 1, kpl, "2999-12-31", 365, "2026-05-09"),
+        )
+        stock_id = cur.lastrowid
+        # Clear the repair flag so the gated pass runs again for this test.
+        conn.execute("DELETE FROM _meta WHERE key = 'bb_days_repaired_v1'")
+        conn.commit()
+
+        _migrate_schema(get_connection())
+
+        row = get_connection().execute(
+            "SELECT best_before_days FROM stock WHERE id = ?", (stock_id,)
+        ).fetchone()
+        # julianday(2999-12-31) - julianday(2026-05-09) ≈ 355,621 days.
+        assert row["best_before_days"] != 365, "stale product-default value should have been replaced"
+        assert row["best_before_days"] > 300_000, (
+            f"expected ~355,621 days, got {row['best_before_days']}"
+        )
+
 
 class TestOptimizeUngroupedOnly:
     def test_400_when_no_ungrouped_products(self):

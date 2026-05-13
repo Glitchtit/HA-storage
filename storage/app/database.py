@@ -285,15 +285,24 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
         log.info("Added best_before_days column to stock.")
 
-    bbd_filled = conn.execute("""
-        UPDATE stock SET best_before_days = (
-            SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
-        )
-        WHERE best_before_days IS NULL
-    """).rowcount
+    # Backfill purchased_date first so it's available for the next UPDATE.
     pd_filled = conn.execute("""
         UPDATE stock SET purchased_date = date(created_at)
         WHERE purchased_date IS NULL
+    """).rowcount
+    # When the lot already has both date fields, prefer the realized interval —
+    # it's strictly more accurate than the product's current default for lots
+    # that were added with an explicit/imported best_before_date.
+    bbd_filled = conn.execute("""
+        UPDATE stock SET best_before_days = CASE
+            WHEN best_before_date IS NOT NULL AND purchased_date IS NOT NULL
+                THEN CAST(julianday(best_before_date) - julianday(purchased_date) AS INTEGER)
+            ELSE COALESCE(
+                (SELECT default_best_before_days FROM products WHERE products.id = stock.product_id),
+                0
+            )
+        END
+        WHERE best_before_days IS NULL
     """).rowcount
     conn.commit()
     if bbd_filled or pd_filled:
@@ -301,6 +310,38 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             "Backfilled %d stock row(s) best_before_days and %d purchased_date.",
             bbd_filled, pd_filled,
         )
+
+    # One-shot repair pass for 0.9.0 installs that backfilled best_before_days from
+    # the product default and ended up with rows where best_before_days disagrees
+    # with the (purchased_date, best_before_date) pair (e.g. lots with a 2999-12-31
+    # sentinel expiry). Gated by a _meta flag so it runs exactly once. Bounded by
+    # the current timestamp so it never touches lots added after the repair lands.
+    already_repaired = conn.execute(
+        "SELECT value FROM _meta WHERE key = 'bb_days_repaired_v1'"
+    ).fetchone()
+    if not already_repaired:
+        cutoff = conn.execute("SELECT datetime('now') AS now").fetchone()["now"]
+        repaired = conn.execute("""
+            UPDATE stock SET best_before_days = CAST(
+                julianday(best_before_date) - julianday(purchased_date) AS INTEGER
+            )
+            WHERE best_before_date IS NOT NULL
+              AND purchased_date IS NOT NULL
+              AND created_at < ?
+              AND best_before_days != CAST(
+                  julianday(best_before_date) - julianday(purchased_date) AS INTEGER
+              )
+        """, (cutoff,)).rowcount
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('bb_days_repaired_v1', ?)",
+            (str(repaired),),
+        )
+        conn.commit()
+        if repaired:
+            log.info(
+                "Repaired best_before_days for %d stock row(s) where it diverged from the date pair.",
+                repaired,
+            )
 
     # Canonical FIFO index. Idempotent — safe on every init.
     conn.execute("""
