@@ -10,6 +10,7 @@ import {
   openStock,
   transferStock,
   deleteStockEntry,
+  spoilStockLot,
   productImageUrl,
 } from '../api';
 
@@ -25,6 +26,13 @@ function daysUntil(iso) {
   if (!iso) return Infinity;
   const diff = new Date(iso) - new Date(new Date().toISOString().slice(0, 10));
   return Math.ceil(diff / 86_400_000);
+}
+
+function daysSince(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
 }
 
 function bbClass(iso) {
@@ -185,6 +193,7 @@ export default function Stock() {
   const [formAmt, setFormAmt] = useState(1);
   const [formLoc, setFormLoc] = useState('');
   const [formBB, setFormBB] = useState('');
+  const [formPurchased, setFormPurchased] = useState('');
   const [formToLoc, setFormToLoc] = useState('');
   const [formFromLoc, setFormFromLoc] = useState('');
   const [formProduct, setFormProduct] = useState('');
@@ -237,6 +246,19 @@ export default function Stock() {
     }
   };
 
+  const handleSpoilLot = async (lotId) => {
+    if (!confirm('Spoil this entire lot? This is logged separately from consume.')) return;
+    try {
+      await spoilStockLot(lotId, {});
+      await reload();
+      if (expanded) {
+        try { const { data } = await getProductStock(expanded); setEntries(data); } catch {}
+      }
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Spoil failed');
+    }
+  };
+
   /* ── Modal helpers ─────────────────────────────────────────────────────── */
 
   const openModal = (type, pid, pname) => {
@@ -244,6 +266,7 @@ export default function Stock() {
     setFormAmt(1);
     setFormLoc('');
     setFormBB('');
+    setFormPurchased('');
     setFormFromLoc('');
     setFormToLoc('');
     setFormProduct(pid || '');
@@ -260,6 +283,7 @@ export default function Stock() {
           const payload = { product_id: Number(pid), amount: Number(formAmt) };
           if (formLoc) payload.location_id = Number(formLoc);
           if (formBB) payload.best_before_date = formBB;
+          if (formPurchased) payload.purchased_date = formPurchased;
           await addStock(payload);
           break;
         }
@@ -444,8 +468,10 @@ export default function Stock() {
                             <th className="pb-1 pr-3">Amount</th>
                             <th className="pb-1 pr-3">Opened</th>
                             <th className="pb-1 pr-3">Location</th>
-                            <th className="pb-1 pr-3">Best Before</th>
-                            <th className="pb-1 pr-3">Purchased</th>
+                            <th className="pb-1 pr-3">Scanned</th>
+                            <th className="pb-1 pr-3">BB (days)</th>
+                            <th className="pb-1 pr-3">Expires</th>
+                            <th className="pb-1 pr-3">Days left</th>
                             <th className="pb-1"></th>
                           </tr>
                         </thead>
@@ -453,14 +479,34 @@ export default function Stock() {
                           {entries.map((entry) => {
                             const eu = unitMap[entry.unit_id];
                             const loc = locationMap[entry.location_id];
+                            const daysLeft = daysUntil(entry.best_before_date);
+                            const scannedAgo = daysSince(entry.purchased_date);
                             return (
                               <tr key={entry.id} className={`border-t border-gray-700 ${bbClass(entry.best_before_date)}`}>
                                 <td className="py-1.5 pr-3 text-gray-100">{entry.amount} {eu?.abbreviation || eu?.name || ''}</td>
                                 <td className="py-1.5 pr-3 text-gray-300">{entry.amount_opened || 0}</td>
                                 <td className="py-1.5 pr-3 text-gray-300">{loc?.name || '–'}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">
+                                  {fmtDate(entry.purchased_date)}
+                                  {scannedAgo !== null && scannedAgo > 0 && (
+                                    <span className="text-xs text-gray-500 ml-1">({scannedAgo}d ago)</span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 pr-3 text-gray-300">{entry.best_before_days ?? '–'}</td>
                                 <td className="py-1.5 pr-3 text-gray-300">{fmtDate(entry.best_before_date)}</td>
-                                <td className="py-1.5 pr-3 text-gray-300">{fmtDate(entry.purchased_date)}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">
+                                  {daysLeft === null || daysLeft === Infinity
+                                    ? '–'
+                                    : daysLeft < 0
+                                      ? <span className="text-red-400">{Math.abs(daysLeft)}d ago</span>
+                                      : <span>{daysLeft}d</span>}
+                                </td>
                                 <td className="py-1.5 text-right">
+                                  <button
+                                    onClick={() => handleSpoilLot(entry.id)}
+                                    className="text-amber-400 hover:text-amber-300 text-xs mr-2"
+                                    title="Spoil this lot"
+                                  >🗑️🦠</button>
                                   <button
                                     onClick={() => handleDeleteEntry(entry.id)}
                                     className="text-red-500 hover:text-red-700 text-xs"
@@ -517,6 +563,15 @@ export default function Stock() {
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
               </select>
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-400">Purchased on (leave empty for today)</span>
+              <input
+                type="date"
+                value={formPurchased}
+                onChange={(e) => setFormPurchased(e.target.value)}
+                className="mt-1 w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-100"
+              />
             </label>
             <label className="block">
               <span className="text-sm text-gray-400">Best Before</span>
