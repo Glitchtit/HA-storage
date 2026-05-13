@@ -343,6 +343,45 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                 repaired,
             )
 
+    # Second one-shot repair: lots with sentinel-style best_before_date (year > 2100,
+    # typically 2999-12-31 from receipt imports or "no real expiry" defaults) get
+    # their date AND days rewritten from the product's default_best_before_days.
+    # This trusts the product's policy over a clearly-bogus stored value. Gated by
+    # its own _meta flag and bounded by created_at so post-upgrade lots are safe.
+    already_date_repaired = conn.execute(
+        "SELECT value FROM _meta WHERE key = 'bbd_sentinel_repair_v1'"
+    ).fetchone()
+    if not already_date_repaired:
+        cutoff = conn.execute("SELECT datetime('now') AS now").fetchone()["now"]
+        sentinel_repaired = conn.execute("""
+            UPDATE stock SET
+                best_before_date = date(
+                    purchased_date,
+                    '+' || (
+                        SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
+                    ) || ' days'
+                ),
+                best_before_days = (
+                    SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
+                )
+            WHERE best_before_date > '2100-01-01'
+              AND purchased_date IS NOT NULL
+              AND created_at < ?
+              AND (
+                  SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
+              ) > 0
+        """, (cutoff,)).rowcount
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('bbd_sentinel_repair_v1', ?)",
+            (str(sentinel_repaired),),
+        )
+        conn.commit()
+        if sentinel_repaired:
+            log.info(
+                "Repaired %d stock row(s) with sentinel best_before_date (year > 2100) using product default.",
+                sentinel_repaired,
+            )
+
     # Canonical FIFO index. Idempotent — safe on every init.
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_stock_fifo
