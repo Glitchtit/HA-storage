@@ -132,6 +132,10 @@ class StockTransfer(BaseModel):
     to_location_id: int
     note: str = ""
 
+class StockSpoilLot(BaseModel):
+    amount: float | None = None
+    note: str = ""
+
 class StockEntry(BaseModel):
     id: int
     product_id: int

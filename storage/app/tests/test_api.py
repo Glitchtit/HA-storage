@@ -1458,3 +1458,54 @@ class TestTransferCopiesSnapshot:
         assert len(rows) == 2
         # Both halves must carry the same best_before_days snapshot.
         assert {r["best_before_days"] for r in rows} == {21}
+
+
+class TestTargetedSpoil:
+    def _make_product(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"Spoil_{id(self)}", "unit_id": kpl, "location_id": loc,
+            "default_best_before_days": 7,
+        }).json()
+        return p["id"], kpl, loc
+
+    def test_spoil_whole_lot(self):
+        pid, _, _ = self._make_product()
+        older = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
+        newer = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
+        # Spoil the newer lot specifically — not the FIFO oldest.
+        r = client.post(f"/api/stock/spoil/{newer['id']}", json={})
+        assert r.status_code == 200
+        assert r.json()["spoiled"] == 1
+        # Older lot is intact, newer lot is gone.
+        remaining = {e["id"]: e["amount"] for e in client.get(f"/api/stock/product/{pid}").json()}
+        assert remaining.get(older["id"]) == 1
+        assert newer["id"] not in remaining
+        # A spoil history event is logged with stock_id = newer lot's id.
+        history = client.get(f"/api/history/product/{pid}").json()
+        spoil_events = [h for h in history if h["event_type"] == "spoil"]
+        assert any(h.get("stock_id") == newer["id"] for h in spoil_events)
+
+    def test_spoil_partial_amount(self):
+        pid, _, _ = self._make_product()
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 4}).json()
+        r = client.post(f"/api/stock/spoil/{lot['id']}", json={"amount": 2})
+        assert r.status_code == 200
+        assert r.json()["spoiled"] == 2
+        remaining = {e["id"]: e["amount"] for e in client.get(f"/api/stock/product/{pid}").json()}
+        assert remaining[lot["id"]] == 2
+
+    def test_spoil_amount_clamps_to_lot_amount(self):
+        pid, _, _ = self._make_product()
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 2}).json()
+        # Ask for more than exists — must clamp to 2, not 400.
+        r = client.post(f"/api/stock/spoil/{lot['id']}", json={"amount": 99})
+        assert r.status_code == 200
+        assert r.json()["spoiled"] == 2
+        remaining = [e for e in client.get(f"/api/stock/product/{pid}").json() if e["id"] == lot["id"]]
+        assert remaining == []
+
+    def test_spoil_unknown_lot_returns_404(self):
+        r = client.post("/api/stock/spoil/999999", json={})
+        assert r.status_code == 404
