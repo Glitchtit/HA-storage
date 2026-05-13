@@ -37,7 +37,7 @@ http {
             proxy_send_timeout 60s;
         }
 
-        # Proxy to Grocy Scraper addon for discover integration
+        # Proxy to Scraper add-on for discover integration
         location ^~ /api/scraper/ {
             proxy_pass ${SCRAPER_URL}/api/;
             proxy_http_version 1.1;
