@@ -22,6 +22,16 @@ from routers.shopping import sync_auto_shopping
 router = APIRouter(tags=["stock"])
 log = logging.getLogger(__name__)
 
+# Canonical FIFO order: dated lots before undated, then oldest expiry first,
+# then oldest purchase date, then lowest id as final tiebreaker.
+_FIFO_ORDER_SQL = (
+    " ORDER BY "
+    " CASE WHEN best_before_date IS NULL THEN 1 ELSE 0 END, "
+    " best_before_date ASC, "
+    " purchased_date ASC, "
+    " id ASC"
+)
+
 
 def _get_db():
     from main import get_connection
@@ -79,8 +89,13 @@ def list_stock_entries(expiring_within_days: int | None = None, expired: bool | 
     sql = (
         "SELECT s.*, p.name AS product_name FROM stock s "
         "JOIN products p ON p.id = s.product_id "
-        "WHERE " + " AND ".join(where) + " "
-        "ORDER BY s.best_before_date IS NULL, s.best_before_date"
+        "WHERE " + " AND ".join(where)
+        # Mirror of _FIFO_ORDER_SQL with s. prefix for the join.
+        + " ORDER BY "
+        + " CASE WHEN s.best_before_date IS NULL THEN 1 ELSE 0 END, "
+        + " s.best_before_date ASC, "
+        + " s.purchased_date ASC, "
+        + " s.id ASC"
     )
     return conn.execute(sql, params).fetchall()
 
@@ -91,7 +106,8 @@ def get_product_stock(product_id: int):
     if not conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone():
         raise HTTPException(404, f"Product {product_id} not found")
     return conn.execute(
-        "SELECT * FROM stock WHERE product_id = ? ORDER BY best_before_date", (product_id,)
+        "SELECT * FROM stock WHERE product_id = ?" + _FIFO_ORDER_SQL,
+        (product_id,),
     ).fetchall()
 
 
@@ -159,7 +175,7 @@ def consume_stock(body: StockConsume):
     """Consume from oldest stock entries (FIFO by best_before_date)."""
     conn = _get_db()
     entries = conn.execute(
-        "SELECT * FROM stock WHERE product_id = ? AND amount > 0 ORDER BY best_before_date ASC",
+        "SELECT * FROM stock WHERE product_id = ? AND amount > 0" + _FIFO_ORDER_SQL,
         (body.product_id,),
     ).fetchall()
 
@@ -202,8 +218,8 @@ def open_stock(body: StockOpen):
     """Mark units as opened (FIFO)."""
     conn = _get_db()
     entries = conn.execute(
-        "SELECT * FROM stock WHERE product_id = ? AND (amount - amount_opened) > 0 "
-        "ORDER BY best_before_date ASC",
+        "SELECT * FROM stock WHERE product_id = ? AND (amount - amount_opened) > 0"
+        + _FIFO_ORDER_SQL,
         (body.product_id,),
     ).fetchall()
 
@@ -238,8 +254,8 @@ def transfer_stock(body: StockTransfer):
     """Move stock between locations."""
     conn = _get_db()
     entries = conn.execute(
-        "SELECT * FROM stock WHERE product_id = ? AND location_id = ? AND amount > 0 "
-        "ORDER BY best_before_date ASC",
+        "SELECT * FROM stock WHERE product_id = ? AND location_id = ? AND amount > 0"
+        + _FIFO_ORDER_SQL,
         (body.product_id, body.from_location_id),
     ).fetchall()
 

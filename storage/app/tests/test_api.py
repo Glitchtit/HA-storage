@@ -1374,3 +1374,60 @@ class TestExpirySnapshot:
         assert first["best_before_days"] == 10
         # Second lot uses the new value.
         assert second["best_before_days"] == 30
+
+
+class TestFifoOrder:
+    """FIFO order: best_before_date ASC NULLS LAST → purchased_date ASC → id ASC."""
+
+    def _make_product(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"Fifo_{id(self)}", "unit_id": kpl, "location_id": loc,
+            "default_best_before_days": 0,  # so add does not auto-derive expiry
+        }).json()
+        return p["id"], kpl, loc
+
+    def test_null_expiry_consumed_last_not_first(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product()
+        # Lot A: no expiry (default_best_before_days=0 → bb_days=0 → NULL expiry stays).
+        lot_null = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
+        # Lot B: explicit expiry 5 days from today.
+        future = (date.today() + timedelta(days=5)).isoformat()
+        lot_dated = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "best_before_date": future},
+        ).json()
+
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
+
+        # The dated lot must be the one consumed; the null-expiry lot still exists.
+        remaining = {
+            e["id"]: e["amount"]
+            for e in client.get(f"/api/stock/product/{pid}").json()
+        }
+        assert remaining.get(lot_dated["id"], 0) == 0 or lot_dated["id"] not in remaining
+        assert remaining.get(lot_null["id"]) == 1
+
+    def test_tiebreak_by_purchased_date(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product()
+        same_bb = (date.today() + timedelta(days=5)).isoformat()
+        older = (date.today() - timedelta(days=2)).isoformat()
+        newer = date.today().isoformat()
+        lot_older = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "best_before_date": same_bb, "purchased_date": older},
+        ).json()
+        lot_newer = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "best_before_date": same_bb, "purchased_date": newer},
+        ).json()
+
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
+
+        remaining = {e["id"]: e["amount"] for e in client.get(f"/api/stock/product/{pid}").json()}
+        # Older purchased_date must be consumed; newer is still there.
+        assert remaining.get(lot_older["id"], 0) == 0 or lot_older["id"] not in remaining
+        assert remaining.get(lot_newer["id"]) == 1
