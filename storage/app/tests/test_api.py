@@ -1332,9 +1332,10 @@ class TestExpirySnapshot:
         from datetime import date, timedelta
         pid, _, _ = self._make_product(bb_days=10)
         entry = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
-        today = date.today().isoformat()
-        expected_bb = (date.today() + timedelta(days=10)).isoformat()
-        assert entry["purchased_date"] == today
+        # Capture once — date.today() called twice could straddle midnight.
+        today = date.today()
+        expected_bb = (today + timedelta(days=10)).isoformat()
+        assert entry["purchased_date"] == today.isoformat()
         assert entry["best_before_days"] == 10
         assert entry["best_before_date"] == expected_bb
 
@@ -1354,8 +1355,9 @@ class TestExpirySnapshot:
     def test_purchased_date_override_shifts_expiry(self):
         from datetime import date, timedelta
         pid, _, _ = self._make_product(bb_days=10)
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        expected_bb = (date.today() + timedelta(days=9)).isoformat()
+        today = date.today()
+        yesterday = (today - timedelta(days=1)).isoformat()
+        expected_bb = (today + timedelta(days=9)).isoformat()
         entry = client.post(
             "/api/stock/add",
             json={"product_id": pid, "amount": 1, "purchased_date": yesterday},
@@ -1413,9 +1415,10 @@ class TestFifoOrder:
     def test_tiebreak_by_purchased_date(self):
         from datetime import date, timedelta
         pid, _, _ = self._make_product()
-        same_bb = (date.today() + timedelta(days=5)).isoformat()
-        older = (date.today() - timedelta(days=2)).isoformat()
-        newer = date.today().isoformat()
+        today = date.today()
+        same_bb = (today + timedelta(days=5)).isoformat()
+        older = (today - timedelta(days=2)).isoformat()
+        newer = today.isoformat()
         # Insert the NEWER-purchased lot FIRST so it gets the lower id. This way the
         # old ORDER BY (which fell back on id) would have consumed it first, but the
         # new purchased_date tiebreak overrides that and consumes the older lot.
