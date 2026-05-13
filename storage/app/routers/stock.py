@@ -105,25 +105,36 @@ def add_stock(body: StockAdd):
     unit_id = body.unit_id or product["unit_id"]
     location_id = body.location_id or product["location_id"]
     if not location_id:
-        # Fall back to first location
         loc = conn.execute("SELECT id FROM locations LIMIT 1").fetchone()
         location_id = loc["id"] if loc else None
     if not location_id:
         raise HTTPException(400, "No location specified and no default location exists")
 
-    # Calculate best_before_date if not provided
+    # Anchor date: explicit override, else today.
+    purchased_date = body.purchased_date
+    if not purchased_date:
+        row = conn.execute("SELECT date('now') as d").fetchone()
+        purchased_date = row["d"]
+
+    # Snapshot of the product's best-before-days at the moment of add.
+    bb_days = int(product["default_best_before_days"] or 0)
+
+    # Derived expiry — user override wins.
     best_before = body.best_before_date
-    if not best_before and product["default_best_before_days"]:
+    if not best_before and bb_days > 0:
         row = conn.execute(
-            "SELECT date('now', '+' || ? || ' days') as d",
-            (product["default_best_before_days"],),
+            "SELECT date(?, '+' || ? || ' days') as d",
+            (purchased_date, bb_days),
         ).fetchone()
         best_before = row["d"]
 
     cur = conn.execute(
-        """INSERT INTO stock (product_id, location_id, amount, unit_id, best_before_date)
-           VALUES (?, ?, ?, ?, ?)""",
-        (body.product_id, location_id, body.amount, unit_id, best_before),
+        """INSERT INTO stock
+              (product_id, location_id, amount, unit_id,
+               best_before_date, best_before_days, purchased_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (body.product_id, location_id, body.amount, unit_id,
+         best_before, bb_days, purchased_date),
     )
     log_event(
         conn,
@@ -136,7 +147,8 @@ def add_stock(body: StockAdd):
         note=body.note,
     )
     conn.commit()
-    log.info("Added %.1f to stock for product %d.", body.amount, body.product_id)
+    log.info("Added %.1f to stock for product %d (purchased=%s, bb_days=%d).",
+             body.amount, body.product_id, purchased_date, bb_days)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
     sync_auto_shopping(conn)
     return entry
