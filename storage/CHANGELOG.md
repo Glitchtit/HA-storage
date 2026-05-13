@@ -1,3 +1,12 @@
+## 0.9.0
+- Strengthened expiry tracking. Each stock lot now snapshots `(purchased_date, best_before_days)` at add time, so a later edit to a product's `default_best_before_days` does not retroactively shift existing stock.
+- Fixed FIFO ordering. `consume`, `open`, and `transfer` now sort by `best_before_date ASC` with NULL dates LAST (was first), tie-breaking by `purchased_date` then `id`. Previously a no-expiry lot would be eaten before a real one.
+- `POST /stock/spoil/{lot_id}` — new endpoint. Targets a specific lot (whole or partial amount) and logs a `spoil` history event tied to that lot.
+- `POST /stock/add` accepts an optional `purchased_date` override, for receipt imports and manual backfill.
+- `StockEntry` responses gain `best_before_days`.
+- Storage frontend lot inspector now shows `Scanned`, `BB (days)`, `Days left`, plus a per-lot Spoil button. The Dashboard "Expiring soon" panel labels each row with "scanned Nd ago".
+- Migration is automatic and idempotent: new column added to `stock`, existing rows backfilled from each product's current `default_best_before_days`, FIFO index created. Live `best_before_date` values are not recomputed.
+
 ## 0.8.2
 - Scraper auto-detection: storage's s6 startup script and nginx proxy now look for the new `scraper` slug (matches HA-scraper 2.0.0) instead of the old `grocy_scraper`. Missed in 0.8.1
 - Pure infra change; the `/api/migrate/grocy` endpoint is unchanged
