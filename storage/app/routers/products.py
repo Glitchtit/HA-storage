@@ -86,12 +86,13 @@ def create_product(body: ProductCreate):
     cur = conn.execute(
         """INSERT INTO products (name, description, parent_id, location_id,
            product_group_id, unit_id, default_best_before_days, min_stock_amount,
-           picture_filename, active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           picture_filename, active, unit_price, unit_price_currency)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             body.name, body.description, body.parent_id, body.location_id,
             body.product_group_id, body.unit_id, body.default_best_before_days,
             body.min_stock_amount, body.picture_filename, int(body.active),
+            body.unit_price, body.unit_price_currency or "EUR",
         ),
     )
     conn.commit()

@@ -1,3 +1,25 @@
+## 0.12.0
+- Predictive insights. `GET /api/stats/runouts?horizon=N` returns products predicted to deplete within N days, using the same 8-week consumption-velocity model that drives the shopping proposal — but without the proposal's "only opted-in products" filter so the dashboard can show all upcoming runouts. New helper `consumption_stats.predicted_runouts` is the shared core.
+- `GET /api/stats/digest` returns a single bundle for HA notifications: monetary waste (30d), expiring lots (7d), predicted runouts (14d), and top spoilers. Backed by `consumption_stats.weekly_digest`.
+- New helper `consumption_stats.expiring_within(days)` mirrors the FIFO order of `/stock/entries` for digest consumption.
+- HACS integration (manifest 0.3.0): coordinator fetches `/api/stats/digest` and exposes three new sensors — `sensor.storage_waste_value_30d`, `sensor.storage_expiring_this_week`, `sensor.storage_predicted_runouts` — with item-level breakdowns in attributes. New HA service `ha_storage.get_weekly_digest` returns the digest as a service response, ready to pipe into `notify.*` automations. Older add-ons missing `/stats/digest` degrade gracefully (sensors stay at 0, no UpdateFailed).
+- Insights tab "Will run out next 14 days" and "Expiring this week" cards activate against the new endpoints.
+
+## 0.11.0
+- Monetary waste tracking. Products gain an optional `unit_price` (and `unit_price_currency`, default EUR). Stock lots gain a `price_paid` snapshot taken at add time so historic waste valuation doesn't drift when product defaults change — same invariant as the 0.9.0 `best_before_days` snapshot.
+- `stock_history` rows now snapshot a per-event `unit_price` too: `purchase` events get the lot's paid price; lot-targeted `spoil` events get the lot's `price_paid` (falling back to the product's `unit_price` at event time); aggregate `consume`-as-spoil events get the product's current `unit_price`. NULL means "valuation unknown" — the waste endpoint counts these toward amount but not value.
+- New `GET /api/stats/waste?days=N` returns total amount + total value + breakdowns by product, location, and category, plus a weekly value-lost series. Joins `stock_history.unit_price` preferred, with `products.unit_price` fallback for older rows.
+- `POST /api/receipts/commit` accepts an optional `price_paid` per line (treated as the *total* for that line; divided back to per-unit before snapshotting onto the lot).
+- Frontend: Insights tab's waste tile activates and shows "wasted €X this window" with by-product / by-location breakdowns and a sparkline. Product form gains a unit price input; Stock add form gains a per-lot price-paid input.
+- Schema migration is purely additive — existing rows return NULL and the UI handles that as "price unknown".
+
+## 0.10.0
+- New `📈 Insights` tab. The Dashboard kept its quick-action role; Insights is the analytical view.
+- Time-window selector (7d / 30d / 90d / 1y) drives every section on the page.
+- Sections: top consumed, top purchased, spoilage breakdown (with daily trend sparkline), and a per-product event timeline drill-down. Two scaffold sections — monetary waste and predicted runouts — appear empty for now and light up automatically when the matching backend endpoints land in upcoming releases.
+- Charts use `recharts`; styling follows the brand palette (Cobalt for primary series, International Orange for highlights, danger red for spoilage). First shared `src/components/charts/` directory establishes the pattern for further frontend modularization.
+- No backend changes in this release — uses the existing `/api/stats/*` endpoints.
+
 ## 0.9.4
 - Dashboard "Expiring Soon" panel now actually works. It was reading from the aggregated `/stock` endpoint which has no per-lot `best_before_date`, so the filter always evaluated to false and the panel was permanently stuck on "No products expiring 👍". Now reads from `/stock/entries?expiring_within_days=7`.
 - Expired items (past best-before date) show up in the same panel — they are more urgent than upcoming-expiry items, not less. Renamed to "Expiring or expired" with appropriate red styling for already-past-due lots.

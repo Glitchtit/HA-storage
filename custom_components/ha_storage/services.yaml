@@ -57,6 +57,14 @@ consume_stock:
           min: 0
           mode: box
 
+get_weekly_digest:
+  name: Get weekly digest
+  description: >-
+    Return the Storage weekly digest (waste value, expiring lots, predicted
+    runouts). Designed to be called from an automation and piped into
+    `notify.*` via a response template.
+  fields: {}
+
 run_optimize:
   name: Run AI optimize
   description: Trigger the Storage AI optimize background job. 409 if already running.

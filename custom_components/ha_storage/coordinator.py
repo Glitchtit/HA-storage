@@ -52,13 +52,27 @@ class StorageCoordinator(DataUpdateCoordinator):
                     client.get(f"{self.addon_url}/api/shopping-list"),
                     client.get(f"{self.addon_url}/api/barcode-queue"),
                     client.get(f"{self.addon_url}/api/ai/optimize"),
+                    client.get(f"{self.addon_url}/api/stats/digest"),
                     return_exceptions=True,
                 )
-                for r in results:
+                # The digest endpoint is optional — addons older than 0.12.0 don't
+                # have it. Don't fail the whole refresh on its absence; just leave
+                # the digest-derived sensors at their defaults.
+                digest_result = results[-1]
+                if isinstance(digest_result, Exception):
+                    _LOGGER.debug("Digest fetch failed (older add-on?): %s", digest_result)
+                    digest_data = None
+                    results = results[:-1] + (None,)
+                else:
+                    digest_data = (
+                        digest_result.json() if digest_result.status_code == 200 else None
+                    )
+
+                for r in results[:-1]:
                     if isinstance(r, Exception):
                         raise r
 
-                health, products, stock, expiring, expired, shopping, barcodes, optimize = results
+                health, products, stock, expiring, expired, shopping, barcodes, optimize, _ = results
 
                 products_data = products.json() if products.status_code == 200 else []
                 stock_data = stock.json() if stock.status_code == 200 else []
@@ -91,6 +105,7 @@ class StorageCoordinator(DataUpdateCoordinator):
                     "optimize": optimize_data,
                     "low_stock_count": low_stock,
                     "shopping_pending_count": shopping_pending,
+                    "digest": digest_data,
                 }
         except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
             raise UpdateFailed(

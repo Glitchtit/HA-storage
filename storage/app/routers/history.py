@@ -30,8 +30,15 @@ def log_event(
     from_location_id: int | None = None,
     stock_id: int | None = None,
     note: str = "",
+    unit_price: float | None = None,
 ) -> None:
-    """Insert a stock_history row. Caller is responsible for commit()."""
+    """Insert a stock_history row. Caller is responsible for commit().
+
+    ``unit_price`` is the per-unit valuation snapshot at the time of the event.
+    For ``purchase`` events it's the actual paid price; for ``spoil`` events it's
+    the lot's ``price_paid`` (or the product's ``unit_price`` if the lot has none).
+    NULL means "valuation unknown" — the waste endpoint will skip such rows.
+    """
     if event_type not in VALID_EVENTS:
         log.warning("Ignoring invalid event_type=%s", event_type)
         return
@@ -39,9 +46,9 @@ def log_event(
         return
     conn.execute(
         "INSERT INTO stock_history "
-        "(product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note or ""),
+        "(product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note, unit_price) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note or "", unit_price),
     )
 
 
