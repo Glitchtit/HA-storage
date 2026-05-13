@@ -37,6 +37,13 @@ function daysUntil(dateStr) {
   return Math.ceil((target - now) / 86_400_000);
 }
 
+function daysSince(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+
 function formatDate(dateStr) {
   if (!dateStr || dateStr === '2999-12-31') return '—';
   const d = new Date(dateStr + 'T00:00:00');
@@ -266,7 +273,13 @@ export default function Dashboard() {
                       className={expired ? 'bg-red-500/10' : 'bg-yellow-500/10'}
                     >
                       <td className="px-4 py-2 font-medium text-gray-100">
-                        {item.product_name ?? `#${item.product_id}`}
+                        <div>{item.product_name ?? `#${item.product_id}`}</div>
+                        {(() => {
+                          const ago = daysSince(item.purchased_date);
+                          return ago !== null && ago > 0
+                            ? <div className="text-xs text-gray-500">scanned {ago}d ago</div>
+                            : null;
+                        })()}
                       </td>
                       <td className="px-4 py-2 text-right text-gray-400">
                         {formatDate(item._bbd)}
