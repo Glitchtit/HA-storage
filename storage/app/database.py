@@ -283,20 +283,24 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "best_before_days" not in stock_cols:
         conn.execute("ALTER TABLE stock ADD COLUMN best_before_days INTEGER")
         conn.commit()
-        log.info("Added best_before_days column to stock and backfilled from product defaults.")
+        log.info("Added best_before_days column to stock.")
 
-    # Backfill any rows where best_before_days is still NULL (idempotent).
-    conn.execute("""
+    bbd_filled = conn.execute("""
         UPDATE stock SET best_before_days = (
             SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
         )
         WHERE best_before_days IS NULL
-    """)
-    conn.execute("""
-        UPDATE stock SET purchased_date = COALESCE(purchased_date, date(created_at))
+    """).rowcount
+    pd_filled = conn.execute("""
+        UPDATE stock SET purchased_date = date(created_at)
         WHERE purchased_date IS NULL
-    """)
+    """).rowcount
     conn.commit()
+    if bbd_filled or pd_filled:
+        log.info(
+            "Backfilled %d stock row(s) best_before_days and %d purchased_date.",
+            bbd_filled, pd_filled,
+        )
 
     # Canonical FIFO index. Idempotent — safe on every init.
     conn.execute("""

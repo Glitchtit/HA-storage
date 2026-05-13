@@ -962,7 +962,6 @@ class TestOptimizeStatusEndpoint:
                 ai_mod._tasks.pop("newer", None)
 
 
-import sqlite3 as _sqlite3_for_migration_test
 
 
 class TestExpiryMigration:
