@@ -13,6 +13,7 @@ from models import (
     StockEntry,
     StockEntryWithProduct,
     StockOpen,
+    StockSpoilLot,
     StockSummary,
     StockTransfer,
 )
@@ -318,3 +319,44 @@ def delete_stock_entry(entry_id: int, reason: str | None = None):
         )
     conn.commit()
     sync_auto_shopping(conn)
+
+
+@router.post("/stock/spoil/{lot_id}", status_code=200)
+def spoil_lot(lot_id: int, body: StockSpoilLot):
+    """Spoil a specific stock lot (not FIFO). If amount is null, spoil the whole lot.
+    Larger-than-lot amounts are clamped to the lot's remaining amount."""
+    conn = _get_db()
+    entry = conn.execute("SELECT * FROM stock WHERE id = ?", (lot_id,)).fetchone()
+    if not entry:
+        raise HTTPException(404, f"Stock entry {lot_id} not found")
+
+    requested = entry["amount"] if body.amount is None else float(body.amount)
+    spoiled = min(requested, entry["amount"])
+    if spoiled <= 0:
+        return {"spoiled": 0}
+
+    new_amount = entry["amount"] - spoiled
+    if new_amount <= 0:
+        conn.execute("DELETE FROM stock WHERE id = ?", (lot_id,))
+    else:
+        conn.execute("UPDATE stock SET amount = ? WHERE id = ?", (new_amount, lot_id))
+
+    note = body.note
+    if entry["best_before_date"]:
+        suffix = f"lot bb={entry['best_before_date']}"
+        note = f"{note} ({suffix})" if note else suffix
+
+    log_event(
+        conn,
+        product_id=entry["product_id"],
+        event_type="spoil",
+        amount=spoiled,
+        unit_id=entry["unit_id"],
+        location_id=entry["location_id"],
+        stock_id=lot_id,
+        note=note,
+    )
+    conn.commit()
+    sync_auto_shopping(conn)
+    log.info("Spoiled %.1f from lot %d (product %d).", spoiled, lot_id, entry["product_id"])
+    return {"spoiled": spoiled}
