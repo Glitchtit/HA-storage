@@ -441,6 +441,327 @@ class TestShoppingList:
         assert len(kept) == 1 and kept[0]["done"] is True
 
 
+# ── Shopping Proposal (predictive) ─────────────────────────────────────────
+
+class TestShoppingProposal:
+    def _setup_product(self, name: str, min_stock: float = 2.0):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": name, "unit_id": kpl, "min_stock_amount": min_stock},
+        ).json()["id"]
+        return pid, kpl, loc_id
+
+    def test_empty_when_no_history(self):
+        pid, _, loc_id = self._setup_product(f"NoHist_{id(self)}")
+        # Stock present, but no consume events
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5, "location_id": loc_id})
+        r = client.get("/api/shopping-list/proposal")
+        assert r.status_code == 200
+        items = [p for p in r.json()["proposal"] if p["product_id"] == pid]
+        assert items == [], "Product with no consume history must not appear"
+
+    def test_high_velocity_appears(self):
+        # min_stock_amount kept tiny so sync_auto_shopping doesn't preempt the proposal
+        pid, _, loc_id = self._setup_product(f"Fast_{id(self)}", min_stock=0.1)
+        # Stock 20 in, consume 14 in the window — at 14/8 = 1.75/week,
+        # remaining 6 → ~24 days to zero. Above 7d horizon, must NOT appear.
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 20, "location_id": loc_id})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 14})
+        r = client.get("/api/shopping-list/proposal").json()
+        items = [p for p in r["proposal"] if p["product_id"] == pid]
+        assert items == [], "Stock still well above predicted depletion horizon"
+
+        # Consume more so remaining is < 1 week at rate ~2.4/wk — should appear.
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 5})
+        r = client.get("/api/shopping-list/proposal").json()
+        items = [p for p in r["proposal"] if p["product_id"] == pid]
+        assert len(items) == 1
+        assert items[0]["weekly_rate"] > 0
+        assert items[0]["days_to_zero"] < 7
+        assert items[0]["suggested_amount"] > 0
+        assert items[0]["reasoning"]
+
+    def test_skip_products_without_min_stock(self):
+        # min_stock_amount = 0 → not keep-in-stock → excluded
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"NoMin_{id(self)}", "unit_id": kpl},  # min defaults to 0
+        ).json()["id"]
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "location_id": loc_id})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
+        r = client.get("/api/shopping-list/proposal").json()
+        items = [p for p in r["proposal"] if p["product_id"] == pid]
+        assert items == [], "Products without min_stock_amount must be excluded"
+
+    def test_skip_when_already_on_shopping_list(self):
+        pid, kpl, loc_id = self._setup_product(f"OnList_{id(self)}")
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5, "location_id": loc_id})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 4})
+        # Manually add to shopping list
+        client.post("/api/shopping-list", json={"product_id": pid, "amount": 1, "unit_id": kpl})
+        r = client.get("/api/shopping-list/proposal").json()
+        items = [p for p in r["proposal"] if p["product_id"] == pid]
+        assert items == [], "Products already on shopping list must be excluded"
+
+    def test_horizon_filter(self):
+        # Keep min_stock_amount below remaining stock so auto-sync doesn't fire
+        pid, _, loc_id = self._setup_product(f"Horizon_{id(self)}", min_stock=0.1)
+        # Stock 5, consume 4 → rate 0.5/wk, remaining 1 → days_to_zero = (1/0.5)*7 = 14d.
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5, "location_id": loc_id})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 4})
+        # 7-day horizon: NOT in proposal
+        r7 = client.get("/api/shopping-list/proposal?horizon_days=7").json()
+        assert not [p for p in r7["proposal"] if p["product_id"] == pid]
+        # 21-day horizon: IS in proposal
+        r21 = client.get("/api/shopping-list/proposal?horizon_days=21").json()
+        assert [p for p in r21["proposal"] if p["product_id"] == pid]
+
+    def test_response_shape(self):
+        r = client.get("/api/shopping-list/proposal").json()
+        assert "lookback_weeks" in r
+        assert "horizon_days" in r
+        assert "proposal" in r
+        assert isinstance(r["proposal"], list)
+
+
+# ── Cook recipe ────────────────────────────────────────────────────────────
+
+class TestCookRecipe:
+    def _units(self):
+        return {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
+
+    def _make_product(self, name: str, unit_abbr: str = "kpl"):
+        unit_id = self._units()[unit_abbr]
+        return client.post(
+            "/api/products",
+            json={"name": name, "unit_id": unit_id},
+        ).json()["id"], unit_id
+
+    def _add_stock(self, pid: int, amount: float):
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        client.post("/api/stock/add", json={"product_id": pid, "amount": amount, "location_id": loc_id})
+
+    def _make_recipe(self, name: str, servings: float, ingredients: list[dict]):
+        return client.post(
+            "/api/recipes",
+            json={"name": name, "servings": servings, "ingredients": ingredients},
+        ).json()["id"]
+
+    def test_cook_full_stock(self):
+        units = self._units()
+        flour_pid, _ = self._make_product(f"Vehnäjauho_{id(self)}", "kg")
+        sugar_pid, _ = self._make_product(f"Sokeri_{id(self)}", "kg")
+        self._add_stock(flour_pid, 2.0)  # 2 kg available
+        self._add_stock(sugar_pid, 1.0)
+
+        recipe_id = self._make_recipe(
+            f"Cake_{id(self)}",
+            servings=4,
+            ingredients=[
+                {"product_id": flour_pid, "amount": 0.5, "unit_id": units["kg"]},
+                {"product_id": sugar_pid, "amount": 0.2, "unit_id": units["kg"]},
+            ],
+        )
+
+        r = client.post(f"/api/recipes/{recipe_id}/cook", json={})
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["deducted"]) == 2
+        assert body["shortfall_added"] == []
+        assert body["unmatched"] == []
+
+    def test_cook_partial_stock_creates_shortfall(self):
+        units = self._units()
+        pid, _ = self._make_product(f"Maito_{id(self)}", "l")
+        self._add_stock(pid, 0.5)  # only 0.5 l in stock
+
+        recipe_id = self._make_recipe(
+            f"Pancakes_{id(self)}",
+            servings=2,
+            ingredients=[{"product_id": pid, "amount": 1.0, "unit_id": units["l"]}],
+        )
+
+        body = client.post(f"/api/recipes/{recipe_id}/cook", json={}).json()
+        assert len(body["deducted"]) == 1
+        assert abs(body["deducted"][0]["amount"] - 0.5) < 0.001
+        assert len(body["shortfall_added"]) == 1
+        assert abs(body["shortfall_added"][0]["amount"] - 0.5) < 0.001
+
+        # Confirm shortfall landed on shopping list
+        items = [
+            i for i in client.get("/api/shopping-list").json()
+            if i["product_id"] == pid and i["recipe_id"] == recipe_id
+        ]
+        assert len(items) == 1
+        assert items[0]["note"].startswith("Reseptistä:")
+
+    def test_cook_servings_multiplier_scales(self):
+        units = self._units()
+        pid, _ = self._make_product(f"Voi_{id(self)}", "g")
+        self._add_stock(pid, 500)  # 500 g in stock
+
+        recipe_id = self._make_recipe(
+            f"Cookies_{id(self)}",
+            servings=10,
+            ingredients=[{"product_id": pid, "amount": 100, "unit_id": units["g"]}],
+        )
+
+        # Cook for 20 servings (2x) → needs 200 g
+        body = client.post(f"/api/recipes/{recipe_id}/cook", json={"servings": 20}).json()
+        assert abs(body["deducted"][0]["amount"] - 200) < 0.001
+        assert body["shortfall_added"] == []
+
+    def test_cook_unit_conversion_kg_to_g(self):
+        units = self._units()
+        # Product stored in kg, recipe specified in g
+        pid = client.post(
+            "/api/products",
+            json={"name": f"Riisi_{id(self)}", "unit_id": units["kg"]},
+        ).json()["id"]
+        self._add_stock(pid, 1.0)  # 1 kg
+
+        recipe_id = self._make_recipe(
+            f"Risotto_{id(self)}",
+            servings=4,
+            ingredients=[{"product_id": pid, "amount": 250, "unit_id": units["g"]}],
+        )
+
+        # 250 g of rice = 0.25 kg from stock
+        body = client.post(f"/api/recipes/{recipe_id}/cook", json={}).json()
+        assert len(body["deducted"]) == 1
+        # Deducted in product's stock unit (kg)
+        assert abs(body["deducted"][0]["amount"] - 0.25) < 0.001
+        assert body["shortfall_added"] == []
+
+    def test_cook_returns_404_for_missing_recipe(self):
+        r = client.post("/api/recipes/99999999/cook", json={})
+        assert r.status_code == 404
+
+    def test_cook_logs_consume_event(self):
+        units = self._units()
+        pid, _ = self._make_product(f"LogTest_{id(self)}", "kg")
+        self._add_stock(pid, 5.0)
+        recipe_id = self._make_recipe(
+            f"LogR_{id(self)}",
+            servings=1,
+            ingredients=[{"product_id": pid, "amount": 1.5, "unit_id": units["kg"]}],
+        )
+        client.post(f"/api/recipes/{recipe_id}/cook", json={})
+        history = client.get(f"/api/history?product_id={pid}&event_type=consume").json()
+        assert any(abs(h["amount"] - 1.5) < 0.001 and "Reseptistä" in h.get("note", "") for h in history)
+
+
+# ── Receipt OCR ────────────────────────────────────────────────────────────
+
+class TestReceiptMatcher:
+    """Pure matcher tests — no AI call. Uses the existing seeded products
+    plus a few targeted creations to exercise the scoring."""
+
+    def test_match_obvious_token_overlap(self):
+        from receipt_parser import match_lines_to_products
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        # Create a product with a Finnish name that's unambiguously the right match
+        client.post("/api/products", json={"name": "Kaurahiutale lasten", "unit_id": kpl})
+
+        from main import get_connection
+        rows = match_lines_to_products(
+            [{"raw_text": "KAURAHIUTALE", "qty": 1, "unit": "kpl", "price": 2.5}],
+            get_connection(),
+        )
+        assert len(rows) == 1
+        assert rows[0]["confidence"] > 0.4
+        # Must resolve to an active product (id is non-null and the matched product's
+        # name shares the "kaurahiutale" token).
+        assert rows[0]["suggested_product_id"] is not None
+
+    def test_below_confidence_drops_suggestion(self):
+        from receipt_parser import match_lines_to_products
+        from main import get_connection
+        rows = match_lines_to_products(
+            [{"raw_text": "ZZZ_GARBAGE_NO_MATCH", "qty": 1, "unit": "kpl"}],
+            get_connection(),
+            min_confidence=0.45,
+        )
+        assert rows[0]["suggested_product_id"] is None
+        assert rows[0]["confidence"] < 0.45
+
+
+class TestReceiptEndpoints:
+    def test_parse_rejects_empty_image(self):
+        r = client.post("/api/receipts/parse", json={"image_b64": "", "mime_type": "image/jpeg"})
+        assert r.status_code == 400
+
+    def test_parse_rejects_non_image_mime(self):
+        r = client.post("/api/receipts/parse", json={"image_b64": "AA==", "mime_type": "text/plain"})
+        assert r.status_code == 400
+
+    def test_parse_503_when_ai_not_configured(self):
+        # Default test fixture has no claude_api_key configured — vision call must fail clean.
+        r = client.post(
+            "/api/receipts/parse",
+            json={"image_b64": "AAAA", "mime_type": "image/jpeg"},
+        )
+        assert r.status_code in (502, 503), f"Expected 502/503 when AI not set, got {r.status_code}"
+
+    def test_commit_creates_stock_entries(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ReceiptCommit_{id(self)}", "unit_id": kpl},
+        ).json()["id"]
+
+        before = client.get(f"/api/stock/product/{pid}").json()
+        before_total = sum(parseFloatSafe(e["amount"]) for e in (before or []))
+
+        r = client.post(
+            "/api/receipts/commit",
+            json={"lines": [
+                {"product_id": pid, "amount": 3, "unit_id": kpl, "location_id": loc_id},
+                {"product_id": pid, "amount": 1, "unit_id": kpl, "location_id": loc_id},
+            ]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["added"] == 2
+        assert body["failed"] == 0
+
+        after = client.get(f"/api/stock/product/{pid}").json()
+        after_total = sum(parseFloatSafe(e["amount"]) for e in (after or []))
+        assert after_total - before_total == 4
+
+    def test_commit_reports_per_line_errors(self):
+        # Mix valid + invalid: bad product_id should be reported but not crash the batch
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ReceiptMixed_{id(self)}", "unit_id": kpl},
+        ).json()["id"]
+
+        r = client.post(
+            "/api/receipts/commit",
+            json={"lines": [
+                {"product_id": pid, "amount": 2, "unit_id": kpl, "location_id": loc_id},
+                {"product_id": 99999999, "amount": 1, "unit_id": kpl, "location_id": loc_id},
+            ]},
+        ).json()
+        assert r["added"] == 1
+        assert r["failed"] == 1
+        assert len(r["errors"]) == 1
+
+
+def parseFloatSafe(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # ── Barcode Queue ──────────────────────────────────────────────────────────
 
 class TestBarcodeQueue:

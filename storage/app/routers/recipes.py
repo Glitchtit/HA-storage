@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from cook_recipe import cook_recipe
 from models import (
+    CookRecipeRequest,
+    CookRecipeResponse,
     Ingredient,
     IngredientCreate,
     IngredientDetail,
@@ -104,6 +107,21 @@ def delete_recipe(recipe_id: int):
         raise HTTPException(404, f"Recipe {recipe_id} not found")
     conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
+
+
+@router.post("/recipes/{recipe_id}/cook", response_model=CookRecipeResponse)
+def cook(recipe_id: int, body: CookRecipeRequest | None = None):
+    """Cook the recipe: deduct ingredients from stock (FIFO) and queue any
+    shortfall on the shopping list with a "Reseptistä: <name>" note.
+
+    Pass an optional ``servings`` count to scale the recipe up or down; defaults
+    to the recipe's stored servings.
+    """
+    conn = _get_db()
+    try:
+        return cook_recipe(conn, recipe_id, servings=body.servings if body else None)
+    except ValueError as exc:
+        raise HTTPException(404 if "not found" in str(exc) else 400, str(exc)) from exc
 
 
 @router.post("/recipes/{recipe_id}/to-shopping", status_code=201)
