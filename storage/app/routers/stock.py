@@ -158,13 +158,19 @@ def add_stock(body: StockAdd):
         else:
             best_before = None
 
+    # Snapshot the paid price onto the lot. Explicit override wins; otherwise
+    # fall back to the product's current default. NULL means "price unknown".
+    price_paid = body.price_paid
+    if price_paid is None:
+        price_paid = product.get("unit_price")
+
     cur = conn.execute(
         """INSERT INTO stock
               (product_id, location_id, amount, unit_id,
-               best_before_date, best_before_days, purchased_date)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               best_before_date, best_before_days, purchased_date, price_paid)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (body.product_id, location_id, body.amount, unit_id,
-         best_before, bb_days, purchased_date),
+         best_before, bb_days, purchased_date, price_paid),
     )
     log_event(
         conn,
@@ -175,6 +181,7 @@ def add_stock(body: StockAdd):
         location_id=location_id,
         stock_id=cur.lastrowid,
         note=body.note,
+        unit_price=price_paid,
     )
     conn.commit()
     log.info("Added %.1f to stock for product %d (purchased=%s, bb_days=%d).",
@@ -211,13 +218,22 @@ def consume_stock(body: StockConsume):
     if consumed == 0:
         raise HTTPException(400, f"No stock available for product {body.product_id}")
 
-    # Aggregate consume/spoil event (single row per request, matching request intent)
+    # Aggregate consume/spoil event (single row per request, matching request intent).
+    # For spoil events without a specific lot context, snapshot the product's current
+    # unit_price so monetary waste tracking has a value to multiply against.
+    event_price = None
+    if body.spoiled:
+        prod_row = conn.execute(
+            "SELECT unit_price FROM products WHERE id = ?", (body.product_id,)
+        ).fetchone()
+        event_price = prod_row.get("unit_price") if prod_row else None
     log_event(
         conn,
         product_id=body.product_id,
         event_type="spoil" if body.spoiled else "consume",
         amount=consumed,
         note=body.note,
+        unit_price=event_price,
     )
     conn.commit()
 
@@ -288,10 +304,11 @@ def transfer_stock(body: StockTransfer):
         # Create new entry at destination — carry the audit snapshot along.
         conn.execute(
             """INSERT INTO stock (product_id, location_id, amount, amount_opened, unit_id,
-               best_before_date, best_before_days, purchased_date)
-               VALUES (?, ?, ?, 0, ?, ?, ?, ?)""",
+               best_before_date, best_before_days, purchased_date, price_paid)
+               VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)""",
             (body.product_id, body.to_location_id, take, entry["unit_id"],
-             entry["best_before_date"], entry["best_before_days"], entry["purchased_date"]),
+             entry["best_before_date"], entry["best_before_days"], entry["purchased_date"],
+             entry.get("price_paid")),
         )
         remaining -= take
         transferred += take
@@ -320,6 +337,10 @@ def delete_stock_entry(entry_id: int, reason: str | None = None):
         raise HTTPException(404, f"Stock entry {entry_id} not found")
     conn.execute("DELETE FROM stock WHERE id = ?", (entry_id,))
     if reason:
+        prod_row = conn.execute(
+            "SELECT unit_price FROM products WHERE id = ?", (entry["product_id"],)
+        ).fetchone()
+        snap_price = entry.get("price_paid") or (prod_row.get("unit_price") if prod_row else None)
         log_event(
             conn,
             product_id=entry["product_id"],
@@ -329,6 +350,7 @@ def delete_stock_entry(entry_id: int, reason: str | None = None):
             location_id=entry["location_id"],
             stock_id=entry_id,
             note=reason,
+            unit_price=snap_price,
         )
     conn.commit()
     sync_auto_shopping(conn)
@@ -359,6 +381,10 @@ def spoil_lot(lot_id: int, body: StockSpoilLot):
         suffix = f"lot bb={entry['best_before_date']}"
         note = f"{note} ({suffix})" if note else suffix
 
+    prod_row = conn.execute(
+        "SELECT unit_price FROM products WHERE id = ?", (entry["product_id"],)
+    ).fetchone()
+    snap_price = entry.get("price_paid") or (prod_row.get("unit_price") if prod_row else None)
     log_event(
         conn,
         product_id=entry["product_id"],
@@ -368,6 +394,7 @@ def spoil_lot(lot_id: int, body: StockSpoilLot):
         location_id=entry["location_id"],
         stock_id=lot_id,
         note=note,
+        unit_price=snap_price,
     )
     conn.commit()
     sync_auto_shopping(conn)

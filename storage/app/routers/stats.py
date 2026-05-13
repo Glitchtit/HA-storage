@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
-from models import StatsProductSummary, StatsSummary, StatsTimelinePoint, StatsTopItem
+from consumption_stats import (
+    expiring_within,
+    predicted_runouts,
+    weekly_digest,
+)
+from models import (
+    PredictedRunout,
+    StatsDigestResponse,
+    StatsProductSummary,
+    StatsRunoutsResponse,
+    StatsSummary,
+    StatsTimelinePoint,
+    StatsTopItem,
+    StatsWasteBreakdown,
+    StatsWasteResponse,
+    StatsWasteSeriesPoint,
+)
 
 router = APIRouter(tags=["stats"])
 log = logging.getLogger(__name__)
@@ -98,6 +115,146 @@ def timeline(
         " GROUP BY day ORDER BY day"
     )
     return conn.execute(sql, params).fetchall()
+
+
+@router.get("/stats/waste", response_model=StatsWasteResponse)
+def stats_waste(days: int = Query(30, ge=1, le=3650)):
+    """Monetary spoilage breakdown over the last ``days`` days.
+
+    Pulls every ``spoil`` event from ``stock_history``. Each row's valuation is
+    ``amount * COALESCE(h.unit_price, p.unit_price)`` — the snapshot taken at
+    spoil time is preferred so historic valuation doesn't drift when product
+    defaults change; the current product default is the fallback for old rows.
+    Rows with no valuation at all are counted toward ``total_amount`` but not
+    ``total_value`` (the UI shows them as "price unknown").
+    """
+    conn = _get_db()
+    rows = conn.execute(
+        """
+        SELECT h.product_id, h.amount,
+               COALESCE(h.unit_price, p.unit_price) AS effective_price,
+               h.location_id, h.created_at,
+               p.name AS product_name,
+               p.product_group_id AS category_id,
+               p.unit_price_currency AS currency
+        FROM stock_history h
+        JOIN products p ON p.id = h.product_id
+        WHERE h.event_type = 'spoil'
+          AND h.created_at >= datetime('now','-' || ? || ' days')
+        """,
+        (days,),
+    ).fetchall()
+
+    locations = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM locations").fetchall()}
+    groups = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM product_groups").fetchall()}
+
+    by_product: dict[int, dict] = {}
+    by_location: dict[int | None, dict] = {}
+    by_category: dict[int | None, dict] = {}
+    series: dict[str, dict] = {}
+    total_amount = 0.0
+    total_value = 0.0
+    currency = "EUR"
+
+    for r in rows:
+        amt = float(r["amount"] or 0)
+        price = r["effective_price"]
+        val = float(amt) * float(price) if price is not None else 0.0
+        total_amount += amt
+        total_value += val
+        if r["currency"]:
+            currency = r["currency"]
+
+        pid = r["product_id"]
+        bp = by_product.setdefault(pid, {
+            "product_id": pid, "product_name": r["product_name"],
+            "amount": 0.0, "value": 0.0,
+        })
+        bp["amount"] += amt
+        bp["value"] += val
+
+        loc_id = r["location_id"]
+        bl = by_location.setdefault(loc_id, {
+            "location_id": loc_id,
+            "location_name": locations.get(loc_id, "Unknown") if loc_id else "Unknown",
+            "amount": 0.0, "value": 0.0,
+        })
+        bl["amount"] += amt
+        bl["value"] += val
+
+        cat_id = r["category_id"]
+        bc = by_category.setdefault(cat_id, {
+            "category_id": cat_id,
+            "category_name": groups.get(cat_id, "Uncategorized") if cat_id else "Uncategorized",
+            "amount": 0.0, "value": 0.0,
+        })
+        bc["amount"] += amt
+        bc["value"] += val
+
+        # Week bucket: Monday of the event's date (ISO week start).
+        try:
+            ts = datetime.fromisoformat(r["created_at"].replace("Z", ""))
+        except ValueError:
+            continue
+        wk = (ts.date() - timedelta(days=ts.date().weekday())).isoformat()
+        sp = series.setdefault(wk, {"week": wk, "amount": 0.0, "value": 0.0})
+        sp["amount"] += amt
+        sp["value"] += val
+
+    return StatsWasteResponse(
+        days=days,
+        currency=currency,
+        total_amount=round(total_amount, 2),
+        total_value=round(total_value, 2),
+        by_product=[
+            StatsWasteBreakdown(**{**v, "value": round(v["value"], 2), "amount": round(v["amount"], 2)})
+            for v in sorted(by_product.values(), key=lambda x: x["value"], reverse=True)
+        ],
+        by_location=[
+            StatsWasteBreakdown(**{**v, "value": round(v["value"], 2), "amount": round(v["amount"], 2)})
+            for v in sorted(by_location.values(), key=lambda x: x["value"], reverse=True)
+        ],
+        by_category=[
+            StatsWasteBreakdown(**{**v, "value": round(v["value"], 2), "amount": round(v["amount"], 2)})
+            for v in sorted(by_category.values(), key=lambda x: x["value"], reverse=True)
+        ],
+        series=[
+            StatsWasteSeriesPoint(week=v["week"], amount=round(v["amount"], 2), value=round(v["value"], 2))
+            for v in sorted(series.values(), key=lambda x: x["week"])
+        ],
+    )
+
+
+@router.get("/stats/runouts", response_model=StatsRunoutsResponse)
+def stats_runouts(horizon: int = Query(14, ge=1, le=90)):
+    """Products predicted to run out within ``horizon`` days, based on the
+    same 8-week consumption velocity model that drives ``/shopping-list/proposal``.
+    """
+    return StatsRunoutsResponse(
+        horizon=horizon,
+        runouts=[PredictedRunout(**r) for r in predicted_runouts(_get_db(), horizon_days=horizon)],
+    )
+
+
+@router.get("/stats/digest", response_model=StatsDigestResponse)
+def stats_digest():
+    """One-call snapshot for the HA integration / weekly notification.
+
+    Bundles the three signals that matter for "what's happening in my pantry":
+    monetary waste (last 30d), expiring lots (next 7d), predicted runouts (next 14d).
+    """
+    conn = _get_db()
+    digest = weekly_digest(conn)
+    return StatsDigestResponse(
+        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        days=digest["days"],
+        currency=digest["currency"],
+        expiring_this_week=digest["expiring_this_week"],
+        predicted_runouts_14d=[PredictedRunout(**r) for r in digest["predicted_runouts_14d"]],
+        waste_value_30d=digest["waste_value_30d"],
+        waste_amount_30d=digest["waste_amount_30d"],
+        top_spoilers_30d=digest["top_spoilers_30d"],
+    )
 
 
 @router.get("/stats/product/{product_id}", response_model=StatsProductSummary)

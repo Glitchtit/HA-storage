@@ -194,6 +194,7 @@ export default function Stock() {
   const [formLoc, setFormLoc] = useState('');
   const [formBB, setFormBB] = useState('');
   const [formPurchased, setFormPurchased] = useState('');
+  const [formPrice, setFormPrice] = useState('');
   const [formToLoc, setFormToLoc] = useState('');
   const [formFromLoc, setFormFromLoc] = useState('');
   const [formProduct, setFormProduct] = useState('');
@@ -267,6 +268,7 @@ export default function Stock() {
     setFormLoc('');
     setFormBB('');
     setFormPurchased('');
+    setFormPrice('');
     setFormFromLoc('');
     setFormToLoc('');
     setFormProduct(pid || '');
@@ -284,6 +286,7 @@ export default function Stock() {
           if (formLoc) payload.location_id = Number(formLoc);
           if (formBB) payload.best_before_date = formBB;
           if (formPurchased) payload.purchased_date = formPurchased;
+          if (formPrice !== '') payload.price_paid = Number(formPrice);
           await addStock(payload);
           break;
         }
@@ -579,6 +582,15 @@ export default function Stock() {
                 type="date" value={formBB}
                 onChange={(e) => setFormBB(e.target.value)}
                 className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-400">Price paid (€/unit, optional)</span>
+              <input
+                type="number" min={0} step="0.01" value={formPrice}
+                placeholder="Falls back to the product's unit price"
+                onChange={(e) => setFormPrice(e.target.value)}
+                className="mt-1 block w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-orange"
               />
             </label>
             <button

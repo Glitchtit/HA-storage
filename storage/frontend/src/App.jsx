@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getHealth } from './api';
 import Dashboard from './components/Dashboard';
+import Insights from './components/Insights';
 import Products from './components/Products';
 import Stock from './components/Stock';
 import Recipes from './components/Recipes';
@@ -15,6 +16,7 @@ import History from './components/History';
 
 const TABS = [
   { id: 'dashboard', label: '📊 Dashboard', component: Dashboard },
+  { id: 'insights', label: '📈 Insights', component: Insights },
   { id: 'products', label: '📦 Products', component: Products },
   { id: 'stock', label: '🏪 Stock', component: Stock },
   { id: 'history', label: '📜 History', component: History },

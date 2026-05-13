@@ -46,6 +46,8 @@ class ProductCreate(BaseModel):
     min_stock_amount: float = 0
     picture_filename: str | None = None
     active: bool = True
+    unit_price: float | None = None
+    unit_price_currency: str = "EUR"
 
 class ProductUpdate(BaseModel):
     name: str | None = None
@@ -58,6 +60,8 @@ class ProductUpdate(BaseModel):
     min_stock_amount: float | None = None
     picture_filename: str | None = None
     active: bool | None = None
+    unit_price: float | None = None
+    unit_price_currency: str | None = None
 
 class Product(BaseModel):
     id: int
@@ -71,6 +75,8 @@ class Product(BaseModel):
     min_stock_amount: float
     picture_filename: str | None
     active: bool
+    unit_price: float | None = None
+    unit_price_currency: str | None = None
     created_at: str
     updated_at: str
 
@@ -112,6 +118,7 @@ class StockAdd(BaseModel):
     location_id: int | None = None
     best_before_date: str | None = None
     purchased_date: str | None = None
+    price_paid: float | None = None
     note: str = ""
 
 class StockConsume(BaseModel):
@@ -146,6 +153,7 @@ class StockEntry(BaseModel):
     best_before_date: str | None
     best_before_days: int | None
     purchased_date: str | None
+    price_paid: float | None = None
     created_at: str
 
 class StockSummary(BaseModel):
@@ -173,6 +181,7 @@ class StockHistoryEntry(BaseModel):
     from_location_id: int | None = None
     stock_id: int | None = None
     note: str = ""
+    unit_price: float | None = None
     created_at: str
 
 class StockHistoryEntryWithProduct(StockHistoryEntry):
@@ -196,6 +205,67 @@ class StatsTimelinePoint(BaseModel):
     day: str  # YYYY-MM-DD
     amount: float
     event_count: int
+
+class StatsWasteBreakdown(BaseModel):
+    product_id: int | None = None
+    product_name: str | None = None
+    location_id: int | None = None
+    location_name: str | None = None
+    category_id: int | None = None
+    category_name: str | None = None
+    amount: float
+    value: float
+
+class StatsWasteSeriesPoint(BaseModel):
+    week: str  # ISO week start date (YYYY-MM-DD, Monday)
+    amount: float
+    value: float
+
+class StatsWasteResponse(BaseModel):
+    days: int
+    currency: str = "EUR"
+    total_amount: float
+    total_value: float
+    by_product: list[StatsWasteBreakdown] = []
+    by_location: list[StatsWasteBreakdown] = []
+    by_category: list[StatsWasteBreakdown] = []
+    series: list[StatsWasteSeriesPoint] = []
+
+class PredictedRunout(BaseModel):
+    product_id: int
+    product_name: str
+    unit_id: int
+    current_qty: float
+    avg_daily: float
+    days_to_runout: float
+
+class StatsRunoutsResponse(BaseModel):
+    horizon: int
+    runouts: list[PredictedRunout] = []
+
+class DigestExpiring(BaseModel):
+    lot_id: int
+    product_id: int
+    product_name: str
+    amount: float
+    best_before_date: str | None
+    days_left: int | None
+
+class DigestSpoiler(BaseModel):
+    product_id: int
+    product_name: str
+    amount: float
+    value: float
+
+class StatsDigestResponse(BaseModel):
+    generated_at: str
+    days: int = 30
+    currency: str = "EUR"
+    expiring_this_week: list[DigestExpiring] = []
+    predicted_runouts_14d: list[PredictedRunout] = []
+    waste_value_30d: float = 0
+    waste_amount_30d: float = 0
+    top_spoilers_30d: list[DigestSpoiler] = []
 
 class StatsProductSummary(BaseModel):
     product_id: int
@@ -382,6 +452,7 @@ class ReceiptCommitLine(BaseModel):
     amount: float = 1
     unit_id: int | None = None
     location_id: int | None = None
+    price_paid: float | None = None
     note: str = ""
 
 class ReceiptCommitRequest(BaseModel):

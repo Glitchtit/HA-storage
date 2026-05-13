@@ -25,6 +25,9 @@ async def async_setup_entry(
             StorageShoppingPendingSensor(coordinator, entry),
             StorageBarcodeQueueSensor(coordinator, entry),
             StorageOptimizeStatusSensor(coordinator, entry),
+            StorageWasteValue30dSensor(coordinator, entry),
+            StorageExpiringThisWeekSensor(coordinator, entry),
+            StoragePredictedRunoutsSensor(coordinator, entry),
         ]
     )
 
@@ -128,3 +131,72 @@ class StorageOptimizeStatusSensor(_Base):
             "updated": opt.get("updated"),
             "mode": opt.get("mode"),
         }
+
+
+# ── 0.12.0: digest-derived sensors ────────────────────────────────────────
+
+class StorageWasteValue30dSensor(_Base):
+    """Total monetary value of spoiled stock over the last 30 days."""
+
+    _key = "waste_value_30d"
+    _name = "Storage Waste Value 30d"
+    _icon = "mdi:cash-remove"
+    _unit = "EUR"
+
+    @property
+    def native_value(self):
+        digest = self.coordinator.data.get("digest")
+        if not digest:
+            return 0
+        return digest.get("waste_value_30d", 0)
+
+    @property
+    def extra_state_attributes(self):
+        digest = self.coordinator.data.get("digest") or {}
+        return {
+            "currency": digest.get("currency", "EUR"),
+            "amount_30d": digest.get("waste_amount_30d", 0),
+            "top_spoilers": digest.get("top_spoilers_30d", []),
+        }
+
+
+class StorageExpiringThisWeekSensor(_Base):
+    """Number of stock lots whose best-before falls within the next 7 days
+    (or has already passed). Mirrors the Insights dashboard's expiring card."""
+
+    _key = "expiring_this_week_count"
+    _name = "Storage Expiring This Week"
+    _icon = "mdi:calendar-alert"
+
+    @property
+    def native_value(self):
+        digest = self.coordinator.data.get("digest")
+        if not digest:
+            return 0
+        return len(digest.get("expiring_this_week", []))
+
+    @property
+    def extra_state_attributes(self):
+        digest = self.coordinator.data.get("digest") or {}
+        return {"items": digest.get("expiring_this_week", [])}
+
+
+class StoragePredictedRunoutsSensor(_Base):
+    """Number of products predicted to run out within 14 days, from the
+    consumption-velocity model also used by the shopping proposal."""
+
+    _key = "predicted_runouts_count"
+    _name = "Storage Predicted Runouts"
+    _icon = "mdi:fast-forward-outline"
+
+    @property
+    def native_value(self):
+        digest = self.coordinator.data.get("digest")
+        if not digest:
+            return 0
+        return len(digest.get("predicted_runouts_14d", []))
+
+    @property
+    def extra_state_attributes(self):
+        digest = self.coordinator.data.get("digest") or {}
+        return {"items": digest.get("predicted_runouts_14d", [])}

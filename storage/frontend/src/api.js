@@ -36,6 +36,9 @@ export const getTopPurchased = (params) => api.get('/stats/top-purchased', { par
 export const getSpoilage = (params) => api.get('/stats/spoilage', { params });
 export const getStatsTimeline = (params) => api.get('/stats/timeline', { params });
 export const getProductStats = (productId) => api.get(`/stats/product/${productId}`);
+export const getStatsWaste = (params) => api.get('/stats/waste', { params });
+export const getStatsRunouts = (params) => api.get('/stats/runouts', { params });
+export const getStatsDigest = () => api.get('/stats/digest');
 
 // ── Barcodes ──────────────────────────────────────────────────────────────
 export const getBarcodes = () => api.get('/barcodes');

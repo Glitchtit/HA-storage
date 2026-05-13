@@ -1597,3 +1597,172 @@ class TestTargetedSpoil:
     def test_spoil_unknown_lot_returns_404(self):
         r = client.post("/api/stock/spoil/999999", json={})
         assert r.status_code == 404
+
+
+# ── Monetary Waste Tracking (0.11.0) ───────────────────────────────────────
+
+class TestWasteStats:
+    def _make_product(self, *, unit_price=None):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        body = {"name": f"Waste_{id(self)}_{unit_price}", "unit_id": kpl, "location_id": loc,
+                "default_best_before_days": 7}
+        if unit_price is not None:
+            body["unit_price"] = unit_price
+        return client.post("/api/products", json=body).json()["id"]
+
+    def test_product_unit_price_round_trip(self):
+        pid = self._make_product(unit_price=2.50)
+        p = client.get(f"/api/products/{pid}").json()
+        assert p["unit_price"] == 2.5
+        assert p["unit_price_currency"] == "EUR"
+
+    def test_stock_price_paid_snapshot_from_product_default(self):
+        pid = self._make_product(unit_price=3.0)
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 2}).json()
+        # Lot should snapshot the product's current unit_price.
+        assert lot["price_paid"] == 3.0
+
+    def test_stock_price_paid_explicit_override(self):
+        pid = self._make_product(unit_price=3.0)
+        lot = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 2, "price_paid": 4.25},
+        ).json()
+        assert lot["price_paid"] == 4.25
+
+    def test_waste_endpoint_values_targeted_spoil(self):
+        pid = self._make_product(unit_price=2.5)
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 3}).json()
+        r = client.post(f"/api/stock/spoil/{lot['id']}", json={})
+        assert r.status_code == 200
+        waste = client.get("/api/stats/waste?days=1").json()
+        # This product's row should appear with value 3 * 2.5 = 7.5
+        match = [p for p in waste["by_product"] if p["product_id"] == pid]
+        assert len(match) == 1
+        assert match[0]["amount"] == 3
+        assert match[0]["value"] == 7.5
+        # Total value must include this product's contribution.
+        assert waste["total_value"] >= 7.5
+        assert waste["currency"] == "EUR"
+
+    def test_waste_endpoint_falls_back_to_product_default(self):
+        """A lot added before unit_price was set on the product should still get
+        valued at the product's current unit_price when spoiled."""
+        pid = self._make_product(unit_price=None)
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 2}).json()
+        assert lot["price_paid"] in (None, 0)
+        # Now set the product's unit price.
+        client.put(f"/api/products/{pid}", json={"unit_price": 5.0})
+        # Spoil the lot.
+        client.post(f"/api/stock/spoil/{lot['id']}", json={})
+        waste = client.get("/api/stats/waste?days=1").json()
+        match = [p for p in waste["by_product"] if p["product_id"] == pid]
+        assert len(match) == 1
+        # value comes from product fallback at spoil time (or query time).
+        assert match[0]["value"] == 10.0
+
+    def test_waste_endpoint_unknown_price_counts_amount_not_value(self):
+        pid = self._make_product(unit_price=None)
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 4}).json()
+        client.post(f"/api/stock/spoil/{lot['id']}", json={})
+        waste = client.get("/api/stats/waste?days=1").json()
+        match = [p for p in waste["by_product"] if p["product_id"] == pid]
+        assert len(match) == 1
+        assert match[0]["amount"] == 4
+        # No price anywhere → value is 0.
+        assert match[0]["value"] == 0
+
+    def test_waste_endpoint_breaks_down_by_location(self):
+        pid = self._make_product(unit_price=1.0)
+        locs = client.get("/api/locations").json()
+        a, b = locs[0]["id"], locs[1]["id"]
+        lot_a = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 5, "location_id": a},
+        ).json()
+        lot_b = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 7, "location_id": b},
+        ).json()
+        client.post(f"/api/stock/spoil/{lot_a['id']}", json={})
+        client.post(f"/api/stock/spoil/{lot_b['id']}", json={})
+        waste = client.get("/api/stats/waste?days=1").json()
+        by_loc = {row["location_id"]: row["value"] for row in waste["by_location"]}
+        assert by_loc.get(a, 0) >= 5
+        assert by_loc.get(b, 0) >= 7
+
+    def test_receipt_commit_passes_price_to_lot(self):
+        # Receipt lines provide total price (qty * unit); the commit endpoint
+        # should divide back to per-unit and snapshot onto the lot.
+        pid = self._make_product(unit_price=None)
+        commit = client.post(
+            "/api/receipts/commit",
+            json={"lines": [{"product_id": pid, "amount": 2, "price_paid": 5.0}]},
+        )
+        assert commit.status_code == 200
+        assert commit.json()["added"] == 1
+        # Look up the lot and verify the per-unit price was stored.
+        stock = client.get(f"/api/stock/product/{pid}").json()
+        assert any(abs((lot.get("price_paid") or 0) - 2.5) < 0.001 for lot in stock)
+
+
+# ── Predicted Runouts (0.12.0) ─────────────────────────────────────────────
+
+class TestPredictedRunouts:
+    def _make_product(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        return client.post("/api/products", json={
+            "name": f"Runout_{id(self)}", "unit_id": kpl,
+        }).json()["id"]
+
+    def test_runouts_endpoint_returns_shape(self):
+        r = client.get("/api/stats/runouts?horizon=14")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["horizon"] == 14
+        assert isinstance(data["runouts"], list)
+
+    def test_predicted_runout_lists_product_with_recent_consumption(self):
+        # Add stock, consume most of it — the small remainder should predict a runout.
+        pid = self._make_product()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 56})
+        # Consume 7/day worth in one call (so weekly velocity is detectable).
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 49})
+        data = client.get("/api/stats/runouts?horizon=14").json()
+        assert any(r["product_id"] == pid for r in data["runouts"])
+
+    def test_runouts_excludes_products_with_no_consumption(self):
+        pid = self._make_product()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5})
+        # No consume events at all.
+        data = client.get("/api/stats/runouts?horizon=14").json()
+        assert not any(r["product_id"] == pid for r in data["runouts"])
+
+
+# ── Weekly Digest (0.12.0) ─────────────────────────────────────────────────
+
+class TestDigest:
+    def test_digest_endpoint_returns_keys(self):
+        r = client.get("/api/stats/digest")
+        assert r.status_code == 200
+        data = r.json()
+        for key in (
+            "generated_at", "days", "currency",
+            "expiring_this_week", "predicted_runouts_14d",
+            "waste_value_30d", "waste_amount_30d", "top_spoilers_30d",
+        ):
+            assert key in data
+
+    def test_digest_reports_waste_value(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        pid = client.post("/api/products", json={
+            "name": f"Digest_{id(self)}", "unit_id": kpl, "unit_price": 1.5,
+        }).json()["id"]
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 4}).json()
+        client.post(f"/api/stock/spoil/{lot['id']}", json={})
+        data = client.get("/api/stats/digest").json()
+        # 4 * 1.5 = 6.0 — the digest's last-30d total must reflect at least this.
+        assert data["waste_value_30d"] >= 6.0
+        # Top spoilers list should include our product.
+        assert any(s["product_id"] == pid for s in data["top_spoilers_30d"])

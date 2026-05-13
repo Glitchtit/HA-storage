@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS products (
     min_stock_amount        REAL DEFAULT 0,
     picture_filename        TEXT,
     active                  INTEGER DEFAULT 1,
+    unit_price              REAL,
+    unit_price_currency     TEXT DEFAULT 'EUR',
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -73,6 +75,7 @@ CREATE TABLE IF NOT EXISTS stock (
     best_before_date TEXT,
     best_before_days INTEGER,
     purchased_date   TEXT DEFAULT (date('now')),
+    price_paid       REAL,
     created_at       TEXT DEFAULT (datetime('now'))
 );
 
@@ -142,6 +145,7 @@ CREATE TABLE IF NOT EXISTS stock_history (
     from_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
     stock_id         INTEGER,
     note             TEXT DEFAULT '',
+    unit_price       REAL,
     created_at       TEXT DEFAULT (datetime('now'))
 );
 
@@ -337,6 +341,32 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
           ON stock(product_id, best_before_date, purchased_date, id)
     """)
     conn.commit()
+
+    # 0.11.0 — monetary waste tracking. Additive: existing rows return NULL
+    # and the waste endpoint falls back to the product's current default.
+    product_cols = {r["name"] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
+    if "unit_price" not in product_cols:
+        conn.execute("ALTER TABLE products ADD COLUMN unit_price REAL")
+        conn.commit()
+        log.info("Added unit_price column to products.")
+    if "unit_price_currency" not in product_cols:
+        conn.execute("ALTER TABLE products ADD COLUMN unit_price_currency TEXT DEFAULT 'EUR'")
+        conn.commit()
+        log.info("Added unit_price_currency column to products.")
+
+    if "price_paid" not in stock_cols:
+        # stock_cols was read above before any stock migrations; re-read to be sure.
+        stock_cols = {r["name"] for r in conn.execute("PRAGMA table_info(stock)").fetchall()}
+    if "price_paid" not in stock_cols:
+        conn.execute("ALTER TABLE stock ADD COLUMN price_paid REAL")
+        conn.commit()
+        log.info("Added price_paid column to stock.")
+
+    history_cols = {r["name"] for r in conn.execute("PRAGMA table_info(stock_history)").fetchall()}
+    if "unit_price" not in history_cols:
+        conn.execute("ALTER TABLE stock_history ADD COLUMN unit_price REAL")
+        conn.commit()
+        log.info("Added unit_price column to stock_history.")
 
 
 def init_db(conn: sqlite3.Connection) -> None:

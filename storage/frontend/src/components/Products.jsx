@@ -25,6 +25,7 @@ const EMPTY_FORM = {
   unit_id: null,
   default_best_before_days: 0,
   min_stock_amount: 0,
+  unit_price: null,
 };
 
 const lookup = (list, id) => list.find((i) => i.id === id);
@@ -187,6 +188,20 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
           className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
           value={form.min_stock_amount ?? 0}
           onChange={(e) => field('min_stock_amount', Number(e.target.value))}
+        />
+      </div>
+
+      {/* Unit price (EUR) — used for monetary waste tracking */}
+      <div>
+        <label className="block text-sm font-medium text-gray-400 mb-1">Unit price (€)</label>
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          placeholder="Optional — per-unit price in euros"
+          className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-orange focus:outline-none"
+          value={form.unit_price ?? ''}
+          onChange={(e) => field('unit_price', e.target.value === '' ? null : Number(e.target.value))}
         />
       </div>
     </div>
@@ -430,6 +445,7 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         unit_id: data.unit_id,
         default_best_before_days: data.default_best_before_days ?? 0,
         min_stock_amount: data.min_stock_amount ?? 0,
+        unit_price: data.unit_price ?? null,
       });
     } catch (err) {
       console.error('Load product failed', err);

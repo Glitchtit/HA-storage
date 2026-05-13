@@ -77,7 +77,7 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     for idx, line in enumerate(body.lines):
         try:
             product = conn.execute(
-                "SELECT id, unit_id, location_id, default_best_before_days "
+                "SELECT id, unit_id, location_id, default_best_before_days, unit_price "
                 "FROM products WHERE id = ?",
                 (line.product_id,),
             ).fetchone()
@@ -104,10 +104,18 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
                 ).fetchone()
                 best_before = row["d"]
 
-            conn.execute(
+            # Receipt lines may include a per-line total price. Convert to per-unit
+            # for the lot snapshot. Fall back to the product's default unit_price.
+            price_paid = None
+            if line.price_paid is not None and line.amount > 0:
+                price_paid = float(line.price_paid) / float(line.amount)
+            if price_paid is None:
+                price_paid = product.get("unit_price")
+
+            cur = conn.execute(
                 "INSERT INTO stock (product_id, location_id, amount, unit_id, "
-                "best_before_date) VALUES (?, ?, ?, ?, ?)",
-                (line.product_id, location_id, line.amount, unit_id, best_before),
+                "best_before_date, price_paid) VALUES (?, ?, ?, ?, ?, ?)",
+                (line.product_id, location_id, line.amount, unit_id, best_before, price_paid),
             )
             log_event(
                 conn,
@@ -116,7 +124,9 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
                 amount=line.amount,
                 unit_id=unit_id,
                 location_id=location_id,
+                stock_id=cur.lastrowid,
                 note=line.note or "receipt",
+                unit_price=price_paid,
             )
             added += 1
         except Exception as exc:
