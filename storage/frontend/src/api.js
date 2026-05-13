@@ -22,6 +22,7 @@ export const openStock = (data) => api.post('/stock/open', data);
 export const transferStock = (data) => api.post('/stock/transfer', data);
 export const deleteStockEntry = (id, reason) =>
   api.delete(`/stock/${id}`, { params: reason ? { reason } : undefined });
+export const spoilStockLot = (lotId, body = {}) => api.post(`/stock/spoil/${lotId}`, body);
 
 // ── History & Stats ──────────────────────────────────────────────────────
 export const getHistory = (params) => api.get('/history', { params });
