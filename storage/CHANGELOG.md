@@ -1,3 +1,8 @@
+## 0.8.1
+- Docs: dropped legacy "Replaces Grocy + Barcode Buddy" framing from README and copilot-instructions — the codebase is its own thing, not a migration target
+- Docs: removed vestigial Barcode Buddy mentions; the barcode queue is described on its own merits
+- Code unchanged. The `/api/migrate/grocy` endpoint and `migrate_from_grocy` helper stay — they're the import path FOR users coming from a Grocy install, where the word is accurate
+
 ## 0.8.0
 - Feature: cook a recipe. New `POST /api/recipes/{id}/cook` deducts ingredients from stock (FIFO by best-before, same path `/stock/consume` uses) and queues any shortfall on the shopping list with a "Reseptistä: <name>" note linked back to the recipe
 - Optional `servings` body param scales every ingredient amount proportionally to the recipe's stored servings count
