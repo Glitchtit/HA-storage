@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from models import ShoppingItem, ShoppingItemCreate, ShoppingItemUpdate
+from consumption_stats import compute_proposal
+from models import (
+    ShoppingItem,
+    ShoppingItemCreate,
+    ShoppingItemUpdate,
+    ShoppingProposalResponse,
+)
 
 router = APIRouter(tags=["shopping-list"])
 log = logging.getLogger(__name__)
@@ -84,6 +90,30 @@ def list_shopping():
     return _get_db().execute(
         "SELECT * FROM shopping_list ORDER BY done, created_at DESC"
     ).fetchall()
+
+
+@router.get("/shopping-list/proposal", response_model=ShoppingProposalResponse)
+def shopping_proposal(
+    lookback_weeks: int = Query(8, ge=1, le=52),
+    horizon_days: int = Query(7, ge=1, le=30),
+):
+    """Predictive shopping proposal based on consumption velocity.
+
+    For every active product with ``min_stock_amount > 0``, compute the mean
+    weekly consume rate over the last ``lookback_weeks``. If the product is
+    predicted to deplete within ``horizon_days`` and is not already on the
+    shopping list, include it in the proposal sorted by urgency.
+    """
+    items = compute_proposal(
+        _get_db(),
+        lookback_weeks=lookback_weeks,
+        horizon_days=horizon_days,
+    )
+    return {
+        "lookback_weeks": lookback_weeks,
+        "horizon_days": horizon_days,
+        "proposal": items,
+    }
 
 
 @router.post("/shopping-list/sync", status_code=200)

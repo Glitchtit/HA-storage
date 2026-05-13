@@ -126,6 +126,101 @@ def _call_claude(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
     return response.content[0].text, stats
 
 
+def _call_claude_vision(
+    prompt: str,
+    image_b64: str,
+    mime_type: str,
+    api_key: str,
+    model: str,
+) -> tuple[str, dict]:
+    """Claude vision call — sends a base64-encoded image + a text prompt and
+    returns the model's text response.
+
+    Used for receipt OCR. Other providers do not currently route through here;
+    callers must check provider == 'claude' before invoking.
+    """
+    import anthropic as _anthropic
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        # Haiku is text-only; Sonnet / Opus support vision. Bump default model
+        # when the configured one cannot do vision so first-time users get a
+        # useful error instead of a silent rejection.
+        model=model or "claude-sonnet-4-5",
+        max_tokens=8192,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": image_b64,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
+    usage = response.usage
+    stats = {"in": usage.input_tokens, "out": usage.output_tokens}
+    logger.info(
+        "Claude vision usage — input tokens: %s, output tokens: %s",
+        stats["in"], stats["out"],
+    )
+    return response.content[0].text, stats
+
+
+def call_ai_vision_json(
+    prompt: str,
+    image_b64: str,
+    mime_type: str,
+    conn: sqlite3.Connection,
+    *,
+    cfg: dict[str, str] | None = None,
+) -> Any:
+    """Call the AI provider with an image + prompt; parse the response as JSON.
+
+    Claude-only for now (Gemini supports vision but isn't wired here). Raises
+    ValueError when provider != claude or claude_api_key is missing.
+    """
+    if cfg is None:
+        cfg = _get_ai_config(conn)
+    provider = cfg.get("provider", "gemini")
+    if provider != "claude":
+        raise ValueError(
+            f"call_ai_vision_json requires ai_provider=claude (got {provider!r})"
+        )
+    if not cfg.get("claude_api_key"):
+        raise ValueError("claude_api_key is not configured")
+
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            raw, _stats = _call_claude_vision(
+                prompt,
+                image_b64,
+                mime_type,
+                cfg["claude_api_key"],
+                cfg["claude_model"],
+            )
+            sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+            sanitized = _extract_json(sanitized)
+            return json.loads(sanitized)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Claude vision attempt %d/%d failed: %s",
+                attempt, _MAX_RETRIES, exc,
+            )
+            if attempt < _MAX_RETRIES:
+                time.sleep(2 ** attempt)
+    raise ValueError(f"Vision call failed after {_MAX_RETRIES} attempts: {last_exc}") from last_exc
+
+
 # ---------------------------------------------------------------------------
 # JSON extraction + retry wrapper
 # ---------------------------------------------------------------------------

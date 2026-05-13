@@ -1,3 +1,22 @@
+## 0.8.0
+- Feature: cook a recipe. New `POST /api/recipes/{id}/cook` deducts ingredients from stock (FIFO by best-before, same path `/stock/consume` uses) and queues any shortfall on the shopping list with a "Reseptistä: <name>" note linked back to the recipe
+- Optional `servings` body param scales every ingredient amount proportionally to the recipe's stored servings count
+- Unit conversion: each ingredient's amount is converted from the recipe's unit to the product's default stock unit via the existing `unit_conversions` BFS. Ingredients with no conversion path land in `unmatched` rather than being silently skipped
+- Per-ingredient `consume` events are logged to `stock_history` so the predictive shopping proposal (0.6.0) sees recipe-driven consumption in its velocity model
+
+## 0.7.0
+- Feature: receipt OCR. New `POST /api/receipts/parse` accepts a base64-encoded receipt image and returns parsed line items via Claude vision, each enriched with a suggested product match (token-overlap + SequenceMatcher) and confidence score
+- Feature: `POST /api/receipts/commit` batch-adds confirmed lines to stock (creates entries via the existing `/stock/add` semantics, logs `purchase` events to `stock_history`)
+- AI: new `call_ai_vision_json` in `ai_client.py` — Claude-only for now; raises `503` on the parse endpoint when `ai_provider != claude` or `claude_api_key` is unset
+- Models: new `ReceiptParseRequest`, `ReceiptParseResponse`, `ReceiptCommitRequest`, `ReceiptCommitResponse`
+- Prompt embedded in `receipt_parser.py` is Finnish-grocery-aware (K-Ruoka / S-market / Lidl / Prisma); skips totals, discounts, loyalty rows; preserves Finnish capitalisation in `raw_text`
+
+## 0.6.0
+- Feature: predictive shopping proposal. New `GET /api/shopping-list/proposal` returns products predicted to deplete within a configurable horizon based on consumption velocity over a lookback window
+- For every active product with `min_stock_amount > 0`, the proposal computes mean weekly consume rate from `stock_history` consume events and predicts days-to-zero from the current total stock
+- Products already on the shopping list (done = 0) and products with no consume history in the lookback window are excluded
+- Query params: `lookback_weeks` (1–52, default 8), `horizon_days` (1–30, default 7); response includes `weekly_rate`, `days_to_zero`, `suggested_amount` (max of `min_stock_amount` and two weeks at current rate), and a Finnish reasoning string per row sorted by urgency
+
 ## 0.5.5
 - Fix: shopping list auto-sync now runs server-side every 5 minutes, independent of the HA integration. Previously the only triggers were `/stock/*` writes and the integration coordinator, so users without the integration could see stale auto-added rows linger forever after restocking via the UI's stock-amount picker or after lowering `min_stock_amount`
 - Fix: editing `min_stock_amount` or `active` on a product now triggers an immediate sync — raising the threshold adds rows, lowering it (or deactivating the product) removes auto-added rows for products that are now considered fine

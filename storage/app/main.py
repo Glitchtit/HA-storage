@@ -232,6 +232,7 @@ from routers import (
     ai,
     history,
     stats,
+    receipts,
 )
 
 app.include_router(products.router, prefix="/api")
@@ -248,6 +249,7 @@ app.include_router(migrate.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
+app.include_router(receipts.router, prefix="/api")
 
 
 # ── Error handler ──────────────────────────────────────────────────────────

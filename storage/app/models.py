@@ -282,6 +282,33 @@ class IngredientDetail(Ingredient):
     stock_amount: float = 0
     stock_unit_id: int | None = None
 
+class CookRecipeRequest(BaseModel):
+    servings: float | None = Field(
+        None,
+        description="Cook this many servings. Defaults to the recipe's stored servings count.",
+    )
+
+class CookedIngredient(BaseModel):
+    product_id: int
+    product_name: str
+    amount: float
+    unit_id: int
+
+class UnmatchedIngredient(BaseModel):
+    product_id: int
+    product_name: str
+    amount: float
+    unit_id: int
+    reason: str
+
+class CookRecipeResponse(BaseModel):
+    recipe_id: int
+    recipe_name: str
+    servings: float
+    deducted: list[CookedIngredient]
+    shortfall_added: list[CookedIngredient]
+    unmatched: list[UnmatchedIngredient]
+
 # ── Shopping List ──────────────────────────────────────────────────────────
 
 class ShoppingItemCreate(BaseModel):
@@ -308,6 +335,56 @@ class ShoppingItem(BaseModel):
     auto_added: bool = False
     ha_item_name: str | None = None
     created_at: str
+
+class ShoppingProposalItem(BaseModel):
+    product_id: int
+    product_name: str
+    unit_id: int
+    current_qty: float
+    weekly_rate: float
+    days_to_zero: float
+    suggested_amount: float
+    reasoning: str
+
+class ShoppingProposalResponse(BaseModel):
+    lookback_weeks: int
+    horizon_days: int
+    proposal: list[ShoppingProposalItem]
+
+# ── Receipt OCR ────────────────────────────────────────────────────────────
+
+class ReceiptParseRequest(BaseModel):
+    image_b64: str = Field(..., description="Base64-encoded image bytes (no data: prefix)")
+    mime_type: str = Field("image/jpeg", description="Image MIME type, e.g. image/jpeg, image/png, image/webp")
+
+class ReceiptLine(BaseModel):
+    raw_text: str
+    qty: float
+    unit: str | None = None
+    price: float | None = None
+    suggested_product_id: int | None = None
+    suggested_unit_id: int | None = None
+    confidence: float = 0.0
+
+class ReceiptParseResponse(BaseModel):
+    store: str
+    date: str | None
+    lines: list[ReceiptLine]
+
+class ReceiptCommitLine(BaseModel):
+    product_id: int = Field(..., description="Matched product (user-confirmed)")
+    amount: float = 1
+    unit_id: int | None = None
+    location_id: int | None = None
+    note: str = ""
+
+class ReceiptCommitRequest(BaseModel):
+    lines: list[ReceiptCommitLine] = []
+
+class ReceiptCommitResponse(BaseModel):
+    added: int
+    failed: int
+    errors: list[str] = []
 
 # ── Barcode Queue ──────────────────────────────────────────────────────────
 
