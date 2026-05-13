@@ -72,8 +72,10 @@ def list_stock():
 def list_stock_entries(expiring_within_days: int | None = None, expired: bool | None = None):
     """All stock entries joined with product name. Supports expiry filters.
 
-    - expiring_within_days=N → entries with best_before_date between today and today+N (inclusive)
-    - expired=true → entries whose best_before_date is strictly before today
+    - expiring_within_days=N → entries with best_before_date on or before today+N.
+      Includes already-expired entries (no lower bound) since they are more urgent
+      than soon-to-expire ones.
+    - expired=true → entries whose best_before_date is strictly before today.
     """
     conn = _get_db()
     where = ["s.amount > 0"]
@@ -83,7 +85,6 @@ def list_stock_entries(expiring_within_days: int | None = None, expired: bool | 
     elif expiring_within_days is not None:
         where.append(
             "s.best_before_date IS NOT NULL "
-            "AND s.best_before_date >= date('now') "
             "AND s.best_before_date <= date('now', '+' || ? || ' days')"
         )
         params.append(expiring_within_days)

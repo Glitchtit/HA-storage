@@ -15,6 +15,7 @@ export const deleteProduct = (id) => api.delete(`/products/${id}`);
 
 // ── Stock ─────────────────────────────────────────────────────────────────
 export const getStock = () => api.get('/stock');
+export const getStockEntries = (params) => api.get('/stock/entries', { params });
 export const getProductStock = (id) => api.get(`/stock/product/${id}`);
 export const addStock = (data) => api.post('/stock/add', data);
 export const consumeStock = (data) => api.post('/stock/consume', data);
