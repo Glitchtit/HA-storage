@@ -962,6 +962,50 @@ class TestOptimizeStatusEndpoint:
                 ai_mod._tasks.pop("newer", None)
 
 
+import sqlite3 as _sqlite3_for_migration_test
+
+
+class TestExpiryMigration:
+    """The schema migration backfills best_before_days for pre-existing rows."""
+
+    def _make_legacy_stock_row(self, product_id: int, location_id: int, unit_id: int, bbd: str | None = None):
+        """Insert a stock row directly (bypassing the API) so we can simulate a
+        row created before the best_before_days column existed."""
+        from main import get_connection
+        conn = get_connection()
+        cur = conn.execute(
+            "INSERT INTO stock (product_id, location_id, amount, unit_id, best_before_date) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (product_id, location_id, 3, unit_id, bbd),
+        )
+        # Force best_before_days NULL to simulate pre-migration state.
+        conn.execute("UPDATE stock SET best_before_days = NULL WHERE id = ?", (cur.lastrowid,))
+        conn.commit()
+        return cur.lastrowid
+
+    def test_existing_rows_get_best_before_days_backfilled(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"MigTest_{id(self)}",
+            "unit_id": kpl,
+            "default_best_before_days": 14,
+        }).json()
+        stock_id = self._make_legacy_stock_row(p["id"], loc, kpl)
+
+        # Trigger the migration explicitly (idempotent — safe to re-run).
+        from main import get_connection
+        from database import _migrate_schema
+        _migrate_schema(get_connection())
+
+        row = get_connection().execute(
+            "SELECT best_before_days, purchased_date FROM stock WHERE id = ?",
+            (stock_id,),
+        ).fetchone()
+        assert row["best_before_days"] == 14
+        assert row["purchased_date"] is not None
+
+
 class TestOptimizeUngroupedOnly:
     def test_400_when_no_ungrouped_products(self):
         from main import get_connection
