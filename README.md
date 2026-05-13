@@ -1,6 +1,6 @@
 # HA-Storage
 
-SQLite-backed central data store for the HA-apps ecosystem. Replaces Grocy + Barcode Buddy.
+SQLite-backed central data store for the HA-apps ecosystem.
 
 ## Features
 
@@ -8,9 +8,9 @@ SQLite-backed central data store for the HA-apps ecosystem. Replaces Grocy + Bar
 - **Stock tracking** with FIFO consumption, locations, best-before dates
 - **Recipe management** with ingredients, stock status, and shopping list generation
 - **Unit system** with conversion graph resolution (BFS)
-- **Barcode queue** (replaces Barcode Buddy)
+- **Barcode queue** for asynchronous discovery
 - **AI key sharing** — stores Gemini API key for sister apps
-- **Grocy migration** — one-time import from existing Grocy instance
+- **Grocy migration** — one-time import path for users coming from an existing Grocy install (see `/api/migrate/grocy`)
 
 ## Architecture
 

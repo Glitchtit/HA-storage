@@ -2,7 +2,7 @@
 
 ## Overview
 
-Central SQLite-backed data store for the HA-apps ecosystem. Replaces Grocy + Barcode Buddy. Provides a REST API and web UI for database management.
+Central SQLite-backed data store for the HA-apps ecosystem. Provides a REST API and web UI for database management.
 
 - **Add-on name**: Storage
 - **Slug**: `ha_storage`
@@ -70,17 +70,17 @@ FastAPI app in `app/main.py`. Database in `app/database.py`. Models in `app/mode
 | `product_groups.py` | CRUD product groups |
 | `recipes.py` | CRUD recipes + ingredients, recipe-to-shopping |
 | `shopping.py` | CRUD shopping list, clear done |
-| `barcode_queue.py` | CRUD barcode queue (replaces Barcode Buddy) |
+| `barcode_queue.py` | CRUD barcode queue for asynchronous discovery |
 | `config.py` | Key-value config, AI key endpoint |
 | `files.py` | Product/recipe image upload/download |
-| `migrate.py` | One-shot Grocy → Storage migration |
+| `migrate.py` | One-shot Grocy → Storage import path (for users coming from a Grocy install) |
 
 ## Database Schema
 
 11 tables: products, stock, barcodes, units, unit_conversions, locations, product_groups, recipes, recipe_ingredients, shopping_list, barcode_queue, config
 
 Key design decisions:
-- Single `unit_id` per product (not 4 like Grocy)
+- Single `unit_id` per product (simpler than the multi-unit upstream models we used to follow)
 - Pack sizes stored on barcode records
 - CASCADE deletes throughout
 - Seeded data: 9 Finnish units (g, kg, ml, dl, l, tl, rkl, kpl, rs), 12 conversions, 3 locations (Fridge, Pantry, Freezer)
