@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS stock (
     amount_opened    REAL DEFAULT 0,
     unit_id          INTEGER NOT NULL REFERENCES units(id),
     best_before_date TEXT,
+    best_before_days INTEGER,
     purchased_date   TEXT DEFAULT (date('now')),
     created_at       TEXT DEFAULT (datetime('now'))
 );
@@ -276,6 +277,33 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
         if rows:
             log.info("Backfilled %d stock rows into stock_history.", len(rows))
+
+    # Add best_before_days column for pre-existing databases.
+    stock_cols = {r["name"] for r in conn.execute("PRAGMA table_info(stock)").fetchall()}
+    if "best_before_days" not in stock_cols:
+        conn.execute("ALTER TABLE stock ADD COLUMN best_before_days INTEGER")
+        conn.commit()
+        log.info("Added best_before_days column to stock and backfilled from product defaults.")
+
+    # Backfill any rows where best_before_days is still NULL (idempotent).
+    conn.execute("""
+        UPDATE stock SET best_before_days = (
+            SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
+        )
+        WHERE best_before_days IS NULL
+    """)
+    conn.execute("""
+        UPDATE stock SET purchased_date = COALESCE(purchased_date, date(created_at))
+        WHERE purchased_date IS NULL
+    """)
+    conn.commit()
+
+    # Canonical FIFO index. Idempotent — safe on every init.
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_stock_fifo
+          ON stock(product_id, best_before_date, purchased_date, id)
+    """)
+    conn.commit()
 
 
 def init_db(conn: sqlite3.Connection) -> None:
