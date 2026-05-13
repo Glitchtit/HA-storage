@@ -1434,3 +1434,27 @@ class TestFifoOrder:
         # Older purchased_date must be consumed; newer is still there.
         assert remaining.get(lot_older["id"], 0) == 0 or lot_older["id"] not in remaining
         assert remaining.get(lot_newer["id"]) == 1
+
+
+# ── Transfer ───────────────────────────────────────────────────────────────
+
+class TestTransferCopiesSnapshot:
+    def test_transfer_copies_best_before_days(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        locs = client.get("/api/locations").json()
+        from_loc, to_loc = locs[0]["id"], locs[1]["id"]
+        pid = client.post("/api/products", json={
+            "name": f"Xfer_{id(self)}", "unit_id": kpl,
+            "default_best_before_days": 21,
+        }).json()["id"]
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 4, "location_id": from_loc})
+
+        client.post("/api/stock/transfer", json={
+            "product_id": pid, "amount": 2,
+            "from_location_id": from_loc, "to_location_id": to_loc,
+        })
+
+        rows = client.get(f"/api/stock/product/{pid}").json()
+        assert len(rows) == 2
+        # Both halves must carry the same best_before_days snapshot.
+        assert {r["best_before_days"] for r in rows} == {21}
