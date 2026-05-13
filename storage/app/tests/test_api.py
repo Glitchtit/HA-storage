@@ -1310,3 +1310,67 @@ class TestHistoryBackfill:
         ).fetchone()
         assert marker is not None
         conn2.close()
+
+
+# ── Expiry Snapshot ────────────────────────────────────────────────────────
+
+class TestExpirySnapshot:
+    """Adding a lot snapshots (purchased_date, best_before_days) and derives best_before_date."""
+
+    def _make_product(self, bb_days: int = 10):
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"Snap_{id(self)}_{bb_days}",
+            "unit_id": kpl,
+            "location_id": loc,
+            "default_best_before_days": bb_days,
+        }).json()
+        return p["id"], kpl, loc
+
+    def test_anchor_derivation_default(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product(bb_days=10)
+        entry = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
+        today = date.today().isoformat()
+        expected_bb = (date.today() + timedelta(days=10)).isoformat()
+        assert entry["purchased_date"] == today
+        assert entry["best_before_days"] == 10
+        assert entry["best_before_date"] == expected_bb
+
+    def test_user_override_best_before_date_sticks(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product(bb_days=10)
+        override = (date.today() + timedelta(days=3)).isoformat()
+        entry = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "best_before_date": override},
+        ).json()
+        # Snapshot of product default still recorded for audit.
+        assert entry["best_before_days"] == 10
+        # But the user's override is what's stored.
+        assert entry["best_before_date"] == override
+
+    def test_purchased_date_override_shifts_expiry(self):
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product(bb_days=10)
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        expected_bb = (date.today() + timedelta(days=9)).isoformat()
+        entry = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "purchased_date": yesterday},
+        ).json()
+        assert entry["purchased_date"] == yesterday
+        assert entry["best_before_days"] == 10
+        assert entry["best_before_date"] == expected_bb
+
+    def test_product_default_change_does_not_affect_existing_lots(self):
+        pid, _, _ = self._make_product(bb_days=10)
+        first = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
+        # Change the product default after the first add.
+        client.put(f"/api/products/{pid}", json={"default_best_before_days": 30})
+        second = client.post("/api/stock/add", json={"product_id": pid, "amount": 1}).json()
+        # First lot keeps its original snapshot.
+        assert first["best_before_days"] == 10
+        # Second lot uses the new value.
+        assert second["best_before_days"] == 30
