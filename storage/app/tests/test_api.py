@@ -886,6 +886,25 @@ class TestStockEntries:
         dates = [e["best_before_date"] for e in r.json() if e["product_id"] == pid]
         assert today in dates
 
+    def test_expiring_within_days_includes_expired(self):
+        """expiring_within_days=N has no lower bound — past-due lots are included
+        because they are more urgent than upcoming ones."""
+        from datetime import date, timedelta
+        pid, _, _ = self._make_product_with_location()
+        expired_iso = (date.today() - timedelta(days=3)).isoformat()
+        soon_iso = (date.today() + timedelta(days=2)).isoformat()
+        far_iso = (date.today() + timedelta(days=30)).isoformat()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": expired_iso})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": soon_iso})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "best_before_date": far_iso})
+
+        r = client.get("/api/stock/entries?expiring_within_days=7")
+        assert r.status_code == 200
+        dates = [e["best_before_date"] for e in r.json() if e["product_id"] == pid]
+        assert expired_iso in dates
+        assert soon_iso in dates
+        assert far_iso not in dates
+
 
 # ── AI Optimize Status (no task id) ────────────────────────────────────────
 

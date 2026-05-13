@@ -1,3 +1,8 @@
+## 0.9.4
+- Dashboard "Expiring Soon" panel now actually works. It was reading from the aggregated `/stock` endpoint which has no per-lot `best_before_date`, so the filter always evaluated to false and the panel was permanently stuck on "No products expiring 👍". Now reads from `/stock/entries?expiring_within_days=7`.
+- Expired items (past best-before date) show up in the same panel — they are more urgent than upcoming-expiry items, not less. Renamed to "Expiring or expired" with appropriate red styling for already-past-due lots.
+- Backend `GET /stock/entries?expiring_within_days=N` dropped its lower-bound clause; the filter now means "best_before_date ≤ today + N" (includes already-expired). The `expired=true` flag still works for "strictly past due" queries.
+
 ## 0.9.3
 - **Semantic switch:** `best_before_days` is now the authoritative per-lot value; `best_before_date` is a derived/cached function of `purchased_date + best_before_days`. This guarantees the displayed columns are always internally consistent — `Scanned + BB (days) == Expires`, always.
 - `POST /stock/add`: a user-supplied `best_before_date` is converted into a per-lot `bb_days` value (`override − purchased`) and stored. The override date is preserved exactly; `bb_days` reflects the realized interval for this lot, not the product default. Negative or zero diffs are accepted ("expires today" / "already expired on import").

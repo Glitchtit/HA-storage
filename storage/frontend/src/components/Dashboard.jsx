@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   getProducts,
   getStock,
+  getStockEntries,
   getRecipes,
   getShoppingList,
   getBarcodeQueue,
@@ -65,11 +66,12 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const [productsRes, stockRes, recipesRes, shoppingRes, barcodeRes,
+      const [productsRes, stockRes, expiringRes, recipesRes, shoppingRes, barcodeRes,
              topConsumedRes, recentPurchasesRes] =
         await Promise.all([
           getProducts(),
           getStock(),
+          getStockEntries({ expiring_within_days: 7 }).catch(() => ({ data: [] })),
           getRecipes(),
           getShoppingList(),
           getBarcodeQueue({ status: 'pending' }),
@@ -106,21 +108,14 @@ export default function Dashboard() {
         setLowStock(low);
       }
 
-      // Expiring soon: stock entries with best_before_date within 7 days
-      if (Array.isArray(stock)) {
-        const soon = stock
-          .filter((s) => {
-            const bbd = s.best_before_date ?? s.product?.best_before_date;
-            if (!bbd || bbd === '2999-12-31') return false;
-            return daysUntil(bbd) <= 7;
-          })
-          .map((s) => {
-            const bbd = s.best_before_date ?? s.product?.best_before_date;
-            return { ...s, _bbd: bbd, _days: daysUntil(bbd) };
-          })
-          .sort((a, b) => a._days - b._days);
-        setExpiring(soon);
-      }
+      // Expiring soon: per-lot entries whose best_before_date is on or before
+      // today+7. Backend filter already includes already-expired lots since they
+      // are more urgent than upcoming ones.
+      const expiringEntries = Array.isArray(expiringRes.data) ? expiringRes.data : [];
+      const soon = expiringEntries
+        .map((e) => ({ ...e, _bbd: e.best_before_date, _days: daysUntil(e.best_before_date) }))
+        .sort((a, b) => a._days - b._days);
+      setExpiring(soon);
 
       setPendingBarcodes(Array.isArray(barcodes) ? barcodes.length : 0);
       setTopConsumed(Array.isArray(topConsumedRes.data) ? topConsumedRes.data : []);
@@ -248,11 +243,11 @@ export default function Dashboard() {
       {/* Expiring soon */}
       <section>
         <h2 className="text-lg font-semibold text-gray-100 mb-3">
-          🕐 Expiring Soon
+          🕐 Expiring or expired
         </h2>
         {expiring.length === 0 ? (
           <div className="bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-4 text-emerald-400 text-sm">
-            No products expiring within the next 7 days 👍
+            Nothing expired or expiring within the next 7 days 👍
           </div>
         ) : (
           <div className="bg-gray-800 rounded-lg shadow overflow-hidden">
