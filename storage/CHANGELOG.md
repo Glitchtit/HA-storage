@@ -1,3 +1,8 @@
+## 0.9.1
+- Fixed migration backfill of `best_before_days` for pre-0.9.0 stock rows. Previously the column was stamped from the product's current default, which produced misleading values for lots with an imported or user-set `best_before_date` (e.g. a `2999-12-31` sentinel showed `BB (days) = 365` while `Expires = 31.12.2999` — three columns telling three stories).
+- `best_before_days` is now derived from the lot's own `(purchased_date, best_before_date)` pair when both are present, falling back to the product default only when the lot has no expiry date.
+- One-shot repair pass on first init after upgrade: rows where `best_before_days` disagrees with the date pair get recomputed in place. Bounded by a `created_at` cutoff so post-upgrade lots are never touched. Tracked via `_meta.bb_days_repaired_v1`.
+
 ## 0.9.0
 - Strengthened expiry tracking. Each stock lot now snapshots `(purchased_date, best_before_days)` at add time, so a later edit to a product's `default_best_before_days` does not retroactively shift existing stock.
 - Fixed FIFO ordering. `consume`, `open`, and `transfer` now sort by `best_before_date ASC` with NULL dates LAST (was first), tie-breaking by `purchased_date` then `id`. Previously a no-expiry lot would be eaten before a real one.
