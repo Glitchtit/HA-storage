@@ -271,13 +271,13 @@ def transfer_stock(body: StockTransfer):
         else:
             conn.execute("UPDATE stock SET amount = ? WHERE id = ?", (new_amount, entry["id"]))
 
-        # Create new entry at destination
+        # Create new entry at destination — carry the audit snapshot along.
         conn.execute(
             """INSERT INTO stock (product_id, location_id, amount, amount_opened, unit_id,
-               best_before_date, purchased_date)
-               VALUES (?, ?, ?, 0, ?, ?, ?)""",
+               best_before_date, best_before_days, purchased_date)
+               VALUES (?, ?, ?, 0, ?, ?, ?, ?)""",
             (body.product_id, body.to_location_id, take, entry["unit_id"],
-             entry["best_before_date"], entry["purchased_date"]),
+             entry["best_before_date"], entry["best_before_days"], entry["purchased_date"]),
         )
         remaining -= take
         transferred += take
