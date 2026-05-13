@@ -111,6 +111,7 @@ class StockAdd(BaseModel):
     unit_id: int | None = None
     location_id: int | None = None
     best_before_date: str | None = None
+    purchased_date: str | None = None
     note: str = ""
 
 class StockConsume(BaseModel):
@@ -139,6 +140,7 @@ class StockEntry(BaseModel):
     amount_opened: float
     unit_id: int
     best_before_date: str | None
+    best_before_days: int | None
     purchased_date: str | None
     created_at: str
 
