@@ -1004,72 +1004,33 @@ class TestExpiryMigration:
         assert row["best_before_days"] == 14
         assert row["purchased_date"] is not None
 
-    def test_repair_pass_recomputes_mismatched_bb_days(self):
-        """0.9.0-era rows where best_before_days was stamped from the product
-        default but the (purchased_date, best_before_date) pair tells a different
-        story must be repaired to the date-pair-derived value."""
+    def test_realign_pass_recomputes_mismatched_best_before_date(self):
+        """When best_before_date diverges from purchased_date + best_before_days,
+        the always-on realign pass rewrites the date column to match. bb_days
+        is authoritative; the date is a derived/cached value of that math."""
         from main import get_connection
         from database import _migrate_schema
 
         kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
         loc = client.get("/api/locations").json()[0]["id"]
         p = client.post("/api/products", json={
-            "name": f"Repair_{id(self)}",
+            "name": f"Realign_{id(self)}",
             "unit_id": kpl,
             "default_best_before_days": 365,
         }).json()
 
         conn = get_connection()
-        # Simulate a 0.9.0-style mis-stamped row: 2999 sentinel expiry, real
-        # purchased_date, bb_days stamped from product default. created_at is
-        # backdated so the repair's "created_at < cutoff" clause matches.
+        # Simulate a row imported with a wrong best_before_date that disagrees
+        # with the (purchased_date, best_before_days) pair: receipt imports
+        # often set best_before_date to a sentinel or default-365-day stamp
+        # that doesn't match the lot's own metadata.
         cur = conn.execute(
             "INSERT INTO stock (product_id, location_id, amount, unit_id, "
             "best_before_date, best_before_days, purchased_date, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 day'))",
-            (p["id"], loc, 1, kpl, "2999-12-31", 365, "2026-05-09"),
+            (p["id"], loc, 1, kpl, "2999-12-31", 7, "2026-05-09"),
         )
         stock_id = cur.lastrowid
-        # Clear the repair flag so the gated pass runs again for this test.
-        conn.execute("DELETE FROM _meta WHERE key = 'bb_days_repaired_v1'")
-        conn.commit()
-
-        _migrate_schema(get_connection())
-
-        row = get_connection().execute(
-            "SELECT best_before_days FROM stock WHERE id = ?", (stock_id,)
-        ).fetchone()
-        # julianday(2999-12-31) - julianday(2026-05-09) ≈ 355,621 days.
-        assert row["best_before_days"] != 365, "stale product-default value should have been replaced"
-        assert row["best_before_days"] > 300_000, (
-            f"expected ~355,621 days, got {row['best_before_days']}"
-        )
-
-    def test_sentinel_date_gets_repaired_to_product_default(self):
-        """Lots with best_before_date past year 2100 are sentinels (e.g. 2999-12-31
-        from receipt imports). The second repair pass rewrites both the date and
-        best_before_days using the product's default_best_before_days."""
-        from main import get_connection
-        from database import _migrate_schema
-
-        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
-        loc = client.get("/api/locations").json()[0]["id"]
-        p = client.post("/api/products", json={
-            "name": f"Sentinel_{id(self)}",
-            "unit_id": kpl,
-            "default_best_before_days": 365,
-        }).json()
-
-        conn = get_connection()
-        cur = conn.execute(
-            "INSERT INTO stock (product_id, location_id, amount, unit_id, "
-            "best_before_date, best_before_days, purchased_date, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 day'))",
-            (p["id"], loc, 1, kpl, "2999-12-31", 365, "2026-05-09"),
-        )
-        stock_id = cur.lastrowid
-        # Clear BOTH repair flags so the sentinel pass runs.
-        conn.execute("DELETE FROM _meta WHERE key IN ('bb_days_repaired_v1', 'bbd_sentinel_repair_v1')")
         conn.commit()
 
         _migrate_schema(get_connection())
@@ -1077,10 +1038,35 @@ class TestExpiryMigration:
         row = get_connection().execute(
             "SELECT best_before_date, best_before_days FROM stock WHERE id = ?", (stock_id,)
         ).fetchone()
-        assert row["best_before_date"] == "2027-05-09", (
-            f"expected 2026-05-09 + 365 days = 2027-05-09, got {row['best_before_date']}"
+        # bb_days stays as authoritative; best_before_date is recomputed.
+        assert row["best_before_days"] == 7
+        assert row["best_before_date"] == "2026-05-16", (
+            f"expected 2026-05-09 + 7 days = 2026-05-16, got {row['best_before_date']}"
         )
-        assert row["best_before_days"] == 365
+
+    def test_realign_is_idempotent(self):
+        """Running the migration again on already-consistent data is a no-op."""
+        from main import get_connection
+        from database import _migrate_schema
+
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        loc = client.get("/api/locations").json()[0]["id"]
+        p = client.post("/api/products", json={
+            "name": f"Idempotent_{id(self)}",
+            "unit_id": kpl,
+            "default_best_before_days": 30,
+        }).json()
+        # Adding through the API writes a self-consistent row.
+        entry = client.post("/api/stock/add", json={"product_id": p["id"], "amount": 1}).json()
+        original_date = entry["best_before_date"]
+
+        _migrate_schema(get_connection())
+        _migrate_schema(get_connection())
+
+        row = get_connection().execute(
+            "SELECT best_before_date FROM stock WHERE id = ?", (entry["id"],)
+        ).fetchone()
+        assert row["best_before_date"] == original_date
 
 
 class TestOptimizeUngroupedOnly:
@@ -1417,7 +1403,9 @@ class TestExpirySnapshot:
         assert entry["best_before_days"] == 10
         assert entry["best_before_date"] == expected_bb
 
-    def test_user_override_best_before_date_sticks(self):
+    def test_user_override_best_before_date_drives_bb_days(self):
+        """A user-supplied best_before_date is converted into a per-lot bb_days
+        value so the displayed expiry always equals purchased_date + bb_days."""
         from datetime import date, timedelta
         pid, _, _ = self._make_product(bb_days=10)
         override = (date.today() + timedelta(days=3)).isoformat()
@@ -1425,9 +1413,9 @@ class TestExpirySnapshot:
             "/api/stock/add",
             json={"product_id": pid, "amount": 1, "best_before_date": override},
         ).json()
-        # Snapshot of product default still recorded for audit.
-        assert entry["best_before_days"] == 10
-        # But the user's override is what's stored.
+        # bb_days reflects the realized interval for this lot, not the product default.
+        assert entry["best_before_days"] == 3
+        # The override date is preserved exactly because purchased_date + 3 == override.
         assert entry["best_before_date"] == override
 
     def test_purchased_date_override_shifts_expiry(self):

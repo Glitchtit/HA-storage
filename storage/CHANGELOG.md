@@ -1,3 +1,8 @@
+## 0.9.3
+- **Semantic switch:** `best_before_days` is now the authoritative per-lot value; `best_before_date` is a derived/cached function of `purchased_date + best_before_days`. This guarantees the displayed columns are always internally consistent — `Scanned + BB (days) == Expires`, always.
+- `POST /stock/add`: a user-supplied `best_before_date` is converted into a per-lot `bb_days` value (`override − purchased`) and stored. The override date is preserved exactly; `bb_days` reflects the realized interval for this lot, not the product default. Negative or zero diffs are accepted ("expires today" / "already expired on import").
+- New always-on, idempotent migration pass: rows where `best_before_date != purchased_date + best_before_days` are realigned in place. Self-heals legacy import drift on every init; no-op once consistent. Replaces the two one-shot repair passes from 0.9.1 and 0.9.2 (which trusted the stored date over the days — wrong direction).
+
 ## 0.9.2
 - Rewrote sentinel `best_before_date` values from pre-0.9.0 imports. Lots whose stored expiry is past the year 2100 (e.g. `2999-12-31`, a common "no real expiry" sentinel from receipt OCR / barcode lookup paths) now get both their expiry date AND `best_before_days` rewritten to `purchased_date + product.default_best_before_days`. The product's stated policy is more trustworthy than a clearly-bogus stored value.
 - One-shot, gated by `_meta.bbd_sentinel_repair_v1`, bounded by a `created_at` cutoff. Lots with plausible (under ~75-year) expiry dates are untouched.

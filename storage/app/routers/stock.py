@@ -133,17 +133,29 @@ def add_stock(body: StockAdd):
         row = conn.execute("SELECT date('now') as d").fetchone()
         purchased_date = row["d"]
 
-    # Snapshot of the product's best-before-days at the moment of add.
-    bb_days = int(product["default_best_before_days"] or 0)
-
-    # Derived expiry — user override wins.
-    best_before = body.best_before_date
-    if not best_before and bb_days > 0:
-        row = conn.execute(
-            "SELECT date(?, '+' || ? || ' days') as d",
-            (purchased_date, bb_days),
+    # best_before_days is authoritative. If the user supplied a best_before_date,
+    # convert it into a per-lot bb_days value (which may be 0 or negative — those
+    # are still valid: "expires today" or "already expired on import") and store
+    # the override date as-is. Otherwise snapshot the product's default and derive
+    # the date from (purchased_date, bb_days). The displayed expiry always equals
+    # purchased_date + best_before_days.
+    if body.best_before_date:
+        diff = conn.execute(
+            "SELECT CAST(julianday(?) - julianday(?) AS INTEGER) AS d",
+            (body.best_before_date, purchased_date),
         ).fetchone()
-        best_before = row["d"]
+        bb_days = int(diff["d"])
+        best_before = body.best_before_date
+    else:
+        bb_days = int(product["default_best_before_days"] or 0)
+        if bb_days > 0:
+            row = conn.execute(
+                "SELECT date(?, '+' || ? || ' days') as d",
+                (purchased_date, bb_days),
+            ).fetchone()
+            best_before = row["d"]
+        else:
+            best_before = None
 
     cur = conn.execute(
         """INSERT INTO stock
