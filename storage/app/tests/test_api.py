@@ -1416,13 +1416,16 @@ class TestFifoOrder:
         same_bb = (date.today() + timedelta(days=5)).isoformat()
         older = (date.today() - timedelta(days=2)).isoformat()
         newer = date.today().isoformat()
-        lot_older = client.post(
-            "/api/stock/add",
-            json={"product_id": pid, "amount": 1, "best_before_date": same_bb, "purchased_date": older},
-        ).json()
+        # Insert the NEWER-purchased lot FIRST so it gets the lower id. This way the
+        # old ORDER BY (which fell back on id) would have consumed it first, but the
+        # new purchased_date tiebreak overrides that and consumes the older lot.
         lot_newer = client.post(
             "/api/stock/add",
             json={"product_id": pid, "amount": 1, "best_before_date": same_bb, "purchased_date": newer},
+        ).json()
+        lot_older = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "best_before_date": same_bb, "purchased_date": older},
         ).json()
 
         client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
