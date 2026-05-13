@@ -1,3 +1,7 @@
+## 0.8.2
+- Scraper auto-detection: storage's s6 startup script and nginx proxy now look for the new `scraper` slug (matches HA-scraper 2.0.0) instead of the old `grocy_scraper`. Missed in 0.8.1
+- Pure infra change; the `/api/migrate/grocy` endpoint is unchanged
+
 ## 0.8.1
 - Docs: dropped legacy "Replaces Grocy + Barcode Buddy" framing from README and copilot-instructions — the codebase is its own thing, not a migration target
 - Docs: removed vestigial Barcode Buddy mentions; the barcode queue is described on its own merits
