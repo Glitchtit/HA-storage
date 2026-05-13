@@ -311,76 +311,25 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             bbd_filled, pd_filled,
         )
 
-    # One-shot repair pass for 0.9.0 installs that backfilled best_before_days from
-    # the product default and ended up with rows where best_before_days disagrees
-    # with the (purchased_date, best_before_date) pair (e.g. lots with a 2999-12-31
-    # sentinel expiry). Gated by a _meta flag so it runs exactly once. Bounded by
-    # the current timestamp so it never touches lots added after the repair lands.
-    already_repaired = conn.execute(
-        "SELECT value FROM _meta WHERE key = 'bb_days_repaired_v1'"
-    ).fetchone()
-    if not already_repaired:
-        cutoff = conn.execute("SELECT datetime('now') AS now").fetchone()["now"]
-        repaired = conn.execute("""
-            UPDATE stock SET best_before_days = CAST(
-                julianday(best_before_date) - julianday(purchased_date) AS INTEGER
-            )
-            WHERE best_before_date IS NOT NULL
-              AND purchased_date IS NOT NULL
-              AND created_at < ?
-              AND best_before_days != CAST(
-                  julianday(best_before_date) - julianday(purchased_date) AS INTEGER
-              )
-        """, (cutoff,)).rowcount
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('bb_days_repaired_v1', ?)",
-            (str(repaired),),
+    # Enforce the per-lot invariant: best_before_date = purchased_date + best_before_days.
+    # best_before_days is authoritative (snapshot of product policy or user-set per-lot
+    # override); the date column is a derived/cached value of that math. Always-on and
+    # idempotent — once consistent, the WHERE clause matches nothing. Self-heals any
+    # row that drifts (legacy imports, sentinels, manual SQL edits).
+    realigned = conn.execute("""
+        UPDATE stock
+        SET best_before_date = date(purchased_date, '+' || best_before_days || ' days')
+        WHERE purchased_date IS NOT NULL
+          AND best_before_days IS NOT NULL
+          AND best_before_days > 0
+          AND best_before_date IS NOT date(purchased_date, '+' || best_before_days || ' days')
+    """).rowcount
+    conn.commit()
+    if realigned:
+        log.info(
+            "Realigned best_before_date for %d stock row(s) (date is derived from purchased_date + best_before_days).",
+            realigned,
         )
-        conn.commit()
-        if repaired:
-            log.info(
-                "Repaired best_before_days for %d stock row(s) where it diverged from the date pair.",
-                repaired,
-            )
-
-    # Second one-shot repair: lots with sentinel-style best_before_date (year > 2100,
-    # typically 2999-12-31 from receipt imports or "no real expiry" defaults) get
-    # their date AND days rewritten from the product's default_best_before_days.
-    # This trusts the product's policy over a clearly-bogus stored value. Gated by
-    # its own _meta flag and bounded by created_at so post-upgrade lots are safe.
-    already_date_repaired = conn.execute(
-        "SELECT value FROM _meta WHERE key = 'bbd_sentinel_repair_v1'"
-    ).fetchone()
-    if not already_date_repaired:
-        cutoff = conn.execute("SELECT datetime('now') AS now").fetchone()["now"]
-        sentinel_repaired = conn.execute("""
-            UPDATE stock SET
-                best_before_date = date(
-                    purchased_date,
-                    '+' || (
-                        SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
-                    ) || ' days'
-                ),
-                best_before_days = (
-                    SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
-                )
-            WHERE best_before_date > '2100-01-01'
-              AND purchased_date IS NOT NULL
-              AND created_at < ?
-              AND (
-                  SELECT default_best_before_days FROM products WHERE products.id = stock.product_id
-              ) > 0
-        """, (cutoff,)).rowcount
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('bbd_sentinel_repair_v1', ?)",
-            (str(sentinel_repaired),),
-        )
-        conn.commit()
-        if sentinel_repaired:
-            log.info(
-                "Repaired %d stock row(s) with sentinel best_before_date (year > 2100) using product default.",
-                sentinel_repaired,
-            )
 
     # Canonical FIFO index. Idempotent — safe on every init.
     conn.execute("""
