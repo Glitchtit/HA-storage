@@ -1,3 +1,6 @@
+## 0.12.2
+- Add **"What's new"** popup — when you open Storage after an update, a dismissable modal shows the changelog entries for every version released since your last visit. Markers persist per-browser via `localStorage` (`storage_whatsnew_lastSeen`); first visit silently marks the current version as seen so users don't get a wall of historical changelog on first install
+
 ## 0.12.1
 - Dashboard "Low Stock Alerts" now correctly lists products whose stock is below `min_stock_amount`, including those that are completely out of stock. The `/stock` endpoint drops products with zero `total_amount` via its `HAVING` clause, so the dashboard now joins the product list against the stock map locally instead of relying on `/stock` alone.
 
