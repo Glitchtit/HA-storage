@@ -1,3 +1,6 @@
+## 0.12.1
+- Dashboard "Low Stock Alerts" now correctly lists products whose stock is below `min_stock_amount`, including those that are completely out of stock. The `/stock` endpoint drops products with zero `total_amount` via its `HAVING` clause, so the dashboard now joins the product list against the stock map locally instead of relying on `/stock` alone.
+
 ## 0.12.0
 - Predictive insights. `GET /api/stats/runouts?horizon=N` returns products predicted to deplete within N days, using the same 8-week consumption-velocity model that drives the shopping proposal — but without the proposal's "only opted-in products" filter so the dashboard can show all upcoming runouts. New helper `consumption_stats.predicted_runouts` is the shared core.
 - `GET /api/stats/digest` returns a single bundle for HA notifications: monetary waste (30d), expiring lots (7d), predicted runouts (14d), and top spoilers. Backed by `consumption_stats.weekly_digest`.
