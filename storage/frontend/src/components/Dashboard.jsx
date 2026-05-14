@@ -100,10 +100,27 @@ export default function Dashboard() {
         shopping: pendingShoppingCount,
       });
 
-      // Low stock: amount < min_stock_amount where min_stock_amount > 0
+      // Low stock: amount < min_stock_amount where min_stock_amount > 0.
+      // Note: /stock drops products with total_amount = 0 via HAVING, so we
+      // join products against the stock map ourselves — otherwise completely
+      // out-of-stock items (the worst case) would never appear here.
+      const stockByProduct = new Map();
       if (Array.isArray(stock)) {
-        const low = stock
-          .filter((s) => s.min_stock_amount > 0 && s.amount < s.min_stock_amount)
+        for (const s of stock) stockByProduct.set(s.product_id, s);
+      }
+      if (Array.isArray(products)) {
+        const low = products
+          .filter((p) => p.active && p.min_stock_amount > 0)
+          .map((p) => {
+            const s = stockByProduct.get(p.id);
+            return {
+              product_id: p.id,
+              product_name: p.name,
+              amount: s ? s.amount : 0,
+              min_stock_amount: p.min_stock_amount,
+            };
+          })
+          .filter((row) => row.amount < row.min_stock_amount)
           .sort((a, b) => a.amount / a.min_stock_amount - b.amount / b.min_stock_amount);
         setLowStock(low);
       }
