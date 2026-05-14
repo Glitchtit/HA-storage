@@ -13,6 +13,7 @@ import BarcodeQueue from './components/BarcodeQueue';
 import Settings from './components/Settings';
 import Optimize from './components/Optimize';
 import History from './components/History';
+import WhatsNewModal from './components/WhatsNewModal';
 
 const TABS = [
   { id: 'dashboard', label: '📊 Dashboard', component: Dashboard },
@@ -67,6 +68,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-900 text-gray-100">
+      <WhatsNewModal />
       {/* Header */}
       <header className="bg-gray-900/90 backdrop-blur-md border-b border-gray-800 px-4 py-2 flex items-center justify-between shrink-0">
         <h1 className="text-lg font-bold">🗄️ Storage</h1>
