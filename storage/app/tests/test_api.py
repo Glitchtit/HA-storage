@@ -705,6 +705,30 @@ class TestShoppingClearOnPurchase:
         assert r.status_code == 201
         assert self._shopping_rows_for(pid) == []
 
+    def test_done_row_untouched(self):
+        """A manual row already marked done (soft-deleted) must not be
+        re-touched by the helper — the user has handled it intentionally."""
+        pid, kpl, loc_id = self._setup()
+        item = self._add_manual(pid, amount=2, unit_id=kpl)
+        # Mark the row done explicitly
+        r_put = client.put(
+            f"/api/shopping-list/{item['id']}", json={"done": True}
+        )
+        assert r_put.status_code == 200
+
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 5, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        assert r.status_code == 201
+
+        rows = self._shopping_rows_for(pid)
+        assert len(rows) == 1
+        assert rows[0]["id"] == item["id"]
+        assert rows[0]["done"] is True
+        assert rows[0]["amount"] == 2  # untouched
+
 
 # ── Cook recipe ────────────────────────────────────────────────────────────
 
