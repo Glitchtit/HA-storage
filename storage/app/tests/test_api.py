@@ -556,7 +556,7 @@ class TestShoppingClearOnPurchase:
 
     def test_full_consume_deletes_row(self):
         pid, kpl, loc_id = self._setup()
-        item = self._add_manual(pid, amount=1, unit_id=kpl)
+        self._add_manual(pid, amount=1, unit_id=kpl)
         assert self._shopping_rows_for(pid) != []
 
         r = client.post(
