@@ -17,6 +17,12 @@ from models import (
 router = APIRouter(tags=["shopping-list"])
 log = logging.getLogger(__name__)
 
+# Treat row amounts within this tolerance of zero as fully consumed.
+# Subtracting fractional amounts across rows accumulates IEEE-754
+# residues that can leave near-zero positives; this epsilon snaps them
+# to "done".
+_AMOUNT_EPSILON = 1e-9
+
 
 def _get_db():
     from main import get_connection
@@ -98,7 +104,10 @@ def consume_shopping_for_purchase(
     product whose `unit_id` is equivalent to the purchase's `unit_id`
     (treating NULL/NULL as a match).
 
-    Iterates oldest-first (`created_at ASC`), subtracting `amount` from each
+    Iterates oldest-first (`created_at ASC`, with `id ASC` as a tiebreaker
+    because `created_at` is a TEXT column with one-second resolution and two
+    rows inserted in the same second would otherwise have unspecified order),
+    subtracting `amount` from each
     matching row. A row whose new amount is `<= 0` is hard-deleted and the
     leftover (the negation of `new_amount`) spills into the next row. Rows
     whose new amount stays `> 0` are updated in place.
@@ -124,7 +133,7 @@ def consume_shopping_for_purchase(
         if remaining <= 0:
             break
         new_amount = float(row["amount"]) - remaining
-        if new_amount <= 0:
+        if new_amount <= _AMOUNT_EPSILON:
             conn.execute("DELETE FROM shopping_list WHERE id = ?", (row["id"],))
             remaining = -new_amount  # spill leftover into next row
         else:
