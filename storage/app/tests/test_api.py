@@ -586,6 +586,120 @@ class TestShoppingClearOnPurchase:
         assert rows[0]["amount"] == 5
         assert rows[0]["done"] is False
 
+    def test_spill_across_rows(self):
+        """Purchase amount exceeds first row → leftover spills to next row,
+        oldest first."""
+        pid, kpl, loc_id = self._setup()
+        # Two rows, insertion order is the implicit oldest→newest order
+        first = self._add_manual(pid, amount=1, unit_id=kpl)
+        second = self._add_manual(pid, amount=2, unit_id=kpl)
+
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 2, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        assert r.status_code == 201
+
+        rows = self._shopping_rows_for(pid)
+        assert len(rows) == 1
+        assert rows[0]["id"] == second["id"]
+        assert rows[0]["amount"] == 1  # 2 - (2 - 1)
+
+    def test_auto_added_row_untouched(self):
+        """Auto-added rows remain governed by sync_auto_shopping (min_stock).
+        The new helper must not touch them."""
+        kpl = next(u["id"] for u in client.get("/api/units").json()
+                   if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        # min_stock_amount high so sync_auto_shopping won't clear after restock
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ClearOnBuyAuto_{id(self)}",
+                  "unit_id": kpl, "min_stock_amount": 10},
+        ).json()["id"]
+        # Force an auto-added row via the sync endpoint
+        client.post("/api/shopping-list/sync")
+        rows = [r for r in client.get("/api/shopping-list").json()
+                if r["product_id"] == pid]
+        assert len(rows) == 1 and rows[0]["auto_added"] is True
+        original_amount = rows[0]["amount"]
+
+        # Buy 1 — stock still below min_stock_amount, sync_auto_shopping
+        # leaves the auto-added row in place; the new helper must too.
+        client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        rows_after = [r for r in client.get("/api/shopping-list").json()
+                      if r["product_id"] == pid]
+        assert len(rows_after) == 1
+        assert rows_after[0]["auto_added"] is True
+        assert rows_after[0]["amount"] == original_amount
+
+    def test_unit_mismatch_skips_row(self):
+        """Shopping row in unit A, purchase in unit B → row untouched."""
+        units = {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ClearOnBuyUnit_{id(self)}",
+                  "unit_id": units["kpl"]},
+        ).json()["id"]
+        item = client.post(
+            "/api/shopping-list",
+            json={"product_id": pid, "amount": 2, "unit_id": units["l"]},
+        ).json()
+
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "unit_id": units["kpl"],
+                  "location_id": loc_id},
+        )
+        assert r.status_code == 201
+
+        rows = self._shopping_rows_for(pid)
+        assert len(rows) == 1
+        assert rows[0]["id"] == item["id"]
+        assert rows[0]["amount"] == 2
+
+    def test_stock_consume_does_not_clear_shopping(self):
+        """Consume is using existing stock, not buying — must not fire the
+        new helper."""
+        pid, kpl, loc_id = self._setup()
+        # Seed stock so consume succeeds
+        client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 5, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        # Add a fresh manual shopping row after the stock-add (the stock-add
+        # itself would have cleared a pre-existing row).
+        item = self._add_manual(pid, amount=1, unit_id=kpl)
+
+        r = client.post(
+            "/api/stock/consume",
+            json={"product_id": pid, "amount": 1},
+        )
+        assert r.status_code == 200
+
+        rows = self._shopping_rows_for(pid)
+        assert len(rows) == 1
+        assert rows[0]["id"] == item["id"]
+        assert rows[0]["amount"] == 1
+
+    def test_no_matching_rows_is_noop(self):
+        """Purchase for a product with no shopping rows succeeds normally."""
+        pid, kpl, loc_id = self._setup()
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        assert r.status_code == 201
+        assert self._shopping_rows_for(pid) == []
+
 
 # ── Cook recipe ────────────────────────────────────────────────────────────
 
