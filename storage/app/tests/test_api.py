@@ -623,18 +623,22 @@ class TestShoppingClearOnPurchase:
         rows = [r for r in client.get("/api/shopping-list").json()
                 if r["product_id"] == pid]
         assert len(rows) == 1 and rows[0]["auto_added"] is True
+        original_id = rows[0]["id"]
         original_amount = rows[0]["amount"]
 
         # Buy 1 — stock still below min_stock_amount, sync_auto_shopping
         # leaves the auto-added row in place; the new helper must too.
-        client.post(
+        r = client.post(
             "/api/stock/add",
             json={"product_id": pid, "amount": 1, "unit_id": kpl,
                   "location_id": loc_id},
         )
+        assert r.status_code == 201
+
         rows_after = [r for r in client.get("/api/shopping-list").json()
                       if r["product_id"] == pid]
         assert len(rows_after) == 1
+        assert rows_after[0]["id"] == original_id
         assert rows_after[0]["auto_added"] is True
         assert rows_after[0]["amount"] == original_amount
 
@@ -688,6 +692,7 @@ class TestShoppingClearOnPurchase:
         assert len(rows) == 1
         assert rows[0]["id"] == item["id"]
         assert rows[0]["amount"] == 1
+        assert rows[0]["done"] is False
 
     def test_no_matching_rows_is_noop(self):
         """Purchase for a product with no shopping rows succeeds normally."""
