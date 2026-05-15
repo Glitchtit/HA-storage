@@ -1,3 +1,6 @@
+## 0.12.6
+- Revert 0.12.5: bind uvicorn back to `0.0.0.0`. The Supervisor container has `bindv6only=1`, so the dual-stack `::` bind only listened on IPv6 — the local nginx wait loop and upstream proxy (both targeting `http://127.0.0.1:8100`) got connection-refused on every health check, leaving Storage looking dead to its own ingress. The original IPv6 upstream-refused churn in sibling addons will be addressed client-side instead.
+
 ## 0.12.5
 - uvicorn now binds to `::` (dual-stack) instead of `0.0.0.0`. Docker's embedded DNS returns both A and AAAA records for the add-on container, so IPv6-capable clients (nginx in HA-stock / HA-recipes / HA-print, plus any HACS integration) were repeatedly hitting `connect() failed (111: Connection refused)` against the AAAA endpoint and silently falling back to IPv4 — clean in the response but loud in the upstream logs. Binding dual-stack makes the AAAA endpoint answer too, eliminating the connection-refused churn.
 
