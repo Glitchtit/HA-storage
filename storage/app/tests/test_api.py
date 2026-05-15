@@ -528,6 +528,65 @@ class TestShoppingProposal:
         assert isinstance(r["proposal"], list)
 
 
+# ── Shopping clear on purchase ─────────────────────────────────────────────
+
+class TestShoppingClearOnPurchase:
+    """When /stock/add fires, manual shopping rows for that product are
+    decremented quantity-aware and hard-deleted once amount reaches 0."""
+
+    def _setup(self):
+        units = {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ClearOnBuy_{id(self)}_{self.__class__.__name__}",
+                  "unit_id": units["kpl"]},
+        ).json()["id"]
+        return pid, units["kpl"], loc_id
+
+    def _add_manual(self, pid, amount, unit_id=None):
+        return client.post(
+            "/api/shopping-list",
+            json={"product_id": pid, "amount": amount, "unit_id": unit_id},
+        ).json()
+
+    def _shopping_rows_for(self, pid):
+        return [r for r in client.get("/api/shopping-list").json()
+                if r["product_id"] == pid]
+
+    def test_full_consume_deletes_row(self):
+        pid, kpl, loc_id = self._setup()
+        item = self._add_manual(pid, amount=1, unit_id=kpl)
+        assert self._shopping_rows_for(pid) != []
+
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        assert r.status_code == 201
+
+        assert self._shopping_rows_for(pid) == [], \
+            "manual shopping row should be hard-deleted when amount hits 0"
+
+    def test_partial_consume_decrements_row(self):
+        pid, kpl, loc_id = self._setup()
+        item = self._add_manual(pid, amount=6, unit_id=kpl)
+
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "unit_id": kpl,
+                  "location_id": loc_id},
+        )
+        assert r.status_code == 201
+
+        rows = self._shopping_rows_for(pid)
+        assert len(rows) == 1
+        assert rows[0]["id"] == item["id"]
+        assert rows[0]["amount"] == 5
+        assert rows[0]["done"] is False
+
+
 # ── Cook recipe ────────────────────────────────────────────────────────────
 
 class TestCookRecipe:
