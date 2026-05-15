@@ -45,7 +45,10 @@ def get_recipe(recipe_id: int):
                COALESCE((
                    SELECT SUM(s.amount) FROM stock s
                    WHERE s.product_id = ri.product_id
-                      OR s.product_id IN (SELECT id FROM products WHERE parent_id = ri.product_id)
+                      OR (
+                          ri.specificity = 'loose'
+                          AND s.product_id IN (SELECT id FROM products WHERE parent_id = ri.product_id)
+                      )
                ), 0) as stock_amount,
                p.unit_id as stock_unit_id
         FROM recipe_ingredients ri
@@ -71,10 +74,11 @@ def create_recipe(body: RecipeCreate):
 
     for idx, ing in enumerate(body.ingredients):
         conn.execute(
-            """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note, sort_order)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note, sort_order, specificity)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (recipe_id, ing.product_id, ing.amount, ing.unit_id, ing.note,
-             ing.sort_order if ing.sort_order else idx),
+             ing.sort_order if ing.sort_order else idx,
+             ing.specificity if ing.specificity in ("strict", "loose") else "loose"),
         )
 
     conn.commit()
@@ -164,9 +168,10 @@ def add_ingredient(recipe_id: int, body: IngredientCreate):
     if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
         raise HTTPException(404, f"Recipe {recipe_id} not found")
     cur = conn.execute(
-        """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note, sort_order)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (recipe_id, body.product_id, body.amount, body.unit_id, body.note, body.sort_order),
+        """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note, sort_order, specificity)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (recipe_id, body.product_id, body.amount, body.unit_id, body.note, body.sort_order,
+         body.specificity if body.specificity in ("strict", "loose") else "loose"),
     )
     conn.commit()
     return conn.execute("SELECT * FROM recipe_ingredients WHERE id = ?", (cur.lastrowid,)).fetchone()

@@ -306,6 +306,7 @@ class IngredientCreate(BaseModel):
     unit_id: int
     note: str = ""
     sort_order: int = 0
+    specificity: str = "loose"
 
 class IngredientUpdate(BaseModel):
     product_id: int | None = None
@@ -313,6 +314,7 @@ class IngredientUpdate(BaseModel):
     unit_id: int | None = None
     note: str | None = None
     sort_order: int | None = None
+    specificity: str | None = None
 
 class Ingredient(BaseModel):
     id: int
@@ -322,6 +324,7 @@ class Ingredient(BaseModel):
     unit_id: int
     note: str | None = None
     sort_order: int
+    specificity: str = "loose"
 
 class RecipeCreate(BaseModel):
     name: str

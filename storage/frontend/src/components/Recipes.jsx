@@ -5,6 +5,7 @@ import {
   deleteRecipe,
   recipeToShopping,
   recipeImageUrl,
+  updateIngredient,
 } from '../api';
 
 /* ── Stock status helpers ──────────────────────────────────────────────── */
@@ -19,6 +20,50 @@ function StockBadge({ amount, needed }) {
 function formatDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-US');
+}
+
+/* ── Specificity toggle ───────────────────────────────────────────────────
+   Loose: any child of the linked parent product counts as stock (default).
+   Strict: only the exact linked product counts (use for variants like
+   parmesan-vs-gouda where siblings under a "Juusto" parent aren't
+   interchangeable).
+*/
+function SpecificityToggle({ ingredient, recipeId, onChanged }) {
+  const [saving, setSaving] = useState(false);
+  const current = ingredient.specificity === 'strict' ? 'strict' : 'loose';
+
+  const flip = async () => {
+    const next = current === 'strict' ? 'loose' : 'strict';
+    setSaving(true);
+    try {
+      await updateIngredient(recipeId, ingredient.id, { specificity: next });
+      onChanged?.(next);
+    } catch {
+      alert('Failed to update match strictness');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={flip}
+      disabled={saving}
+      title={
+        current === 'strict'
+          ? 'Strict — only this exact product counts as stock'
+          : 'Loose — any child of the parent product counts as stock'
+      }
+      className={`px-2 py-0.5 rounded-full text-xs ${
+        current === 'strict'
+          ? 'bg-amber-900/40 text-amber-300'
+          : 'bg-gray-700 text-gray-300'
+      } disabled:opacity-50`}
+    >
+      {current === 'strict' ? '🎯 strict' : '〰️ loose'}
+    </button>
+  );
 }
 
 /* ── Recipe card (grid item) ───────────────────────────────────────────── */
@@ -183,6 +228,7 @@ function RecipeDetail({ recipeId, onClose, onDeleted }) {
                       <tr className="text-left text-gray-400 border-b border-gray-700">
                         <th className="pb-2 pr-3">Product</th>
                         <th className="pb-2 pr-3">Amount</th>
+                        <th className="pb-2 pr-3 text-center">Match</th>
                         <th className="pb-2 pr-3 text-center">Stock</th>
                         <th className="pb-2">Note</th>
                       </tr>
@@ -199,6 +245,20 @@ function RecipeDetail({ recipeId, onClose, onDeleted }) {
                             <td className="py-2 pr-3 text-gray-400 whitespace-nowrap">
                               {ing.amount != null ? ing.amount : '—'}{' '}
                               {ing.unit_abbreviation ?? ''}
+                            </td>
+                            <td className="py-2 pr-3 text-center">
+                              <SpecificityToggle
+                                ingredient={ing}
+                                recipeId={recipe.id}
+                                onChanged={(next) => {
+                                  setRecipe((r) => r && {
+                                    ...r,
+                                    ingredients: r.ingredients.map((x) =>
+                                      x.id === ing.id ? { ...x, specificity: next } : x,
+                                    ),
+                                  });
+                                }}
+                              />
                             </td>
                             <td className="py-2 pr-3 text-center">
                               <StockBadge

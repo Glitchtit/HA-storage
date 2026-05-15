@@ -1,3 +1,7 @@
+## 0.12.3
+- Per-ingredient `specificity` (`loose` | `strict`) on recipe ingredients. **Loose** (default, prior behavior) lets a child of the linked parent product satisfy the recipe — any cheese under a "Juusto" parent covers a generic "cheese" call. **Strict** requires the exact linked product, so a recipe specifying parmesan no longer reports as in-stock just because gouda is on hand. Stock-amount aggregation in `GET /api/recipes/{id}` is gated on this flag; the new column is added via lazy `ALTER TABLE` and a one-shot heuristic backfill upgrades loose rows to strict when the stored note text matches an existing child product name (e.g. "parmesan" under a "Juusto" parent → relink to Parmesan child + strict).
+- `IngredientCreate` / `IngredientUpdate` / `Ingredient` Pydantic models accept and return `specificity`. Recipe detail UI gains a per-row strict/loose toggle.
+
 ## 0.12.2
 - Add **"What's new"** popup — when you open Storage after an update, a dismissable modal shows the changelog entries for every version released since your last visit. Markers persist per-browser via `localStorage` (`storage_whatsnew_lastSeen`); first visit silently marks the current version as seen so users don't get a wall of historical changelog on first install
 

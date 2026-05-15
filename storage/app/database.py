@@ -99,13 +99,14 @@ CREATE TABLE IF NOT EXISTS recipes (
 );
 
 CREATE TABLE IF NOT EXISTS recipe_ingredients (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    recipe_id  INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
-    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    amount     REAL NOT NULL DEFAULT 1,
-    unit_id    INTEGER NOT NULL REFERENCES units(id),
-    note       TEXT DEFAULT '',
-    sort_order INTEGER DEFAULT 0
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id   INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    product_id  INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    amount      REAL NOT NULL DEFAULT 1,
+    unit_id     INTEGER NOT NULL REFERENCES units(id),
+    note        TEXT DEFAULT '',
+    sort_order  INTEGER DEFAULT 0,
+    specificity TEXT NOT NULL DEFAULT 'loose'
 );
 
 CREATE TABLE IF NOT EXISTS shopping_list (
@@ -367,6 +368,87 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE stock_history ADD COLUMN unit_price REAL")
         conn.commit()
         log.info("Added unit_price column to stock_history.")
+
+    # Per-ingredient specificity: 'loose' (default — substituting a child of the
+    # linked parent product is acceptable) or 'strict' (the recipe needs that
+    # exact product; siblings under the same parent are not interchangeable).
+    ri_cols = {r["name"] for r in conn.execute("PRAGMA table_info(recipe_ingredients)").fetchall()}
+    if "specificity" not in ri_cols:
+        conn.execute(
+            "ALTER TABLE recipe_ingredients ADD COLUMN specificity TEXT NOT NULL DEFAULT 'loose'"
+        )
+        conn.commit()
+        log.info("Added specificity column to recipe_ingredients.")
+
+    # One-shot heuristic backfill: upgrade rows to 'strict' when the stored
+    # note text matches an existing child product's name exactly. That captures
+    # rows scraped before specificity tracking existed where the recipe author
+    # named a specific variant (parmesan, gouda, …) but the matcher linked to
+    # the parent. We move product_id to the child and flip specificity to strict.
+    flag = conn.execute(
+        "SELECT value FROM _meta WHERE key = 'specificity_backfilled'"
+    ).fetchone()
+    if not flag:
+        upgraded = _backfill_recipe_specificity(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('specificity_backfilled', ?)",
+            (str(upgraded),),
+        )
+        conn.commit()
+        if upgraded:
+            log.info("Backfilled %d recipe_ingredients row(s) to specificity=strict.", upgraded)
+
+
+def _backfill_recipe_specificity(conn: sqlite3.Connection) -> int:
+    """Heuristic: for each loose ingredient whose `note` mentions a name that
+    matches an existing child product of the linked product, relink to that
+    child and mark the row strict. Returns the number of rows upgraded.
+
+    The note field stores '<prep note> — <finnish ingredient name>' so we scan
+    each tokenized note segment for a child name match. Only rows where the
+    linked product currently has children are considered.
+    """
+    rows = conn.execute("""
+        SELECT ri.id, ri.product_id, ri.note
+        FROM recipe_ingredients ri
+        WHERE ri.specificity = 'loose'
+          AND ri.note IS NOT NULL AND ri.note != ''
+          AND EXISTS (
+              SELECT 1 FROM products WHERE parent_id = ri.product_id
+          )
+    """).fetchall()
+    if not rows:
+        return 0
+
+    parent_children: dict[int, list[dict]] = {}
+    upgraded = 0
+    for row in rows:
+        parent_id = int(row["product_id"])
+        if parent_id not in parent_children:
+            parent_children[parent_id] = conn.execute(
+                "SELECT id, name FROM products WHERE parent_id = ?",
+                (parent_id,),
+            ).fetchall()
+        children = parent_children[parent_id]
+        if not children:
+            continue
+        # Split the note on common delimiters and compare each segment, lowercased
+        segments = [s.strip().lower() for s in row["note"].replace("—", "|").replace(",", "|").split("|") if s.strip()]
+        child_match: dict | None = None
+        for seg in segments:
+            for child in children:
+                if child["name"].lower().strip() == seg:
+                    child_match = child
+                    break
+            if child_match:
+                break
+        if child_match:
+            conn.execute(
+                "UPDATE recipe_ingredients SET product_id = ?, specificity = 'strict' WHERE id = ?",
+                (int(child_match["id"]), int(row["id"])),
+            )
+            upgraded += 1
+    return upgraded
 
 
 def init_db(conn: sqlite3.Connection) -> None:
