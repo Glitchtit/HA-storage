@@ -1,3 +1,6 @@
+## 0.12.5
+- uvicorn now binds to `::` (dual-stack) instead of `0.0.0.0`. Docker's embedded DNS returns both A and AAAA records for the add-on container, so IPv6-capable clients (nginx in HA-stock / HA-recipes / HA-print, plus any HACS integration) were repeatedly hitting `connect() failed (111: Connection refused)` against the AAAA endpoint and silently falling back to IPv4 — clean in the response but loud in the upstream logs. Binding dual-stack makes the AAAA endpoint answer too, eliminating the connection-refused churn.
+
 ## 0.12.4
 - Buying a tracked product now clears matching **manual** shopping list rows automatically. `POST /api/stock/add` decrements every non-done manual row (`auto_added = 0`) for that product whose unit matches the purchase, oldest-first; rows that reach amount 0 are hard-deleted, and any leftover spills into the next matching row. Unit mismatches are skipped — no automatic conversion. Auto-added rows continue to be managed by the existing `sync_auto_shopping()` against `min_stock_amount`, so the two mechanisms cover disjoint sets.
 
