@@ -18,7 +18,7 @@ from models import (
     StockTransfer,
 )
 from routers.history import log_event
-from routers.shopping import sync_auto_shopping
+from routers.shopping import sync_auto_shopping, consume_shopping_for_purchase
 
 router = APIRouter(tags=["stock"])
 log = logging.getLogger(__name__)
@@ -187,6 +187,7 @@ def add_stock(body: StockAdd):
     log.info("Added %.1f to stock for product %d (purchased=%s, bb_days=%d).",
              body.amount, body.product_id, purchased_date, bb_days)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
+    consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id)
     sync_auto_shopping(conn)
     return entry
 

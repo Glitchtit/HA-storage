@@ -85,6 +85,65 @@ def sync_auto_shopping(conn) -> dict:
     return {"added": added, "removed": removed}
 
 
+def consume_shopping_for_purchase(
+    conn,
+    product_id: int,
+    amount: float,
+    unit_id: int | None,
+) -> list[int]:
+    """Decrement manual shopping rows when stock is purchased for `product_id`.
+
+    Targets the disjoint complement of `sync_auto_shopping`: matches only
+    non-done **manual** rows (`auto_added = 0`, `done = 0`) for the given
+    product whose `unit_id` is equivalent to the purchase's `unit_id`
+    (treating NULL/NULL as a match).
+
+    Iterates oldest-first (`created_at ASC`), subtracting `amount` from each
+    matching row. A row whose new amount is `<= 0` is hard-deleted and the
+    leftover (the negation of `new_amount`) spills into the next row. Rows
+    whose new amount stays `> 0` are updated in place.
+
+    Returns the list of affected row ids (deleted or updated). The helper
+    commits only if at least one row changed, matching `sync_auto_shopping`.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, amount FROM shopping_list
+        WHERE product_id = ?
+          AND auto_added = 0
+          AND done = 0
+          AND ((unit_id IS NULL AND ? IS NULL) OR unit_id = ?)
+        ORDER BY created_at ASC, id ASC
+        """,
+        (product_id, unit_id, unit_id),
+    ).fetchall()
+
+    remaining = float(amount)
+    affected: list[int] = []
+    for row in rows:
+        if remaining <= 0:
+            break
+        new_amount = float(row["amount"]) - remaining
+        if new_amount <= 0:
+            conn.execute("DELETE FROM shopping_list WHERE id = ?", (row["id"],))
+            remaining = -new_amount  # spill leftover into next row
+        else:
+            conn.execute(
+                "UPDATE shopping_list SET amount = ? WHERE id = ?",
+                (new_amount, row["id"]),
+            )
+            remaining = 0
+        affected.append(row["id"])
+
+    if affected:
+        conn.commit()
+        log.info(
+            "Shopping clear-on-purchase: product=%d, amount=%.3f, affected=%d",
+            product_id, amount, len(affected),
+        )
+    return affected
+
+
 @router.get("/shopping-list", response_model=list[ShoppingItem])
 def list_shopping():
     return _get_db().execute(
