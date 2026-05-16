@@ -81,6 +81,13 @@ class Product(BaseModel):
     updated_at: str
     stock_amount: float = 0
     stock_opened: float = 0
+    # Aggregated stock from immediate children (parent_id = this product's id).
+    # Always 0 for non-parent rows. Kept separate from stock_amount so
+    # callers that care about "this exact SKU" (low-stock alerts, shopping
+    # list) keep their semantics; UI surfaces interested in category-level
+    # totals (the Products list) add this in for display.
+    children_stock_amount: float = 0
+    children_stock_opened: float = 0
 
 class ProductDetail(Product):
     """Product with related data included."""

@@ -1,3 +1,6 @@
+## 0.12.8
+- `Product` model gains `children_stock_amount` and `children_stock_opened` — the sum of stock entries on immediate child products. Surfaces in `GET /api/products` (CTE-joined per row) and `GET /api/products/{id}`. Lets the Products list UI show a parent's category total (own + children) so a "Punasipuli" parent with stocked SKU children renders e.g. `2 ↓` instead of `–`, with the breakdown in a tooltip. `stock_amount` semantics are unchanged (still own-only) so low-stock alerts, shopping list, and other consumers that care about the specific SKU keep their current behaviour. Pure-leaf rows have `children_stock_amount=0` and render exactly as before.
+
 ## 0.12.7
 - `GET /api/products` now includes aggregated `stock_amount` and `stock_opened` per row (LEFT JOIN onto the `stock` table). The endpoint previously returned raw `products` rows with no stock data, so the frontend's product list rendered `–` in the Stock column for every product even when `GET /api/products/{id}` showed real stock. The base `Product` model gains `stock_amount: float = 0` and `stock_opened: float = 0` (additive — no breaking changes for existing consumers).
 
