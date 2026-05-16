@@ -169,6 +169,26 @@ class TestProducts:
         assert "barcodes" in r.json()
         assert "stock_amount" in r.json()
 
+    def test_list_products_includes_stock_aggregate(self):
+        """GET /products must include `stock_amount` per row, summed across
+        all stock entries for that product. Previously the list endpoint
+        returned raw product rows with no stock data, so the frontend
+        rendered `–` for every row even when stock existed (visible
+        immediately under `GET /products/{id}` which DID include stock)."""
+        kpl = self._kpl_id()
+        r = client.post("/api/products", json={"name": "ListStockTest", "unit_id": kpl})
+        pid = r.json()["id"]
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 7})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5})
+
+        r = client.get("/api/products")
+        assert r.status_code == 200
+        row = next((p for p in r.json() if p["id"] == pid), None)
+        assert row is not None
+        assert row.get("stock_amount") == 12, (
+            f"Expected aggregated stock_amount=12 on list row, got {row.get('stock_amount')!r}"
+        )
+
     def test_update_product(self):
         r = client.post("/api/products", json={"name": "UpdateMe", "unit_id": self._kpl_id()})
         pid = r.json()["id"]

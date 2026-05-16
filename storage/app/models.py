@@ -79,13 +79,13 @@ class Product(BaseModel):
     unit_price_currency: str | None = None
     created_at: str
     updated_at: str
+    stock_amount: float = 0
+    stock_opened: float = 0
 
 class ProductDetail(Product):
     """Product with related data included."""
     children: list[Product] = []
     barcodes: list["Barcode"] = []
-    stock_amount: float = 0
-    stock_opened: float = 0
     matched_pack_size: float = 1.0
 
 # ── Barcodes ───────────────────────────────────────────────────────────────
