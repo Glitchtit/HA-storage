@@ -26,15 +26,27 @@ def list_products(
     clauses = []
     params: list = []
     if active_only:
-        clauses.append("active = 1")
+        clauses.append("p.active = 1")
     if parent_id is not None:
-        clauses.append("parent_id = ?")
+        clauses.append("p.parent_id = ?")
         params.append(parent_id)
     if group_id is not None:
-        clauses.append("product_group_id = ?")
+        clauses.append("p.product_group_id = ?")
         params.append(group_id)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    return conn.execute(f"SELECT * FROM products{where} ORDER BY name", params).fetchall()
+    return conn.execute(
+        f"""
+        SELECT p.*,
+               COALESCE(SUM(s.amount), 0) AS stock_amount,
+               COALESCE(SUM(s.amount_opened), 0) AS stock_opened
+        FROM products p
+        LEFT JOIN stock s ON s.product_id = p.id
+        {where}
+        GROUP BY p.id
+        ORDER BY p.name
+        """,
+        params,
+    ).fetchall()
 
 
 @router.get("/products/{product_id}", response_model=ProductDetail)
