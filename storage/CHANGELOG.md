@@ -1,3 +1,6 @@
+## 0.12.7
+- `GET /api/products` now includes aggregated `stock_amount` and `stock_opened` per row (LEFT JOIN onto the `stock` table). The endpoint previously returned raw `products` rows with no stock data, so the frontend's product list rendered `–` in the Stock column for every product even when `GET /api/products/{id}` showed real stock. The base `Product` model gains `stock_amount: float = 0` and `stock_opened: float = 0` (additive — no breaking changes for existing consumers).
+
 ## 0.12.6
 - Revert 0.12.5: bind uvicorn back to `0.0.0.0`. The Supervisor container has `bindv6only=1`, so the dual-stack `::` bind only listened on IPv6 — the local nginx wait loop and upstream proxy (both targeting `http://127.0.0.1:8100`) got connection-refused on every health check, leaving Storage looking dead to its own ingress. The original IPv6 upstream-refused churn in sibling addons will be addressed client-side instead.
 
