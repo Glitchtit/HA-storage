@@ -169,6 +169,43 @@ class TestProducts:
         assert "barcodes" in r.json()
         assert "stock_amount" in r.json()
 
+    def test_list_includes_children_stock_aggregate(self):
+        """GET /products must expose children_stock_amount per parent row, so
+        the Products list UI can render a parent's category-level total
+        (own stock + sum of all immediate children's stock). Lets users see
+        e.g. Punasipuli=2 from its SKU children instead of '–'."""
+        kpl = self._kpl_id()
+        # Parent
+        r = client.post("/api/products", json={"name": "ChildAggParent", "unit_id": kpl})
+        parent_id = r.json()["id"]
+        # Two children
+        r = client.post("/api/products", json={"name": "ChildA", "unit_id": kpl, "parent_id": parent_id})
+        child_a = r.json()["id"]
+        r = client.post("/api/products", json={"name": "ChildB", "unit_id": kpl, "parent_id": parent_id})
+        child_b = r.json()["id"]
+        # Stock on children only (the parent itself has none — typical SKU
+        # vs. category layout)
+        client.post("/api/stock/add", json={"product_id": child_a, "amount": 3})
+        client.post("/api/stock/add", json={"product_id": child_b, "amount": 5})
+
+        r = client.get("/api/products")
+        assert r.status_code == 200
+        rows = {p["id"]: p for p in r.json()}
+
+        # Parent: own stock 0, children's stock 8
+        assert rows[parent_id]["stock_amount"] == 0
+        assert rows[parent_id]["children_stock_amount"] == 8
+        # Children: their own stock unchanged, children_stock_amount = 0 (they have no grandchildren)
+        assert rows[child_a]["stock_amount"] == 3
+        assert rows[child_a]["children_stock_amount"] == 0
+        assert rows[child_b]["stock_amount"] == 5
+        assert rows[child_b]["children_stock_amount"] == 0
+
+        # Detail endpoint must also surface children_stock_amount
+        r = client.get(f"/api/products/{parent_id}")
+        assert r.status_code == 200
+        assert r.json()["children_stock_amount"] == 8
+
     def test_list_products_includes_stock_aggregate(self):
         """GET /products must include `stock_amount` per row, summed across
         all stock entries for that product. Previously the list endpoint

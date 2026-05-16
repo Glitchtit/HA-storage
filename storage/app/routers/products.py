@@ -36,11 +36,23 @@ def list_products(
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return conn.execute(
         f"""
+        WITH child_totals AS (
+            SELECT cp.parent_id AS pid,
+                   COALESCE(SUM(cs.amount), 0) AS amount,
+                   COALESCE(SUM(cs.amount_opened), 0) AS opened
+            FROM products cp
+            JOIN stock cs ON cs.product_id = cp.id
+            WHERE cp.parent_id IS NOT NULL
+            GROUP BY cp.parent_id
+        )
         SELECT p.*,
                COALESCE(SUM(s.amount), 0) AS stock_amount,
-               COALESCE(SUM(s.amount_opened), 0) AS stock_opened
+               COALESCE(SUM(s.amount_opened), 0) AS stock_opened,
+               COALESCE(ct.amount, 0) AS children_stock_amount,
+               COALESCE(ct.opened, 0) AS children_stock_opened
         FROM products p
         LEFT JOIN stock s ON s.product_id = p.id
+        LEFT JOIN child_totals ct ON ct.pid = p.id
         {where}
         GROUP BY p.id
         ORDER BY p.name
@@ -67,6 +79,11 @@ def get_product(product_id: int):
         "FROM stock WHERE product_id = ?",
         (product_id,),
     ).fetchone()
+    child_stock_row = conn.execute(
+        "SELECT COALESCE(SUM(s.amount), 0) as total, COALESCE(SUM(s.amount_opened), 0) as opened "
+        "FROM stock s JOIN products p ON p.id = s.product_id WHERE p.parent_id = ?",
+        (product_id,),
+    ).fetchone()
 
     return {
         **row,
@@ -74,6 +91,8 @@ def get_product(product_id: int):
         "barcodes": barcodes,
         "stock_amount": stock_row["total"],
         "stock_opened": stock_row["opened"],
+        "children_stock_amount": child_stock_row["total"],
+        "children_stock_opened": child_stock_row["opened"],
     }
 
 

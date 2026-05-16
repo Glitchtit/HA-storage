@@ -521,6 +521,11 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
               In stock: <strong>{detail.stock_amount ?? 0}</strong>
               {unit && ` ${unit.abbreviation || unit.name}`}
             </span>
+            {(detail.children_stock_amount ?? 0) > 0 && (
+              <span title="Sum of stock held against this product's immediate children (mixed units possible)">
+                In children: <strong>{detail.children_stock_amount}</strong>
+              </span>
+            )}
             {(detail.stock_opened ?? 0) > 0 && (
               <span>Opened: <strong>{detail.stock_opened}</strong></span>
             )}
@@ -972,9 +977,26 @@ function ProductRow({
           {unitAbbr(p.unit_id)}
         </td>
 
-        {/* Stock */}
+        {/* Stock — total (own + children) for parents, so a category like
+            "Punasipuli" surfaces stock held against its SKU children rather
+            than showing '–' just because the parent row itself has no
+            stock entries. Pure-leaf rows render their own stock as before. */}
         <td className="px-4 py-2 text-right font-medium text-gray-100">
-          {p.stock_amount ?? '–'}
+          {(() => {
+            const own = p.stock_amount ?? 0;
+            const fromChildren = p.children_stock_amount ?? 0;
+            const total = own + fromChildren;
+            if (total === 0) return '–';
+            if (fromChildren > 0) {
+              return (
+                <span title={`${own} on this product + ${fromChildren} aggregated from children`}>
+                  {total}
+                  <span className="text-gray-500 ml-0.5">↓</span>
+                </span>
+              );
+            }
+            return total;
+          })()}
         </td>
 
         {/* Best before (days) */}
