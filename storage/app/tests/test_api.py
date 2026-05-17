@@ -699,6 +699,41 @@ class TestShoppingClearOnPurchase:
         assert rows_after[0]["auto_added"] is True
         assert rows_after[0]["amount"] == original_amount
 
+    def test_null_unit_shopping_row_matches_default_unit_scan(self):
+        """Regression: manually adding a product to the shopping list (which
+        omits unit_id → stored as NULL) and then scanning it (which omits
+        unit_id → resolved to the product's default) must consume the row.
+
+        The HA-stock frontend never sends unit_id on either the shopping-list
+        POST or the stock/add POST. add_stock resolves the missing value to
+        the product default, so a strict NULL=NULL check on the row side
+        leaves the row untouched. A NULL unit on the row means "no preference",
+        so any purchase of the same product should clear it.
+        """
+        units = {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ClearOnBuyNullUnit_{id(self)}",
+                  "unit_id": units["kpl"]},
+        ).json()["id"]
+        # Frontend-realistic POST: no unit_id field at all → stored as NULL.
+        client.post(
+            "/api/shopping-list",
+            json={"product_id": pid, "amount": 1},
+        )
+        assert self._shopping_rows_for(pid) != []
+
+        # Frontend-realistic scan: no unit_id field; add_stock fills product default.
+        r = client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 1, "location_id": loc_id},
+        )
+        assert r.status_code == 201
+
+        assert self._shopping_rows_for(pid) == [], \
+            "manual shopping row with NULL unit_id should be cleared by a scan"
+
     def test_unit_mismatch_skips_row(self):
         """Shopping row in unit A, purchase in unit B → row untouched."""
         units = {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
