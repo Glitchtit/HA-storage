@@ -101,8 +101,10 @@ def consume_shopping_for_purchase(
 
     Targets the disjoint complement of `sync_auto_shopping`: matches only
     non-done **manual** rows (`auto_added = 0`, `done = 0`) for the given
-    product whose `unit_id` is equivalent to the purchase's `unit_id`
-    (treating NULL/NULL as a match).
+    product. A row's `unit_id` matches when it is NULL ("no preference" —
+    the common case, since the HA-stock frontend never sends a unit_id on
+    manual add) or equals the purchase's `unit_id`. A row that does specify
+    a unit is only consumed by a purchase in that same unit.
 
     Iterates oldest-first (`created_at ASC`, with `id ASC` as a tiebreaker
     because `created_at` is a TEXT column with one-second resolution and two
@@ -121,10 +123,10 @@ def consume_shopping_for_purchase(
         WHERE product_id = ?
           AND auto_added = 0
           AND done = 0
-          AND ((unit_id IS NULL AND ? IS NULL) OR unit_id = ?)
+          AND (unit_id IS NULL OR unit_id = ?)
         ORDER BY created_at ASC, id ASC
         """,
-        (product_id, unit_id, unit_id),
+        (product_id, unit_id),
     ).fetchall()
 
     remaining = float(amount)
