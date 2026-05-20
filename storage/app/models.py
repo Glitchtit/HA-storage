@@ -437,6 +437,25 @@ class ShoppingProposalResponse(BaseModel):
     horizon_days: int
     proposal: list[ShoppingProposalItem]
 
+class CadenceSuggestionItem(BaseModel):
+    product_id: int
+    product_name: str
+    unit_id: int
+    current_qty: float
+    purchase_count: int
+    avg_interval_days: float
+    days_since_last: float
+    days_until_expected: float   # negative = overdue
+    suggested_amount: float
+    is_kept: bool                # min_stock_amount > 0
+    reasoning: str
+
+class CadenceSuggestionResponse(BaseModel):
+    lookback_days: int
+    window_days: int
+    min_purchases: int
+    suggestions: list[CadenceSuggestionItem]
+
 # ── Receipt OCR ────────────────────────────────────────────────────────────
 
 class ReceiptParseRequest(BaseModel):
