@@ -6,8 +6,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
-from consumption_stats import compute_proposal
+from consumption_stats import compute_cadence_suggestions, compute_proposal
 from models import (
+    CadenceSuggestionResponse,
     ShoppingItem,
     ShoppingItemCreate,
     ShoppingItemUpdate,
@@ -183,6 +184,35 @@ def shopping_proposal(
         "lookback_weeks": lookback_weeks,
         "horizon_days": horizon_days,
         "proposal": items,
+    }
+
+
+@router.get("/shopping-list/cadence-suggestions", response_model=CadenceSuggestionResponse)
+def cadence_suggestions(
+    lookback_days: int = Query(180, ge=14, le=730),
+    window_days: int = Query(7, ge=1, le=30),
+    min_purchases: int = Query(3, ge=2, le=20),
+):
+    """Purchase-cadence shopping suggestions.
+
+    For products that are kept in stock (``min_stock_amount > 0``) or bought at
+    least ``min_purchases`` times in the last ``lookback_days``, learn the mean
+    interval between purchases and suggest a re-buy when today is within
+    ``window_days`` of the expected next purchase. Excludes items already on the
+    list or still well-stocked. Distinct from ``/shopping-list/proposal``, which
+    is consumption-velocity based.
+    """
+    items = compute_cadence_suggestions(
+        _get_db(),
+        lookback_days=lookback_days,
+        window_days=window_days,
+        min_purchases=min_purchases,
+    )
+    return {
+        "lookback_days": lookback_days,
+        "window_days": window_days,
+        "min_purchases": min_purchases,
+        "suggestions": items,
     }
 
 

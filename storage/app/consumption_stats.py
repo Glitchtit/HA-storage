@@ -100,6 +100,118 @@ def _reasoning_fi(weekly_rate: float, current_qty: float) -> str:
     return f"{round(weekly_rate, 1)}/vk, varastossa {round(current_qty, 1)}"
 
 
+def compute_cadence_suggestions(
+    conn,
+    *,
+    lookback_days: int = 180,
+    window_days: int = 7,
+    min_purchases: int = 3,
+) -> list[dict[str, Any]]:
+    """Suggest re-buys based on **purchase cadence** rather than consumption.
+
+    Complements :func:`compute_proposal` (which is consumption-velocity based):
+    here we learn the mean interval between ``purchase`` events in
+    ``stock_history`` and surface a product when *today* falls within
+    ``window_days`` of its expected next purchase (last purchase + mean
+    interval).
+
+    A product qualifies if it is "kept in stock" (``min_stock_amount > 0`` —
+    always considered) **or** "frequently bought" (at least ``min_purchases``
+    purchases in the lookback window). Either way it needs >= 2 purchases in
+    the window to derive an interval.
+
+    Excludes products already on the shopping list (done = 0) and products that
+    are still well-stocked (current qty at/above the keep-in-stock threshold,
+    or — for non-staples — at/above the typical purchase amount). Items overdue
+    by more than ``window_days`` drop off; they resurface once the next
+    purchase resets the anchor (so an already-rebought item never lingers).
+    """
+    lookback_days = max(1, lookback_days)
+    rows = conn.execute(
+        """
+        SELECT p.id AS product_id, p.name AS product_name, p.unit_id AS unit_id,
+               p.min_stock_amount AS min_stock_amount,
+               COALESCE((SELECT SUM(amount) FROM stock s WHERE s.product_id = p.id), 0) AS current_qty,
+               agg.cnt             AS cnt,
+               agg.avg_amount      AS avg_amount,
+               agg.span_days       AS span_days,
+               agg.days_since_last AS days_since_last,
+               EXISTS(
+                   SELECT 1 FROM shopping_list sl
+                   WHERE sl.product_id = p.id AND sl.done = 0
+               ) AS on_list
+        FROM products p
+        JOIN (
+            SELECT product_id,
+                   COUNT(*) AS cnt,
+                   AVG(amount) AS avg_amount,
+                   julianday(MAX(created_at)) - julianday(MIN(created_at)) AS span_days,
+                   julianday('now') - julianday(MAX(created_at)) AS days_since_last
+            FROM stock_history
+            WHERE event_type = 'purchase'
+              AND created_at >= datetime('now', ?)
+            GROUP BY product_id
+        ) agg ON agg.product_id = p.id
+        WHERE p.active = 1
+        """,
+        (f"-{lookback_days} days",),
+    ).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        cnt = int(r["cnt"] or 0)
+        if cnt < 2:
+            continue  # need two purchases to derive an interval
+
+        min_stock = float(r["min_stock_amount"] or 0)
+        is_kept = min_stock > 0
+        if not is_kept and cnt < min_purchases:
+            continue  # not a staple and not frequent enough
+
+        if r["on_list"]:
+            continue
+
+        span_days = float(r["span_days"] or 0)
+        avg_interval = span_days / (cnt - 1)
+        if avg_interval <= 0:
+            continue  # all purchases logged at the same instant — no rhythm
+
+        days_since_last = float(r["days_since_last"] or 0)
+        days_until_expected = avg_interval - days_since_last
+        if abs(days_until_expected) > window_days:
+            continue  # not within +-1 week of expected restock
+
+        current = float(r["current_qty"] or 0)
+        avg_amount = float(r["avg_amount"] or 0)
+        threshold = min_stock if is_kept else avg_amount
+        if threshold > 0 and current >= threshold:
+            continue  # still well-stocked
+
+        suggested = round((avg_amount or min_stock or 1), 1)
+        out.append({
+            "product_id": int(r["product_id"]),
+            "product_name": r["product_name"],
+            "unit_id": int(r["unit_id"]),
+            "current_qty": round(current, 2),
+            "purchase_count": cnt,
+            "avg_interval_days": round(avg_interval, 1),
+            "days_since_last": round(days_since_last, 1),
+            "days_until_expected": round(days_until_expected, 1),
+            "suggested_amount": suggested,
+            "is_kept": is_kept,
+            "reasoning": _cadence_reasoning_fi(avg_interval, days_since_last),
+        })
+
+    out.sort(key=lambda x: x["days_until_expected"])
+    return out
+
+
+def _cadence_reasoning_fi(avg_interval: float, days_since_last: float) -> str:
+    """Short Finnish reasoning string for the cadence-suggestion UI."""
+    base = f"~{round(avg_interval)} pv välein, ostettu {round(days_since_last)} pv sitten"
+    return base + " (myöhässä)" if days_since_last > avg_interval else base
+
+
 def predicted_runouts(
     conn,
     *,
