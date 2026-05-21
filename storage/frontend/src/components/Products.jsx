@@ -28,6 +28,8 @@ const EMPTY_FORM = {
   default_best_before_days: 0,
   min_stock_amount: 0,
   unit_price: null,
+  picture_filename: null,
+  pictureFile: null,
 };
 
 const lookup = (list, id) => list.find((i) => i.id === id);
@@ -120,6 +122,109 @@ function Confirm({ message, onYes, onNo }) {
   );
 }
 
+/* ── Picture field (shared by create + edit forms) ──────────────────────── */
+
+function PictureField({ form, setForm }) {
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const [preview, setPreview] = useState(null);
+  const [picError, setPicError] = useState('');
+
+  // Preview priority: pending file (object URL) → existing filename → none.
+  useEffect(() => {
+    if (form.pictureFile) {
+      const url = URL.createObjectURL(form.pictureFile);
+      setPreview(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setPreview(form.picture_filename ? productImageUrl(form.picture_filename) : null);
+    return undefined;
+  }, [form.pictureFile, form.picture_filename]);
+
+  const onPick = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setPicError('Please choose an image file.');
+      return;
+    }
+    if (file.size > MAX_PICTURE_BYTES) {
+      setPicError('Image is larger than 5 MB.');
+      return;
+    }
+    setPicError('');
+    setForm((f) => ({ ...f, pictureFile: file }));
+  };
+
+  const onRemove = () => {
+    setPicError('');
+    setForm((f) => ({ ...f, pictureFile: null, picture_filename: null }));
+  };
+
+  const hasPreview = Boolean(preview);
+
+  return (
+    <div className="sm:col-span-2">
+      <label className="block text-sm font-medium text-gray-400 mb-1">Picture</label>
+      <div className="flex items-center gap-4">
+        {hasPreview ? (
+          <img
+            src={preview}
+            alt=""
+            className="w-16 h-16 rounded-lg object-cover border border-gray-700"
+          />
+        ) : (
+          <div className="w-16 h-16 rounded-lg bg-gray-700 flex items-center justify-center text-2xl">
+            📦
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-1.5 text-sm rounded-lg border border-gray-600 text-gray-300 hover:text-gray-100 hover:bg-gray-700"
+          >
+            🖼 Choose file
+          </button>
+          <button
+            type="button"
+            onClick={() => cameraInputRef.current?.click()}
+            className="px-3 py-1.5 text-sm rounded-lg border border-gray-600 text-gray-300 hover:text-gray-100 hover:bg-gray-700"
+          >
+            📷 Take photo
+          </button>
+          {hasPreview && (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="px-3 py-1.5 text-sm rounded-lg border border-gray-600 text-red-400 hover:text-red-300 hover:bg-gray-700"
+            >
+              ✕ Remove
+            </button>
+          )}
+        </div>
+      </div>
+      {picError && <p className="text-xs text-red-400 mt-1">{picError}</p>}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={onPick}
+      />
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={onPick}
+      />
+    </div>
+  );
+}
+
 /* ── Product form (shared by create & edit) ─────────────────────────────── */
 
 function ProductForm({ form, setForm, groups, locations, units, products }) {
@@ -127,6 +232,9 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {/* Picture */}
+      <PictureField form={form} setForm={setForm} />
+
       {/* Name */}
       <div className="sm:col-span-2">
         <label className="block text-sm font-medium text-gray-400 mb-1">Name *</label>
