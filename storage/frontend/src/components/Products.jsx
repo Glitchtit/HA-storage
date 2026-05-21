@@ -367,16 +367,21 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
 function CreateModal({ onClose, onCreated, groups, locations, units, products }) {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
     setSaving(true);
+    setError('');
     try {
-      await createProduct(form);
+      const picture_filename = await resolvePictureForSave(form, null);
+      const { pictureFile, ...payload } = form;
+      await createProduct({ ...payload, picture_filename });
       onCreated();
       onClose();
     } catch (err) {
       console.error('Create product failed', err);
+      setError('Could not save the product. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -394,6 +399,7 @@ function CreateModal({ onClose, onCreated, groups, locations, units, products })
           units={units}
           products={products}
         />
+        {error && <p className="text-sm text-red-400 mt-4">{error}</p>}
         <div className="flex justify-end gap-3 mt-6">
           <button
             onClick={onClose}
@@ -585,6 +591,7 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -600,6 +607,8 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         default_best_before_days: data.default_best_before_days ?? 0,
         min_stock_amount: data.min_stock_amount ?? 0,
         unit_price: data.unit_price ?? null,
+        picture_filename: data.picture_filename ?? null,
+        pictureFile: null,
       });
     } catch (err) {
       console.error('Load product failed', err);
@@ -610,13 +619,17 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
 
   const handleSave = async () => {
     setSaving(true);
+    setError('');
     try {
-      await updateProduct(product.id, form);
+      const picture_filename = await resolvePictureForSave(form, detail.picture_filename);
+      const { pictureFile, ...payload } = form;
+      await updateProduct(product.id, { ...payload, picture_filename });
       setEditing(false);
       onSaved();
       load();
     } catch (err) {
       console.error('Update product failed', err);
+      setError('Could not save changes. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -698,9 +711,10 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
                 units={units}
                 products={parentProductOptions}
               />
+              {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
               <div className="flex justify-end gap-3 mt-4">
                 <button
-                  onClick={() => { setEditing(false); load(); }}
+                  onClick={() => { setError(''); setEditing(false); load(); }}
                   className="px-4 py-2 text-sm rounded-lg border border-gray-600 text-gray-400 hover:text-gray-200 hover:bg-gray-700"
                 >
                   Cancel
@@ -716,7 +730,7 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
             </div>
           ) : (
             <button
-              onClick={() => setEditing(true)}
+              onClick={() => { setError(''); setEditing(true); }}
               className="text-sm text-emerald-400 hover:text-emerald-300 mb-4 inline-block"
             >
               ✏️ Edit details
