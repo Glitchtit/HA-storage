@@ -694,9 +694,6 @@ def _phase2_details(
                         group_name, product.get("name"))
                 elif parent_id == product_id:
                     log("  ~ Skipped self-parenting for '%s'.", product.get("name"))
-                elif float(product.get("min_stock_amount") or 0) > 0:
-                    # Tracked-in-stock product: keep its own identity, do not link to a parent.
-                    pass
                 else:
                     try:
                         conn.execute(
