@@ -55,27 +55,26 @@ function randomToken() {
 }
 
 function makePictureFilename(file) {
+  const allowed = Object.values(PIC_EXT_BY_TYPE); // jpg/png/webp/gif
+  const fromName = file.name.split('.').pop()?.toLowerCase();
   const ext =
     PIC_EXT_BY_TYPE[file.type] ||
-    (file.name.split('.').pop() || 'jpg').toLowerCase();
+    (allowed.includes(fromName) ? fromName : 'jpg');
   return `product_${randomToken()}.${ext}`;
 }
 
-// Resolve a product's picture_filename at save time:
-//  - upload a pending file (form.pictureFile) under a fresh, collision-free name;
-//  - otherwise keep form.picture_filename (null if the user removed it);
-//  - best-effort delete the previous server file when replaced or removed.
-async function resolvePictureForSave(form, originalFilename) {
-  let resolved = form.picture_filename ?? null;
+// Resolve a product's picture_filename for save. Uploads a pending file (if any)
+// and returns { picture_filename, uploaded }, where `uploaded` is the freshly
+// written filename (or null). The caller deletes the *old* file only after the
+// product write succeeds, and deletes `uploaded` if that write fails — so a failed
+// save never orphans an upload nor strands the row pointing at a deleted image.
+async function resolvePictureForSave(form) {
   if (form.pictureFile) {
     const fname = makePictureFilename(form.pictureFile);
     await uploadProductImage(fname, form.pictureFile);
-    resolved = fname;
+    return { picture_filename: fname, uploaded: fname };
   }
-  if (originalFilename && originalFilename !== resolved) {
-    deleteProductImage(originalFilename).catch(() => {});
-  }
-  return resolved;
+  return { picture_filename: form.picture_filename ?? null, uploaded: null };
 }
 
 /* ── Modal shell ────────────────────────────────────────────────────────── */
@@ -151,6 +150,10 @@ function PictureField({ form, setForm }) {
     }
     if (file.size > MAX_PICTURE_BYTES) {
       setPicError('Image is larger than 5 MB.');
+      return;
+    }
+    if (file.size === 0) {
+      setPicError('That file is empty.');
       return;
     }
     setPicError('');
@@ -373,14 +376,17 @@ function CreateModal({ onClose, onCreated, groups, locations, units, products })
     if (!form.name.trim()) return;
     setSaving(true);
     setError('');
+    let uploaded = null;
     try {
-      const picture_filename = await resolvePictureForSave(form, null);
+      const { picture_filename, uploaded: up } = await resolvePictureForSave(form);
+      uploaded = up;
       const { pictureFile, ...payload } = form;
       await createProduct({ ...payload, picture_filename });
       onCreated();
       onClose();
     } catch (err) {
       console.error('Create product failed', err);
+      if (uploaded) deleteProductImage(uploaded).catch(() => {});
       setError('Could not save the product. Please try again.');
     } finally {
       setSaving(false);
@@ -620,15 +626,23 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
   const handleSave = async () => {
     setSaving(true);
     setError('');
+    let uploaded = null;
     try {
-      const picture_filename = await resolvePictureForSave(form, detail.picture_filename);
+      const { picture_filename, uploaded: up } = await resolvePictureForSave(form);
+      uploaded = up;
       const { pictureFile, ...payload } = form;
       await updateProduct(product.id, { ...payload, picture_filename });
+      // Product write succeeded — now safe to drop the replaced/removed old file.
+      const original = detail.picture_filename;
+      if (original && original !== picture_filename) {
+        deleteProductImage(original).catch(() => {});
+      }
       setEditing(false);
       onSaved();
       load();
     } catch (err) {
       console.error('Update product failed', err);
+      if (uploaded) deleteProductImage(uploaded).catch(() => {});
       setError('Could not save changes. Please try again.');
     } finally {
       setSaving(false);
