@@ -114,6 +114,12 @@ export const productImageUrl = (filename) =>
   `${INGRESS_PATH}/api/files/products/${filename}`;
 export const recipeImageUrl = (filename) =>
   `${INGRESS_PATH}/api/files/recipes/${filename}`;
+export const uploadProductImage = (filename, file) =>
+  api.put(`/files/products/${filename}`, file, {
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+  });
+export const deleteProductImage = (filename) =>
+  api.delete(`/files/products/${filename}`);
 
 // ── Migration ─────────────────────────────────────────────────────────────
 export const migrateFromGrocy = (data) => api.post('/migrate/grocy', data);
