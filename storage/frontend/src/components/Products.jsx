@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getProducts,
   getProduct,
@@ -12,6 +12,8 @@ import {
   getLocations,
   getUnits,
   productImageUrl,
+  uploadProductImage,
+  deleteProductImage,
 } from '../api';
 
 /* ── helpers ────────────────────────────────────────────────────────────── */
@@ -29,6 +31,50 @@ const EMPTY_FORM = {
 };
 
 const lookup = (list, id) => list.find((i) => i.id === id);
+
+const PIC_EXT_BY_TYPE = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+const MAX_PICTURE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+// crypto.randomUUID needs a secure context (https/localhost); HA is often reached
+// over plain http on the LAN, where it is undefined. getRandomValues works there.
+function randomToken() {
+  const c = globalThis.crypto;
+  if (c?.getRandomValues) {
+    const bytes = new Uint8Array(4);
+    c.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return Math.random().toString(16).slice(2, 10);
+}
+
+function makePictureFilename(file) {
+  const ext =
+    PIC_EXT_BY_TYPE[file.type] ||
+    (file.name.split('.').pop() || 'jpg').toLowerCase();
+  return `product_${randomToken()}.${ext}`;
+}
+
+// Resolve a product's picture_filename at save time:
+//  - upload a pending file (form.pictureFile) under a fresh, collision-free name;
+//  - otherwise keep form.picture_filename (null if the user removed it);
+//  - best-effort delete the previous server file when replaced or removed.
+async function resolvePictureForSave(form, originalFilename) {
+  let resolved = form.picture_filename ?? null;
+  if (form.pictureFile) {
+    const fname = makePictureFilename(form.pictureFile);
+    await uploadProductImage(fname, form.pictureFile);
+    resolved = fname;
+  }
+  if (originalFilename && originalFilename !== resolved) {
+    deleteProductImage(originalFilename).catch(() => {});
+  }
+  return resolved;
+}
 
 /* ── Modal shell ────────────────────────────────────────────────────────── */
 
