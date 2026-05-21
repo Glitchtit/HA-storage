@@ -1,3 +1,6 @@
+## 0.14.1
+- AI optimize can now group a kept-in-stock product under a parent. Previously, `_phase2_details` silently skipped parent assignment for any product with `min_stock_amount > 0`, leaving kept products ungrouped — a leftover Grocy assumption (Grocy ignored min_stock on a child that still had a parent_id). HA-Storage has no such limitation, so the guard is removed: kept products are grouped under their assigned parent like any other, and keep-status is preserved on the child. Category (`product_group_id`) assignment is unchanged.
+
 ## 0.14.0
 - Products page: add a picture to a product by hand — from both the "New Product" modal and the edit form. Pick an image file or take a photo (📷 uses the device camera on mobile), preview it inline, and replace or remove it later. Pictures upload only when you save, so cancelling never leaves stray files; replacing or removing a picture deletes the previous file from disk. Manually-added images are stored as `product_<token>.<ext>` so they never clash with scraper-fetched `<ean>` images. Frontend-only; no API or schema change.
 
