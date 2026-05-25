@@ -1,3 +1,6 @@
+## 0.16.2
+- Reverted shopping-list todo `create` (added in 0.16.0). HA's `todo.add_item` can't return a structured result, so an agent calling it via the REST API got an opaque HTTP 500 on any name that didn't resolve to a product (the common case, e.g. English or unknown terms) — worse than the original "not supported". The shopping-list todo is read/check/delete only again; agents add via the `ha_storage.add_to_shopping_list_by_name` service, which returns `status` (added / ambiguous / not_found) they can act on.
+
 ## 0.16.1
 - Shopping-list todo create now raises `ServiceValidationError` (not `HomeAssistantError`) for an unknown/ambiguous/blank product name, so callers get a clean error message (e.g. "No Storage product matches 'X'. Add the product first…") instead of a generic HTTP 500 with a logged traceback. Genuine backend failures still raise `HomeAssistantError`.
 
