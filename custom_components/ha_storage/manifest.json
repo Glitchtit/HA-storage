@@ -1,7 +1,7 @@
 {
   "domain": "ha_storage",
   "name": "Storage",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "documentation": "https://github.com/Glitchtit/HA-storage",
   "requirements": [
     "httpx>=0.28.0"
