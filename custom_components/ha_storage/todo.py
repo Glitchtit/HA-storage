@@ -13,7 +13,7 @@ from homeassistant.components.todo import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -83,7 +83,7 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
         """
         name = (item.summary or "").strip()
         if not name:
-            raise HomeAssistantError("Shopping list item needs a product name.")
+            raise ServiceValidationError("Shopping list item needs a product name.")
 
         products = self.coordinator.data.get("products") if self.coordinator.data else None
         if products is None:
@@ -95,11 +95,11 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
         status, result = resolve_product_by_name(name, products)
         if status == "ambiguous":
             names = ", ".join(c["name"] for c in result[:5])
-            raise HomeAssistantError(
+            raise ServiceValidationError(
                 f"Several products match '{name}' ({names}). Use a more specific name."
             )
         if status == "not_found":
-            raise HomeAssistantError(
+            raise ServiceValidationError(
                 f"No Storage product matches '{name}'. Add the product first "
                 f"(e.g. search with scraper.search_products and add with "
                 f"scraper.add_product), then try again."
