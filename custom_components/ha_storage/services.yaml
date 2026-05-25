@@ -12,7 +12,9 @@ add_to_shopping_list_by_name:
     scraper.search_products, add it with scraper.add_product, then call this
     service again with the now-known name. It may also return status "error"
     with a "message" when Storage cannot be reached (a transient failure — do
-    NOT treat it as a missing product; retry later).
+    NOT treat it as a missing product; retry later). This is the grocery
+    shopping list backed by Storage products — for generic to-do/checklist items
+    (not groceries to buy), use ha_lists.add_item instead.
   fields:
     name:
       name: Name
@@ -41,7 +43,9 @@ add_to_shopping_list_by_name:
 
 add_to_shopping_list:
   name: Add to shopping list
-  description: Add a product to the Storage shopping list.
+  description: >-
+    Add a product to the Storage shopping list by its numeric product_id. If you
+    only know the product name, use add_to_shopping_list_by_name instead.
   fields:
     product_id:
       name: Product ID
