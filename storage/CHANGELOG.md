@@ -1,3 +1,6 @@
+## 0.16.1
+- Shopping-list todo create now raises `ServiceValidationError` (not `HomeAssistantError`) for an unknown/ambiguous/blank product name, so callers get a clean error message (e.g. "No Storage product matches 'X'. Add the product first…") instead of a generic HTTP 500 with a logged traceback. Genuine backend failures still raise `HomeAssistantError`.
+
 ## 0.16.0
 - The Storage shopping-list todo entity (`todo.storage_shopping_list`) now supports adding items (`todo.add_item` / "create"). The item's free-text summary is resolved to an existing Storage product — exact match first, then substring — the same resolution as `ha_storage.add_to_shopping_list_by_name`, so AI assistants and the HA todo UI can add to the shopping list naturally. An ambiguous or unknown name raises a clear error instead of adding a product-less entry (it suggests searching/adding via the scraper). Previously create was disabled, so `todo.add_item` failed with "Entity does not support action".
 
