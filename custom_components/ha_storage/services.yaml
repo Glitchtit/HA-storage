@@ -10,7 +10,9 @@ add_to_shopping_list_by_name:
     list when nothing matches. This service NEVER creates products. If the
     product is unknown (status not_found), search for it with
     scraper.search_products, add it with scraper.add_product, then call this
-    service again with the now-known name.
+    service again with the now-known name. It may also return status "error"
+    with a "message" when Storage cannot be reached (a transient failure — do
+    NOT treat it as a missing product; retry later).
   fields:
     name:
       name: Name

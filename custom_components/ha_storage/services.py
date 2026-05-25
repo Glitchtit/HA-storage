@@ -88,12 +88,18 @@ def async_register_services(hass: HomeAssistant) -> None:
             return {"status": "not_found", "candidates": []}
         coord = coords[0]
 
-        products = (coord.data or {}).get("products") if coord.data else None
-        if not products:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(f"{coord.addon_url}/api/products")
-                resp.raise_for_status()
-                products = resp.json()
+        products = coord.data.get("products") if coord.data else None
+        if products is None:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(f"{coord.addon_url}/api/products")
+                    resp.raise_for_status()
+                    products = resp.json()
+            except (httpx.HTTPError, OSError) as err:
+                _LOGGER.warning(
+                    "add_to_shopping_list_by_name: product fetch failed: %s", err
+                )
+                return {"status": "error", "message": "Storage products could not be fetched"}
 
         status, result = resolve_product_by_name(call.data["name"], products)
 
