@@ -1,3 +1,42 @@
+add_to_shopping_list_by_name:
+  name: Add to shopping list by name
+  description: >-
+    Add a product to the Storage shopping list by its name (Finnish or matched).
+    Resolves the name to an existing Storage product with a case-insensitive
+    match (exact first, then substring). Example: "add Sprite to the shopping
+    list". Returns status "added" with the matched product when exactly one
+    product matches, "ambiguous" with a candidates list when several match (call
+    again with a more specific name), or "not_found" with an empty candidates
+    list when nothing matches. This service NEVER creates products. If the
+    product is unknown (status not_found), search for it with
+    scraper.search_products, add it with scraper.add_product, then call this
+    service again with the now-known name.
+  fields:
+    name:
+      name: Name
+      description: Product name to resolve against existing Storage products.
+      required: true
+      example: Sprite
+      selector:
+        text:
+    amount:
+      name: Amount
+      description: How many to add. Defaults to 1.
+      required: false
+      default: 1
+      example: 2
+      selector:
+        number:
+          min: 0
+          mode: box
+    note:
+      name: Note
+      description: Free-text note attached to the entry.
+      required: false
+      example: Buy organic
+      selector:
+        text:
+
 add_to_shopping_list:
   name: Add to shopping list
   description: Add a product to the Storage shopping list.
