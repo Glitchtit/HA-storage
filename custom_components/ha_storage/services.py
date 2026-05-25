@@ -11,10 +11,12 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
+from .resolver import resolve_product_by_name
 
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_ADD_TO_SHOPPING_LIST = "add_to_shopping_list"
+SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME = "add_to_shopping_list_by_name"
 SERVICE_CONSUME_STOCK = "consume_stock"
 SERVICE_RUN_OPTIMIZE = "run_optimize"
 SERVICE_GET_WEEKLY_DIGEST = "get_weekly_digest"
@@ -24,6 +26,14 @@ _ADD_TO_SHOPPING_SCHEMA = vol.Schema(
         vol.Required("product_id"): vol.Coerce(int),
         vol.Optional("amount", default=1): vol.Coerce(float),
         vol.Optional("unit_id"): vol.Any(None, vol.Coerce(int)),
+        vol.Optional("note", default=""): cv.string,
+    }
+)
+
+_ADD_BY_NAME_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): cv.string,
+        vol.Optional("amount", default=1): vol.Coerce(float),
         vol.Optional("note", default=""): cv.string,
     }
 )
@@ -64,6 +74,44 @@ def async_register_services(hass: HomeAssistant) -> None:
             await _post(coord, "/api/shopping-list", payload)
             await coord.async_request_refresh()
 
+    async def handle_add_by_name(call: ServiceCall) -> dict:
+        """Resolve a product name to an existing Storage product and add it.
+
+        Fetches products from the coordinator cache when available (else
+        GET /api/products), resolves the name with the pure resolver, and on a
+        single match reuses the standard /api/shopping-list add path. Never
+        auto-creates products: returns "ambiguous" or "not_found" so the caller
+        can chain scraper.search_products + scraper.add_product and retry.
+        """
+        coords = _coordinators(hass)
+        if not coords:
+            return {"status": "not_found", "candidates": []}
+        coord = coords[0]
+
+        products = (coord.data or {}).get("products") if coord.data else None
+        if not products:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(f"{coord.addon_url}/api/products")
+                resp.raise_for_status()
+                products = resp.json()
+
+        status, result = resolve_product_by_name(call.data["name"], products)
+
+        if status == "ambiguous":
+            return {"status": "ambiguous", "candidates": result}
+        if status == "not_found":
+            return {"status": "not_found", "candidates": []}
+
+        payload = {
+            "product_id": result["id"],
+            "amount": call.data["amount"],
+        }
+        if call.data.get("note"):
+            payload["note"] = call.data["note"]
+        await _post(coord, "/api/shopping-list", payload)
+        await coord.async_request_refresh()
+        return {"status": "added", "product": result}
+
     async def handle_consume(call: ServiceCall) -> None:
         payload = {"product_id": call.data["product_id"], "amount": call.data["amount"]}
         for coord in _coordinators(hass):
@@ -101,6 +149,13 @@ def async_register_services(hass: HomeAssistant) -> None:
         DOMAIN, SERVICE_ADD_TO_SHOPPING_LIST, handle_add, schema=_ADD_TO_SHOPPING_SCHEMA
     )
     hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME,
+        handle_add_by_name,
+        schema=_ADD_BY_NAME_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_CONSUME_STOCK, handle_consume, schema=_CONSUME_STOCK_SCHEMA
     )
     hass.services.async_register(
@@ -117,6 +172,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 def async_unregister_services(hass: HomeAssistant) -> None:
     for svc in (
         SERVICE_ADD_TO_SHOPPING_LIST,
+        SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME,
         SERVICE_CONSUME_STOCK,
         SERVICE_RUN_OPTIMIZE,
         SERVICE_GET_WEEKLY_DIGEST,
