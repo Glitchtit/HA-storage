@@ -7,7 +7,7 @@ pytest environment. The handler in services.py supplies the product list.
 from __future__ import annotations
 
 
-def resolve_product_by_name(name, products):
+def resolve_product_by_name(name: str | None, products: list[dict]) -> tuple[str, dict | list[dict] | None]:
     """Resolve a free-text product name against existing Storage products.
 
     Strategy (deterministic, casefold for Finnish names):
@@ -25,7 +25,6 @@ def resolve_product_by_name(name, products):
         return ("not_found", None)
     needle = query.casefold()
 
-    exact = None
     candidates = []
     for product in products:
         pname = product.get("name") or ""
@@ -37,8 +36,6 @@ def resolve_product_by_name(name, products):
         if needle in folded:
             candidates.append(slim)
 
-    if exact is not None:
-        return ("added", exact)
     if len(candidates) == 1:
         return ("added", candidates[0])
     if len(candidates) > 1:
