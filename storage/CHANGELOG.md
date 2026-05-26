@@ -1,3 +1,6 @@
+## 0.16.3
+- Cooking a recipe (and "add missing to shopping list") no longer dumps nameless `#<id>` / "Unknown" rows onto the shopping list. The recipe cook and to-shopping paths now cache the product's display name in `ha_item_name` at insert time, the same way the manual and auto-add paths already did. Shopping-list consumers (HA-stock, the `todo.storage_shopping_list` entity) only load *active* products, so a row bound to an inactive stub product — common for recipe ingredients auto-created during scraping — had no name to show. A one-time migration backfills `ha_item_name` for existing rows whose product still exists, fixing already-queued items.
+
 ## 0.16.2
 - Reverted shopping-list todo `create` (added in 0.16.0). HA's `todo.add_item` can't return a structured result, so an agent calling it via the REST API got an opaque HTTP 500 on any name that didn't resolve to a product (the common case, e.g. English or unknown terms) — worse than the original "not supported". The shopping-list todo is read/check/delete only again; agents add via the `ha_storage.add_to_shopping_list_by_name` service, which returns `status` (added / ambiguous / not_found) they can act on.
 

@@ -137,7 +137,11 @@ def recipe_to_shopping(recipe_id: int):
         raise HTTPException(404, f"Recipe {recipe_id} not found")
 
     ingredients = conn.execute(
-        "SELECT * FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,)
+        """SELECT ri.*, p.name AS product_name
+           FROM recipe_ingredients ri
+           JOIN products p ON p.id = ri.product_id
+           WHERE ri.recipe_id = ?""",
+        (recipe_id,),
     ).fetchall()
 
     added = 0
@@ -150,9 +154,11 @@ def recipe_to_shopping(recipe_id: int):
         needed = ing["amount"] - stock["total"]
         if needed > 0:
             conn.execute(
-                """INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (ing["product_id"], needed, ing["unit_id"], ing["note"], recipe_id),
+                # Cache ha_item_name so active-only shopping-list consumers can
+                # render rows bound to inactive stub products (see cook_recipe).
+                """INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (ing["product_id"], needed, ing["unit_id"], ing["note"], recipe_id, ing["product_name"]),
             )
             added += 1
 

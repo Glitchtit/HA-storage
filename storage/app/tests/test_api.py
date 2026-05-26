@@ -391,6 +391,25 @@ class TestRecipes:
         assert r.status_code == 201
         assert r.json()["added"] == 1
 
+    def test_recipe_to_shopping_caches_ha_item_name(self):
+        """to-shopping rows must cache ha_item_name so active-only consumers
+        (HA-stock, ha_storage todo) can render the name. Regression."""
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        name = f"Maustepippuri_{id(self)}"
+        pid = client.post("/api/products", json={"name": name, "unit_id": kpl}).json()["id"]
+        client.put(f"/api/products/{pid}", json={"active": False})
+        rec = client.post("/api/recipes", json={
+            "name": "ShopNameRecipe",
+            "ingredients": [{"product_id": pid, "amount": 5, "unit_id": kpl}],
+        }).json()
+        client.post(f"/api/recipes/{rec['id']}/to-shopping")
+        items = [
+            i for i in client.get("/api/shopping-list").json()
+            if i["product_id"] == pid and i["recipe_id"] == rec["id"]
+        ]
+        assert len(items) == 1
+        assert items[0]["ha_item_name"] == name
+
     def test_delete_recipe_cascades(self):
         pid, kpl = self._make_product()
         rec = client.post("/api/recipes", json={
@@ -893,6 +912,38 @@ class TestCookRecipe:
         assert len(items) == 1
         assert items[0]["note"].startswith("Reseptistä:")
 
+    def test_cook_shortfall_caches_ha_item_name_for_inactive_product(self):
+        """Shortfall rows must cache a display name (ha_item_name).
+
+        Both shopping-list consumers (HA-stock and the ha_storage todo entity)
+        only load *active* products, so they fall back to ha_item_name to render
+        a row. An ingredient bound to an inactive stub product otherwise shows up
+        as a nameless "#<id>" / "Unknown" row. Regression for the cook flow that
+        forgot to populate ha_item_name.
+        """
+        units = self._units()
+        name = f"Korppujauho_{id(self)}"
+        pid, _ = self._make_product(name, "g")
+        # No stock at all → full shortfall. Deactivate so the row can only be
+        # rendered via the cached name, mirroring auto-created recipe stubs.
+        client.put(f"/api/products/{pid}", json={"active": False})
+
+        recipe_id = self._make_recipe(
+            f"Köttbullar_{id(self)}",
+            servings=4,
+            ingredients=[{"product_id": pid, "amount": 100, "unit_id": units["g"]}],
+        )
+
+        body = client.post(f"/api/recipes/{recipe_id}/cook", json={}).json()
+        assert len(body["shortfall_added"]) == 1
+
+        items = [
+            i for i in client.get("/api/shopping-list").json()
+            if i["product_id"] == pid and i["recipe_id"] == recipe_id
+        ]
+        assert len(items) == 1
+        assert items[0]["ha_item_name"] == name
+
     def test_cook_servings_multiplier_scales(self):
         units = self._units()
         pid, _ = self._make_product(f"Voi_{id(self)}", "g")
@@ -1316,6 +1367,33 @@ class TestExpiryMigration:
         ).fetchone()
         assert row["best_before_days"] == 14
         assert row["purchased_date"] is not None
+
+    def test_migration_backfills_ha_item_name_on_legacy_shopping_rows(self):
+        """Legacy recipe shopping rows (pre-fix) have ha_item_name NULL; the
+        migration backfills the name from the still-existing product so they
+        stop rendering as nameless "#<id>"/"Unknown"."""
+        from main import get_connection
+        from database import _migrate_schema
+
+        kpl = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "kpl")
+        name = f"LegacyShop_{id(self)}"
+        pid = client.post("/api/products", json={"name": name, "unit_id": kpl}).json()["id"]
+        client.put(f"/api/products/{pid}", json={"active": False})
+
+        conn = get_connection()
+        cur = conn.execute(
+            "INSERT INTO shopping_list (product_id, amount, unit_id, ha_item_name) VALUES (?, 1, ?, NULL)",
+            (pid, kpl),
+        )
+        row_id = cur.lastrowid
+        conn.commit()
+
+        _migrate_schema(get_connection())
+
+        row = get_connection().execute(
+            "SELECT ha_item_name FROM shopping_list WHERE id = ?", (row_id,)
+        ).fetchone()
+        assert row["ha_item_name"] == name
 
     def test_realign_pass_recomputes_mismatched_best_before_date(self):
         """When best_before_date diverges from purchased_date + best_before_days,
