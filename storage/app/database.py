@@ -233,6 +233,23 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
         log.info("Added ha_item_name column to shopping_list.")
 
+    # Backfill cached display names for rows that never got one — chiefly the
+    # recipe cook/to-shopping paths, which historically omitted ha_item_name.
+    # Shopping-list consumers load active products only, so rows bound to an
+    # inactive stub product render as a nameless "#<id>"/"Unknown" without this.
+    # Recovers any row whose product still exists (active or inactive).
+    backfilled = conn.execute(
+        """
+        UPDATE shopping_list
+           SET ha_item_name = (SELECT name FROM products WHERE products.id = shopping_list.product_id)
+         WHERE ha_item_name IS NULL
+           AND EXISTS (SELECT 1 FROM products WHERE products.id = shopping_list.product_id)
+        """
+    ).rowcount
+    if backfilled:
+        conn.commit()
+        log.info("Backfilled ha_item_name on %d shopping_list row(s).", backfilled)
+
     # stock_history table for older databases that pre-date it
     has_history = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_history'"

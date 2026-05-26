@@ -167,8 +167,8 @@ def cook_recipe(
             # conventions; the user can edit before checkout if needed.
             conn.execute(
                 """
-                INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(ing["product_id"]),
@@ -176,6 +176,11 @@ def cook_recipe(
                     int(ing["product_unit_id"]),
                     recipe_note,
                     recipe_id,
+                    # Cache the display name: shopping-list consumers (HA-stock,
+                    # ha_storage todo) only load active products, so a row bound
+                    # to an inactive stub renders as a nameless "#<id>" without
+                    # this. The product is guaranteed present (JOIN above).
+                    ing["product_name"],
                 ),
             )
             shortfall_items.append({
