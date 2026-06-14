@@ -319,6 +319,53 @@ class TestStock:
         assert r.json()["consumed"] == 2
         assert r.json()["remaining_to_consume"] == 3
 
+    def test_correct_purchase_reduces_purchase_event(self):
+        # Over-scan: one purchase event with amount 2.
+        pid, kpl, loc = self._make_product_with_location()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2})
+        r = client.post("/api/stock/correct-purchase", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 200
+        assert r.json()["corrected"] == 1
+        # Net stock is 1.
+        entries = client.get(f"/api/stock/product/{pid}").json()
+        assert sum(s["amount"] for s in entries) == 1
+        # History shows a clean net purchase of 1, no phantom consume.
+        purchases = client.get(f"/api/history?product_id={pid}&event_type=purchase").json()
+        assert len(purchases) == 1
+        assert purchases[0]["amount"] == 1
+        consumes = client.get(f"/api/history?product_id={pid}&event_type=consume").json()
+        assert consumes == []
+
+    def test_correct_full_purchase_removes_event(self):
+        # Correcting the whole amount deletes the purchase event entirely.
+        pid, kpl, loc = self._make_product_with_location()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2})
+        r = client.post("/api/stock/correct-purchase", json={"product_id": pid, "amount": 2})
+        assert r.status_code == 200
+        assert r.json()["corrected"] == 2
+        purchases = client.get(f"/api/history?product_id={pid}&event_type=purchase").json()
+        assert purchases == []
+        entries = client.get(f"/api/stock/product/{pid}").json()
+        assert sum(s["amount"] for s in entries) == 0
+
+    def test_correct_purchase_across_separate_scans(self):
+        # Two scans => two purchase events; one correction reverses the newest.
+        pid, kpl, loc = self._make_product_with_location()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1})
+        r = client.post("/api/stock/correct-purchase", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 200
+        purchases = client.get(f"/api/history?product_id={pid}&event_type=purchase").json()
+        assert len(purchases) == 1
+        assert purchases[0]["amount"] == 1
+        consumes = client.get(f"/api/history?product_id={pid}&event_type=consume").json()
+        assert consumes == []
+
+    def test_correct_purchase_no_stock(self):
+        pid, kpl, loc = self._make_product_with_location()
+        r = client.post("/api/stock/correct-purchase", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 400
+
     def test_open_stock(self):
         pid, kpl, loc = self._make_product_with_location()
         client.post("/api/stock/add", json={"product_id": pid, "amount": 5})

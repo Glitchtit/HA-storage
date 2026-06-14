@@ -134,6 +134,11 @@ class StockConsume(BaseModel):
     note: str = ""
     spoiled: bool = False
 
+class StockCorrectPurchase(BaseModel):
+    product_id: int
+    amount: float = 1
+    note: str = ""
+
 class StockOpen(BaseModel):
     product_id: int
     amount: float = 1

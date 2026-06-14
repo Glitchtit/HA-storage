@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from models import (
     StockAdd,
     StockConsume,
+    StockCorrectPurchase,
     StockEntry,
     StockEntryWithProduct,
     StockOpen,
@@ -242,6 +243,78 @@ def consume_stock(body: StockConsume):
              consumed, body.product_id, remaining)
     sync_auto_shopping(conn)
     return {"consumed": consumed, "remaining_to_consume": remaining}
+
+
+@router.post("/stock/correct-purchase", status_code=200)
+def correct_purchase(body: StockCorrectPurchase):
+    """Undo an over-scan from the current shopping session.
+
+    Unlike /stock/consume (FIFO + logs a 'consume' event), a correction targets
+    what was *just added*: it removes stock LIFO (newest lots first) and reduces
+    the matching recent 'purchase' history events instead of recording a
+    consumption. The net result reads as a clean purchase with no phantom
+    consume row. Used by HA-stock's shopping-mode swipe-down on recents.
+    """
+    conn = _get_db()
+
+    # 1. Reverse stock, newest lots first — the inverse of the scan's add.
+    entries = conn.execute(
+        "SELECT * FROM stock WHERE product_id = ? AND amount > 0 ORDER BY id DESC",
+        (body.product_id,),
+    ).fetchall()
+    remaining = body.amount
+    corrected = 0.0
+    for entry in entries:
+        if remaining <= 0:
+            break
+        take = min(remaining, entry["amount"])
+        new_amount = entry["amount"] - take
+        if new_amount <= 0:
+            conn.execute("DELETE FROM stock WHERE id = ?", (entry["id"],))
+        else:
+            conn.execute("UPDATE stock SET amount = ? WHERE id = ?", (new_amount, entry["id"]))
+        remaining -= take
+        corrected += take
+
+    if corrected == 0:
+        conn.commit()
+        raise HTTPException(400, f"No stock available for product {body.product_id}")
+
+    # 2. Reduce recent 'purchase' history events by the corrected amount, newest
+    #    first; delete any event that reaches zero. No consume event is written.
+    to_reverse = corrected
+    purchases = conn.execute(
+        "SELECT id, amount FROM stock_history "
+        "WHERE product_id = ? AND event_type = 'purchase' "
+        "ORDER BY created_at DESC, id DESC",
+        (body.product_id,),
+    ).fetchall()
+    for p in purchases:
+        if to_reverse <= 0:
+            break
+        take = min(to_reverse, p["amount"])
+        new_amount = p["amount"] - take
+        if new_amount <= 0:
+            conn.execute("DELETE FROM stock_history WHERE id = ?", (p["id"],))
+        else:
+            conn.execute("UPDATE stock_history SET amount = ? WHERE id = ?", (new_amount, p["id"]))
+        to_reverse -= take
+
+    # 3. Defensive: if purchase events ran out (should not happen mid-session),
+    #    log the unreversed remainder as a normal consume so the books balance.
+    if to_reverse > 0:
+        log_event(
+            conn,
+            product_id=body.product_id,
+            event_type="consume",
+            amount=to_reverse,
+            note=body.note or "correction (no matching purchase)",
+        )
+
+    conn.commit()
+    log.info("Corrected %.1f purchase units for product %d.", corrected, body.product_id)
+    sync_auto_shopping(conn)
+    return {"corrected": corrected, "remaining": remaining}
 
 
 @router.post("/stock/open", status_code=200)
