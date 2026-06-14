@@ -232,6 +232,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE shopping_list ADD COLUMN ha_item_name TEXT")
         conn.commit()
         log.info("Added ha_item_name column to shopping_list.")
+    if "pinned" not in sl_cols:
+        # pinned = 1 → the row wants this EXACT product (brand); excluded from
+        # the cross-brand AI reconcile pass. Default 0 = any same-type brand may
+        # fulfil it.
+        conn.execute("ALTER TABLE shopping_list ADD COLUMN pinned INTEGER DEFAULT 0")
+        conn.commit()
+        log.info("Added pinned column to shopping_list.")
 
     # Backfill cached display names for rows that never got one — chiefly the
     # recipe cook/to-shopping paths, which historically omitted ha_item_name.

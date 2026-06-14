@@ -404,11 +404,13 @@ class ShoppingItemCreate(BaseModel):
     note: str = ""
     recipe_id: int | None = None
     auto_added: bool = False
+    pinned: bool = False
 
 class ShoppingItemUpdate(BaseModel):
     amount: float | None = None
     done: bool | None = None
     note: str | None = None
+    pinned: bool | None = None
 
 class ShoppingItem(BaseModel):
     id: int
@@ -420,6 +422,7 @@ class ShoppingItem(BaseModel):
     recipe_id: int | None
     auto_added: bool = False
     ha_item_name: str | None = None
+    pinned: bool = False
     created_at: str
 
 class ShoppingProposalItem(BaseModel):
@@ -455,6 +458,37 @@ class CadenceSuggestionResponse(BaseModel):
     window_days: int
     min_purchases: int
     suggestions: list[CadenceSuggestionItem]
+
+# ── Shopping reconcile (cross-brand fulfillment) ─────────────────────────────
+
+class BasketItem(BaseModel):
+    product_id: int
+    amount: float = 1
+
+class ReconcileRequest(BaseModel):
+    basket: list[BasketItem]
+    # product_ids already consumed by the real-time exact path this session;
+    # excluded so the AI pass can never double-count them.
+    exclude_product_ids: list[int] = []
+
+class ReconcileMatch(BaseModel):
+    shopping_row_id: int
+    bought_product_id: int
+    amount: float
+    confidence: str            # "high" | "medium"
+    shopping_name: str
+    bought_name: str
+
+class ReconcileResponse(BaseModel):
+    proposals: list[ReconcileMatch]
+    ai_available: bool
+
+class ReconcileApplyRequest(BaseModel):
+    matches: list[ReconcileMatch]
+
+class ReconcileApplyResponse(BaseModel):
+    applied: list[int]
+    skipped: list[int]
 
 # ── Receipt OCR ────────────────────────────────────────────────────────────
 

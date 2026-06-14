@@ -2190,3 +2190,252 @@ class TestDigest:
         assert data["waste_value_30d"] >= 6.0
         # Top spoilers list should include our product.
         assert any(s["product_id"] == pid for s in data["top_spoilers_30d"])
+
+
+# ── Cross-brand reconcile (smart shopping list) ──────────────────────────────
+
+class TestShoppingReconcile:
+    """End-of-scan AI reconcile: a different brand of the same type fulfils a
+    list item. Propose is read-only; apply decrements via the shared helper."""
+
+    def _units(self):
+        return {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
+
+    def _product(self, name):
+        kpl = self._units()["kpl"]
+        return client.post("/api/products", json={"name": name, "unit_id": kpl}).json()["id"]
+
+    def _add(self, pid, amount=1, pinned=False):
+        return client.post(
+            "/api/shopping-list",
+            json={"product_id": pid, "amount": amount, "pinned": pinned},
+        ).json()
+
+    def _rows(self, pid):
+        return [r for r in client.get("/api/shopping-list").json() if r["product_id"] == pid]
+
+    def _clear_all(self):
+        for r in client.get("/api/shopping-list").json():
+            client.delete(f"/api/shopping-list/{r['id']}")
+
+    # --- pin flag ---
+    def test_pin_flag_create_and_toggle(self):
+        pid = self._product(f"PinProd_{id(self)}")
+        item = self._add(pid, amount=1, pinned=True)
+        assert item["pinned"] is True
+        got = next(r for r in client.get("/api/shopping-list").json() if r["id"] == item["id"])
+        assert got["pinned"] is True
+        upd = client.put(f"/api/shopping-list/{item['id']}", json={"pinned": False}).json()
+        assert upd["pinned"] is False
+
+    def test_pin_defaults_false(self):
+        pid = self._product(f"PinDefault_{id(self)}")
+        assert self._add(pid, amount=1)["pinned"] is False
+
+    # --- reconcile propose ---
+    def test_no_leftovers_skips_ai(self, monkeypatch):
+        self._clear_all()
+        called = {"n": 0}
+        def fake(*a, **k):
+            called["n"] += 1
+            return []
+        monkeypatch.setattr("routers.shopping.call_ai_json", fake)
+        bought = self._product(f"ReconNo_{id(self)}")
+        r = client.post(
+            "/api/shopping-list/reconcile",
+            json={"basket": [{"product_id": bought, "amount": 1}]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {"proposals": [], "ai_available": True}
+        assert called["n"] == 0, "AI must not be called when there are no leftovers"
+
+    def test_happy_path_proposes_without_mutating(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"GoudaA_{id(self)}")
+        bought = self._product(f"GoudaB_{id(self)}")
+        item = self._add(listed, amount=2)
+
+        def fake(prompt, conn, **k):
+            return [{"shopping_row_id": item["id"], "bought_product_id": bought,
+                     "confidence": "high"}]
+        monkeypatch.setattr("routers.shopping.call_ai_json", fake)
+
+        r = client.post(
+            "/api/shopping-list/reconcile",
+            json={"basket": [{"product_id": bought, "amount": 2}]},
+        ).json()
+        assert r["ai_available"] is True
+        assert len(r["proposals"]) == 1
+        p = r["proposals"][0]
+        assert p["shopping_row_id"] == item["id"]
+        assert p["bought_product_id"] == bought
+        assert p["amount"] == 2  # min(row need 2, bought 2)
+        # Pure read — row unchanged.
+        assert self._rows(listed)[0]["amount"] == 2
+
+    def test_amount_clamped_to_need(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"ClampA_{id(self)}")
+        bought = self._product(f"ClampB_{id(self)}")
+        item = self._add(listed, amount=1)
+        monkeypatch.setattr("routers.shopping.call_ai_json",
+                            lambda *a, **k: [{"shopping_row_id": item["id"],
+                                              "bought_product_id": bought,
+                                              "confidence": "medium"}])
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": bought, "amount": 5}]}).json()
+        assert r["proposals"][0]["amount"] == 1  # clamped to row need
+
+    def test_pinned_row_never_proposed(self, monkeypatch):
+        self._clear_all()
+        pinned = self._product(f"PinnedA_{id(self)}")
+        other = self._product(f"OtherType_{id(self)}")  # keeps a candidate row present
+        bought = self._product(f"PinnedB_{id(self)}")
+        pin_item = self._add(pinned, amount=1, pinned=True)
+        self._add(other, amount=1)
+        # AI (wrongly) tries to match the pinned row — guard must drop it.
+        monkeypatch.setattr("routers.shopping.call_ai_json",
+                            lambda *a, **k: [{"shopping_row_id": pin_item["id"],
+                                              "bought_product_id": bought,
+                                              "confidence": "high"}])
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": bought, "amount": 1}]}).json()
+        assert r["proposals"] == []
+
+    def test_low_confidence_dropped(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"LowA_{id(self)}")
+        bought = self._product(f"LowB_{id(self)}")
+        item = self._add(listed, amount=1)
+        monkeypatch.setattr("routers.shopping.call_ai_json",
+                            lambda *a, **k: [{"shopping_row_id": item["id"],
+                                              "bought_product_id": bought,
+                                              "confidence": "low"}])
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": bought, "amount": 1}]}).json()
+        assert r["proposals"] == []
+
+    def test_hallucinated_ids_dropped(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"HalA_{id(self)}")
+        bought = self._product(f"HalB_{id(self)}")
+        self._add(listed, amount=1)
+        monkeypatch.setattr("routers.shopping.call_ai_json",
+                            lambda *a, **k: [{"shopping_row_id": 999999999,
+                                              "bought_product_id": bought,
+                                              "confidence": "high"}])
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": bought, "amount": 1}]}).json()
+        assert r["proposals"] == []
+
+    def test_ai_offline_returns_unavailable(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"OffA_{id(self)}")
+        bought = self._product(f"OffB_{id(self)}")
+        self._add(listed, amount=1)
+        def boom(*a, **k):
+            raise RuntimeError("ai down")
+        monkeypatch.setattr("routers.shopping.call_ai_json", boom)
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": bought, "amount": 1}]})
+        assert r.status_code == 200
+        assert r.json() == {"proposals": [], "ai_available": False}
+
+    def test_exact_product_excluded_from_ai(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"ExactA_{id(self)}")
+        self._add(listed, amount=1)
+        called = {"n": 0}
+        def fake(*a, **k):
+            called["n"] += 1
+            return []
+        monkeypatch.setattr("routers.shopping.call_ai_json", fake)
+        # Basket holds the SAME product as the list row → owned by exact path.
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": listed, "amount": 1}]}).json()
+        assert r["proposals"] == []
+        assert called["n"] == 0
+
+    # --- apply ---
+    def _match(self, row_id, bought_pid, amount):
+        return {"shopping_row_id": row_id, "bought_product_id": bought_pid,
+                "amount": amount, "confidence": "high",
+                "shopping_name": "x", "bought_name": "y"}
+
+    def test_apply_decrements_row(self):
+        self._clear_all()
+        listed = self._product(f"ApplyA_{id(self)}")
+        bought = self._product(f"ApplyB_{id(self)}")
+        item = self._add(listed, amount=3)
+        r = client.post("/api/shopping-list/reconcile/apply",
+                        json={"matches": [self._match(item["id"], bought, 2)]}).json()
+        assert r["applied"] == [item["id"]] and r["skipped"] == []
+        assert self._rows(listed)[0]["amount"] == 1
+
+    def test_apply_deletes_at_zero(self):
+        self._clear_all()
+        listed = self._product(f"ApplyZeroA_{id(self)}")
+        bought = self._product(f"ApplyZeroB_{id(self)}")
+        item = self._add(listed, amount=2)
+        client.post("/api/shopping-list/reconcile/apply",
+                    json={"matches": [self._match(item["id"], bought, 2)]})
+        assert self._rows(listed) == []
+
+    def test_apply_idempotent_skips_missing_row(self):
+        self._clear_all()
+        listed = self._product(f"ApplyGoneA_{id(self)}")
+        bought = self._product(f"ApplyGoneB_{id(self)}")
+        item = self._add(listed, amount=1)
+        client.delete(f"/api/shopping-list/{item['id']}")  # gone before apply
+        r = client.post("/api/shopping-list/reconcile/apply",
+                        json={"matches": [self._match(item["id"], bought, 1)]}).json()
+        assert r["applied"] == [] and r["skipped"] == [item["id"]]
+
+
+class TestAutoPlacement:
+    """Newly created ungrouped products are AI-categorised in the background."""
+
+    def _make_ungrouped(self):
+        kpl = next(u["id"] for u in client.get("/api/units").json()
+                   if u["abbreviation"] == "kpl")
+        return {"name": f"AutoPlace_{id(self)}", "unit_id": kpl}
+
+    class _Sync:
+        def __init__(self, target, args=(), daemon=True, name=""):
+            self._t, self._a = target, args
+        def start(self):
+            self._t(*self._a)
+
+    def test_fires_run_optimize_for_new_product(self, monkeypatch):
+        captured = {}
+        def fake_opt(conn, *, product_ids=None, **k):
+            captured["product_ids"] = product_ids
+            return {"updated": len(product_ids or [])}
+        monkeypatch.setattr("optimizer.run_optimize", fake_opt)
+        monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
+        monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
+
+        r = client.post("/api/products", json=self._make_ungrouped())
+        assert r.status_code == 201
+        assert captured["product_ids"] == [r.json()["id"]]
+
+    def test_create_succeeds_when_autoplace_raises(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("ai down")
+        monkeypatch.setattr("optimizer.run_optimize", boom)
+        monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
+        monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
+        r = client.post("/api/products", json=self._make_ungrouped())
+        assert r.status_code == 201
+
+    def test_skipped_when_ai_not_configured(self, monkeypatch):
+        # Default test env has no AI keys → _ai_configured False → no thread.
+        called = {"n": 0}
+        class _Spy(self._Sync):
+            def start(s):
+                called["n"] += 1
+        monkeypatch.setattr("routers.products.threading.Thread", _Spy)
+        r = client.post("/api/products", json=self._make_ungrouped())
+        assert r.status_code == 201
+        assert called["n"] == 0

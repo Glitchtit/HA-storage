@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from models import (
     CadenceSuggestionResponse,
+    ReconcileApplyRequest,
+    ReconcileApplyResponse,
+    ReconcileMatch,
+    ReconcileRequest,
+    ReconcileResponse,
     ShoppingItem,
     ShoppingItemCreate,
     ShoppingItemUpdate,
@@ -116,6 +123,45 @@ def sync_auto_shopping(conn) -> dict:
     return {"added": added, "removed": removed, "updated": updated}
 
 
+def _decrement_rows(conn, rows, amount: float) -> list[int]:
+    """Subtract `amount` across `rows` oldest-first, spilling leftover into the
+    next row. A row whose new amount is `<= _AMOUNT_EPSILON` is hard-deleted;
+    others are updated in place. `rows` are sqlite Rows with `id` and `amount`.
+
+    Does NOT commit — the caller owns the transaction (lets the reconcile-apply
+    path batch many decrements into one commit). Returns affected row ids.
+    """
+    remaining = float(amount)
+    affected: list[int] = []
+    for row in rows:
+        if remaining <= 0:
+            break
+        new_amount = float(row["amount"]) - remaining
+        if new_amount <= _AMOUNT_EPSILON:
+            conn.execute("DELETE FROM shopping_list WHERE id = ?", (row["id"],))
+            remaining = -new_amount  # spill leftover into next row
+        else:
+            conn.execute(
+                "UPDATE shopping_list SET amount = ? WHERE id = ?",
+                (new_amount, row["id"]),
+            )
+            remaining = 0
+        affected.append(row["id"])
+    return affected
+
+
+def _decrement_one_row(conn, row_id: int, amount: float) -> int | None:
+    """Decrement a single non-done shopping row by `amount`. Returns the row id
+    if it was touched, else None (row gone / already done). Does NOT commit."""
+    row = conn.execute(
+        "SELECT id, amount FROM shopping_list WHERE id = ? AND done = 0", (row_id,)
+    ).fetchone()
+    if not row:
+        return None
+    affected = _decrement_rows(conn, [row], amount)
+    return affected[0] if affected else None
+
+
 def consume_shopping_for_purchase(
     conn,
     product_id: int,
@@ -154,22 +200,7 @@ def consume_shopping_for_purchase(
         (product_id, unit_id),
     ).fetchall()
 
-    remaining = float(amount)
-    affected: list[int] = []
-    for row in rows:
-        if remaining <= 0:
-            break
-        new_amount = float(row["amount"]) - remaining
-        if new_amount <= _AMOUNT_EPSILON:
-            conn.execute("DELETE FROM shopping_list WHERE id = ?", (row["id"],))
-            remaining = -new_amount  # spill leftover into next row
-        else:
-            conn.execute(
-                "UPDATE shopping_list SET amount = ? WHERE id = ?",
-                (new_amount, row["id"]),
-            )
-            remaining = 0
-        affected.append(row["id"])
+    affected = _decrement_rows(conn, rows, amount)
 
     if affected:
         conn.commit()
@@ -248,6 +279,163 @@ def sync_shopping():
     return sync_auto_shopping(_get_db())
 
 
+# ── Cross-brand reconcile ────────────────────────────────────────────────────
+
+_RECONCILE_PROMPT = """You are matching grocery items a household just BOUGHT \
+against items still on their shopping list, to decide which bought item fulfils \
+which list item.
+
+CONTEXT:
+- Product names are Finnish; the household also uses Swedish and English.
+- A bought item fulfils a list item ONLY if it is the SAME PRODUCT TYPE. A \
+different brand, pack size, or variant of the same thing IS a valid match \
+(list "Maito" <- bought "Arla Kevytmaito 1L"; list "Bearnaisekastike" <- bought \
+any brand of bearnaise sauce).
+- Genuinely DIFFERENT types must NOT match ("Maito" must not match "Piima" or \
+"Kerma"; "Voi" must not match "Margariini"). When unsure, DO NOT match.
+- Match by TYPE and MEANING, never by brand name or substring overlap.
+
+Shopping list items still needed (JSON):
+{shopping_json}
+
+Items bought this session (JSON):
+{basket_json}
+
+Return ONLY a JSON array. Each element matches one bought item to one list item:
+[{{"shopping_row_id": <int>, "bought_product_id": <int>, "confidence": "high"|"medium"|"low"}}]
+Rules:
+- Each shopping_row_id appears AT MOST ONCE. Each bought_product_id appears AT MOST ONCE.
+- Omit any list item that has no same-type bought item. Use "low" for anything uncertain.
+"""
+
+
+@router.post("/shopping-list/reconcile", response_model=ReconcileResponse)
+def reconcile_shopping(body: ReconcileRequest):
+    """Propose cross-brand fulfillments for a finished shopping session.
+
+    Pure read — never mutates the DB. Given the basket of items bought this
+    session, ask the AI which of them are a variation (different brand/pack,
+    same type) of any remaining non-pinned manual list row, and return the
+    proposed matches for the user to confirm. Items consumed by the real-time
+    exact path (`consume_shopping_for_purchase`) are excluded so the AI pass
+    can never double-count. Returns empty (and skips the AI call) when there
+    are no leftovers; returns ``ai_available: false`` if the AI is unreachable
+    so the caller's "finish" flow never fails."""
+    conn = _get_db()
+
+    rows = conn.execute(
+        """
+        SELECT s.id, s.product_id, s.amount,
+               COALESCE(s.ha_item_name, p.name) AS name
+        FROM shopping_list s
+        LEFT JOIN products p ON p.id = s.product_id
+        WHERE s.done = 0 AND s.pinned = 0 AND s.auto_added = 0
+        ORDER BY s.created_at ASC, s.id ASC
+        """
+    ).fetchall()
+    if not rows:
+        return {"proposals": [], "ai_available": True}
+
+    # Exclude basket items the exact path already owns: anything whose product
+    # equals a remaining row's product, or explicitly flagged by the caller.
+    exclude = set(body.exclude_product_ids) | {r["product_id"] for r in rows}
+    basket_amounts: dict[int, float] = {}
+    for it in body.basket:
+        if it.product_id in exclude:
+            continue
+        basket_amounts[it.product_id] = basket_amounts.get(it.product_id, 0.0) + float(it.amount)
+
+    # Resolve names; drop products we can't name (nothing to match on).
+    bought_names: dict[int, str] = {}
+    for pid in list(basket_amounts):
+        prow = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()
+        if prow and prow["name"]:
+            bought_names[pid] = prow["name"]
+        else:
+            del basket_amounts[pid]
+    if not basket_amounts:
+        return {"proposals": [], "ai_available": True}
+
+    shopping_json = json.dumps(
+        [{"shopping_row_id": r["id"], "name": r["name"]} for r in rows],
+        ensure_ascii=False,
+    )
+    basket_json = json.dumps(
+        [{"bought_product_id": p, "name": bought_names[p]} for p in basket_amounts],
+        ensure_ascii=False,
+    )
+    prompt = _RECONCILE_PROMPT.format(shopping_json=shopping_json, basket_json=basket_json)
+
+    try:
+        result = call_ai_json(prompt, conn)
+    except Exception as exc:  # AI offline / unconfigured — finish must not fail.
+        log.warning("Reconcile AI call failed: %s", exc)
+        return {"proposals": [], "ai_available": False}
+
+    if not isinstance(result, list):
+        log.warning("Reconcile AI returned %s, expected list.", type(result).__name__)
+        return {"proposals": [], "ai_available": True}
+
+    row_by_id = {r["id"]: r for r in rows}
+    row_need = {r["id"]: float(r["amount"]) for r in rows}
+    used_rows: set[int] = set()
+    used_bought: set[int] = set()
+    proposals: list[ReconcileMatch] = []
+
+    for m in result:
+        if not isinstance(m, dict):
+            continue
+        try:
+            srid = int(m["shopping_row_id"])
+            bpid = int(m["bought_product_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if str(m.get("confidence", "")).lower() not in ("high", "medium"):
+            continue
+        # Hallucination + at-most-once guards.
+        if srid not in row_by_id or bpid not in basket_amounts:
+            continue
+        if srid in used_rows or bpid in used_bought:
+            continue
+        take = min(row_need.get(srid, 0.0), basket_amounts.get(bpid, 0.0))
+        if take <= 0:
+            continue
+        used_rows.add(srid)
+        used_bought.add(bpid)
+        proposals.append(ReconcileMatch(
+            shopping_row_id=srid,
+            bought_product_id=bpid,
+            amount=take,
+            confidence=str(m["confidence"]).lower(),
+            shopping_name=row_by_id[srid]["name"],
+            bought_name=bought_names[bpid],
+        ))
+
+    return {"proposals": proposals, "ai_available": True}
+
+
+@router.post("/shopping-list/reconcile/apply", response_model=ReconcileApplyResponse)
+def reconcile_apply(body: ReconcileApplyRequest):
+    """Apply user-confirmed cross-brand fulfillments. Decrements each matched
+    row by its amount via the shared helper; rows already gone/done land in
+    ``skipped`` (idempotent). Runs one ``sync_auto_shopping`` afterward, matching
+    the ``/stock/add`` ordering."""
+    conn = _get_db()
+    applied: list[int] = []
+    skipped: list[int] = []
+    for m in body.matches:
+        touched = _decrement_one_row(conn, m.shopping_row_id, m.amount)
+        if touched is None:
+            skipped.append(m.shopping_row_id)
+        else:
+            applied.append(touched)
+    if applied:
+        conn.commit()
+        log.info("Reconcile apply: applied=%d, skipped=%d", len(applied), len(skipped))
+        sync_auto_shopping(conn)
+    return {"applied": applied, "skipped": skipped}
+
+
 @router.delete("/shopping-list/done", status_code=204)
 def clear_done():
     """Clear all completed items."""
@@ -263,9 +451,10 @@ def add_shopping_item(body: ShoppingItemCreate):
     if not product:
         raise HTTPException(400, f"Product {body.product_id} not found")
     cur = conn.execute(
-        "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (body.product_id, body.amount, body.unit_id, body.note, body.recipe_id, product["name"], int(body.auto_added)),
+        "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added, pinned)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (body.product_id, body.amount, body.unit_id, body.note, body.recipe_id, product["name"],
+         int(body.auto_added), int(body.pinned)),
     )
     conn.commit()
     return conn.execute("SELECT * FROM shopping_list WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -280,7 +469,7 @@ def update_shopping_item(item_id: int, body: ShoppingItemUpdate):
 
     updates = {}
     for field, value in body.model_dump(exclude_unset=True).items():
-        if field == "done":
+        if field in ("done", "pinned"):
             value = int(value)
         updates[field] = value
     if not updates:

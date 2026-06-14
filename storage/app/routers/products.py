@@ -2,16 +2,62 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+
 from fastapi import APIRouter, HTTPException, Query
 
 from models import Product, ProductCreate, ProductDetail, ProductUpdate
 
 router = APIRouter(tags=["products"])
+log = logging.getLogger(__name__)
 
 
 def _get_db():
     from main import get_connection
     return get_connection()
+
+
+def _ai_configured(conn) -> bool:
+    """True only when the active AI provider has the credential it needs — no
+    point spawning an auto-placement thread that will just fail (and it keeps
+    the test suite, which has no keys, from making live calls)."""
+    from ai_client import _get_ai_config
+    cfg = _get_ai_config(conn)
+    provider = cfg.get("provider", "gemini")
+    needed = {"gemini": "gemini_api_key", "claude": "claude_api_key",
+              "ollama": "ollama_url"}.get(provider, "gemini_api_key")
+    return bool(cfg.get(needed))
+
+
+def _autoplace_enabled(conn) -> bool:
+    """Whether freshly created, ungrouped products should be AI-categorised at
+    create time. Requires the `autoplace_on_create` config key to be on (default
+    on) AND a usable AI provider configured."""
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = 'autoplace_on_create'"
+    ).fetchone()
+    toggle_on = row is None or str(row["value"]).strip().lower() not in (
+        "0", "false", "no", "off")
+    return toggle_on and _ai_configured(conn)
+
+
+def _autoplace_product(product_id: int) -> None:
+    """Background, best-effort: assign a type-parent + category to a just-created
+    product via the AI optimizer. Opens its OWN connection — never shares the
+    request connection across threads. Any failure (AI offline, etc.) is a
+    no-op; product creation already succeeded."""
+    try:
+        from main import DB_PATH
+        from database import get_db
+        from optimizer import run_optimize
+        conn = get_db(DB_PATH)
+        try:
+            run_optimize(conn, product_ids=[product_id])
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("Auto-placement for product %d failed: %s", product_id, exc)
 
 
 # ── List / Get ─────────────────────────────────────────────────────────────
@@ -127,7 +173,15 @@ def create_product(body: ProductCreate):
         ),
     )
     conn.commit()
-    return conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
+    new = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
+    # New brands scanned during shopping arrive ungrouped; place them under the
+    # right type-parent so the catalog (and future exact matching) stays tidy.
+    # Best-effort, off the request path — never blocks or fails the create.
+    if new["parent_id"] is None and new["product_group_id"] is None and _autoplace_enabled(conn):
+        threading.Thread(
+            target=_autoplace_product, args=(new["id"],), daemon=True
+        ).start()
+    return new
 
 
 # ── Update ─────────────────────────────────────────────────────────────────
