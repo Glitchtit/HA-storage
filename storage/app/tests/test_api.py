@@ -682,31 +682,33 @@ class TestShoppingClearOnPurchase:
         assert rows[0]["id"] == second["id"]
         assert rows[0]["amount"] == 1  # 2 - (2 - 1)
 
-    def test_auto_added_row_untouched(self):
-        """Auto-added rows remain governed by sync_auto_shopping (min_stock).
-        The new helper must not touch them."""
+    def test_auto_added_row_tracks_deficit_on_partial_restock(self):
+        """Auto-added rows are owned by sync_auto_shopping, whose amount must
+        track the *current* stock deficit. A partial restock since the row was
+        created shrinks it to the remaining need (oldest-frozen-amount bug:
+        buying 2 of a 3-deficit item used to leave the row showing 3)."""
         kpl = next(u["id"] for u in client.get("/api/units").json()
                    if u["abbreviation"] == "kpl")
         loc_id = client.get("/api/locations").json()[0]["id"]
-        # min_stock_amount high so sync_auto_shopping won't clear after restock
+        # min_stock_amount high so sync_auto_shopping won't fully clear the row
         pid = client.post(
             "/api/products",
             json={"name": f"ClearOnBuyAuto_{id(self)}",
                   "unit_id": kpl, "min_stock_amount": 10},
         ).json()["id"]
-        # Force an auto-added row via the sync endpoint
+        # Force an auto-added row via the sync endpoint (deficit 10, have 0)
         client.post("/api/shopping-list/sync")
         rows = [r for r in client.get("/api/shopping-list").json()
                 if r["product_id"] == pid]
         assert len(rows) == 1 and rows[0]["auto_added"] is True
         original_id = rows[0]["id"]
-        original_amount = rows[0]["amount"]
+        assert rows[0]["amount"] == 10
 
-        # Buy 1 — stock still below min_stock_amount, sync_auto_shopping
-        # leaves the auto-added row in place; the new helper must too.
+        # Buy 3 — stock now 3, still below min_stock_amount 10. The row stays
+        # (auto-added, same id) but its amount must drop to the new deficit (7).
         r = client.post(
             "/api/stock/add",
-            json={"product_id": pid, "amount": 1, "unit_id": kpl,
+            json={"product_id": pid, "amount": 3, "unit_id": kpl,
                   "location_id": loc_id},
         )
         assert r.status_code == 201
@@ -716,7 +718,57 @@ class TestShoppingClearOnPurchase:
         assert len(rows_after) == 1
         assert rows_after[0]["id"] == original_id
         assert rows_after[0]["auto_added"] is True
-        assert rows_after[0]["amount"] == original_amount
+        assert rows_after[0]["amount"] == 7
+
+    def test_auto_added_row_scenario_partial_buy_of_three(self):
+        """Exact user-reported scenario: an out-of-stock item kept at
+        min_stock 3 auto-adds a row of 3; buying 2 must leave the list
+        showing 1, not 3."""
+        kpl = next(u["id"] for u in client.get("/api/units").json()
+                   if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"PepsiMax_{id(self)}",
+                  "unit_id": kpl, "min_stock_amount": 3},
+        ).json()["id"]
+        client.post("/api/shopping-list/sync")
+        rows = [r for r in client.get("/api/shopping-list").json()
+                if r["product_id"] == pid]
+        assert len(rows) == 1 and rows[0]["amount"] == 3
+
+        # Scanned 2 into stock at home → list line should read 1 left to buy.
+        client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 2, "location_id": loc_id},
+        )
+        rows_after = [r for r in client.get("/api/shopping-list").json()
+                      if r["product_id"] == pid]
+        assert len(rows_after) == 1
+        assert rows_after[0]["amount"] == 1
+        assert rows_after[0]["auto_added"] is True
+
+    def test_auto_added_row_removed_when_restocked_to_threshold(self):
+        """Restocking an auto-added item to/above min_stock still removes the
+        row entirely (deficit tracking must not resurrect a satisfied row)."""
+        kpl = next(u["id"] for u in client.get("/api/units").json()
+                   if u["abbreviation"] == "kpl")
+        loc_id = client.get("/api/locations").json()[0]["id"]
+        pid = client.post(
+            "/api/products",
+            json={"name": f"ClearOnBuyAutoFull_{id(self)}",
+                  "unit_id": kpl, "min_stock_amount": 3},
+        ).json()["id"]
+        client.post("/api/shopping-list/sync")
+        assert [r for r in client.get("/api/shopping-list").json()
+                if r["product_id"] == pid]
+
+        client.post(
+            "/api/stock/add",
+            json={"product_id": pid, "amount": 3, "location_id": loc_id},
+        )
+        assert [r for r in client.get("/api/shopping-list").json()
+                if r["product_id"] == pid] == []
 
     def test_null_unit_shopping_row_matches_default_unit_scan(self):
         """Regression: manually adding a product to the shopping list (which

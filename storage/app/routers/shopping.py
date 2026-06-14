@@ -37,15 +37,23 @@ def sync_auto_shopping(conn) -> dict:
 
     * If current total stock is **below** the threshold and the product has no
       shopping_list row at all, insert one with ``auto_added = 1``.
+    * If current total stock is **below** the threshold and an ``auto_added = 1``
+      row already exists, update its amount to the **current** deficit. An
+      auto-added row represents "how much you still need", so a partial restock
+      since it was created must shrink it (buy 2 of a 3-deficit item → the row
+      now reads 1), not leave it frozen at the original deficit.
     * If current total stock is **at or above** the threshold, delete any
       existing ``auto_added = 1`` row that is **not yet done** — the user has
       already restocked, so the auto-added entry is stale.
 
-    Rows the user added manually (``auto_added = 0``) are never removed here,
-    and rows that are already ``done = 1`` are preserved so we don't yank
-    items out from under an active shopping trip.
+    Rows the user added manually (``auto_added = 0``) are never touched here
+    (their amount is decremented on purchase by ``consume_shopping_for_purchase``
+    instead), and rows that are already ``done = 1`` are preserved so we don't
+    yank items out from under an active shopping trip. A manual or done row also
+    suppresses auto-add so we never create a duplicate.
 
-    Returns a dict with ``added`` and ``removed`` counts for callers/logging.
+    Returns a dict with ``added``, ``removed`` and ``updated`` counts for
+    callers/logging.
     """
     rows = conn.execute(
         """
@@ -60,18 +68,33 @@ def sync_auto_shopping(conn) -> dict:
 
     added = 0
     removed = 0
+    updated = 0
     for r in rows:
         pid = r["id"]
         min_amt = float(r["min_stock_amount"] or 0)
         have = float(r["total_amount"] or 0)
         if have < min_amt:
+            need = max(1.0, min_amt - have)
+            auto_row = conn.execute(
+                "SELECT id, amount FROM shopping_list"
+                " WHERE product_id = ? AND auto_added = 1 AND done = 0 LIMIT 1",
+                (pid,),
+            ).fetchone()
+            if auto_row:
+                # Keep the auto-added amount equal to the live deficit.
+                if abs(float(auto_row["amount"]) - need) > _AMOUNT_EPSILON:
+                    conn.execute(
+                        "UPDATE shopping_list SET amount = ? WHERE id = ?",
+                        (need, auto_row["id"]),
+                    )
+                    updated += 1
+                continue
             existing = conn.execute(
                 "SELECT 1 FROM shopping_list WHERE product_id = ? LIMIT 1",
                 (pid,),
             ).fetchone()
             if existing:
-                continue
-            need = max(1.0, min_amt - have)
+                continue  # manual or done row present — don't duplicate
             conn.execute(
                 "INSERT INTO shopping_list (product_id, amount, unit_id, ha_item_name, auto_added)"
                 " VALUES (?, ?, ?, ?, 1)",
@@ -86,10 +109,11 @@ def sync_auto_shopping(conn) -> dict:
             if cur.rowcount:
                 removed += cur.rowcount
 
-    if added or removed:
+    if added or removed or updated:
         conn.commit()
-        log.info("Shopping auto-sync: added=%d, removed=%d", added, removed)
-    return {"added": added, "removed": removed}
+        log.info("Shopping auto-sync: added=%d, removed=%d, updated=%d",
+                 added, removed, updated)
+    return {"added": added, "removed": removed, "updated": updated}
 
 
 def consume_shopping_for_purchase(
