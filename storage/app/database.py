@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS products (
     min_stock_amount        REAL DEFAULT 0,
     picture_filename        TEXT,
     active                  INTEGER DEFAULT 1,
+    pin_brand               INTEGER DEFAULT 0,
     unit_price              REAL,
     unit_price_currency     TEXT DEFAULT 'EUR',
     created_at              TEXT DEFAULT (datetime('now')),
@@ -378,6 +379,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE products ADD COLUMN unit_price_currency TEXT DEFAULT 'EUR'")
         conn.commit()
         log.info("Added unit_price_currency column to products.")
+    if "pin_brand" not in product_cols:
+        # Persistent brand pin. pin_brand = 1 → the product wants its EXACT
+        # brand on the shopping list: every row for it is treated as pinned
+        # (excluded from the cross-brand AI reconcile pass), and new rows from
+        # any add path inherit that without being asked. The product is the
+        # single source of truth — shopping_list.pinned is no longer read.
+        # Seed it from any rows currently pinned so existing pins survive.
+        conn.execute("ALTER TABLE products ADD COLUMN pin_brand INTEGER DEFAULT 0")
+        conn.execute(
+            "UPDATE products SET pin_brand = 1 WHERE id IN "
+            "(SELECT DISTINCT product_id FROM shopping_list WHERE pinned = 1)"
+        )
+        conn.commit()
+        log.info("Added pin_brand column to products (seeded from pinned rows).")
 
     if "price_paid" not in stock_cols:
         # stock_cols was read above before any stock migrations; re-read to be sure.

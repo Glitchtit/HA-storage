@@ -2279,6 +2279,58 @@ class TestShoppingReconcile:
         pid = self._product(f"PinDefault_{id(self)}")
         assert self._add(pid, amount=1)["pinned"] is False
 
+    # --- persistent (product-level) pin ---
+    def test_pin_persists_to_product_across_readd(self):
+        """Pinning a row pins the product; re-adding it later starts pinned."""
+        pid = self._product(f"PinPersist_{id(self)}")
+        item = self._add(pid, amount=1, pinned=True)
+        assert item["pinned"] is True
+        client.delete(f"/api/shopping-list/{item['id']}")
+        # Re-add with no pin hint — the product's preference should pin it.
+        readd = self._add(pid, amount=1)
+        assert readd["pinned"] is True
+
+    def test_pin_toggle_persists_via_put(self):
+        """Toggling pin on a row persists to the product (visible on re-add)."""
+        pid = self._product(f"PinViaPut_{id(self)}")
+        item = self._add(pid, amount=1)  # starts unpinned
+        client.put(f"/api/shopping-list/{item['id']}", json={"pinned": True})
+        client.delete(f"/api/shopping-list/{item['id']}")
+        assert self._add(pid, amount=1)["pinned"] is True
+
+    def test_unpin_persists_to_product(self):
+        """Unpinning a pinned product sticks for future re-adds."""
+        pid = self._product(f"UnpinPersist_{id(self)}")
+        item = self._add(pid, amount=1, pinned=True)
+        upd = client.put(f"/api/shopping-list/{item['id']}", json={"pinned": False}).json()
+        assert upd["pinned"] is False
+        client.delete(f"/api/shopping-list/{item['id']}")
+        assert self._add(pid, amount=1)["pinned"] is False
+
+    def test_pin_applies_to_all_rows_of_product(self):
+        """A product pinned via one row applies to every row of that product,
+        including rows added by paths that never pass `pinned`."""
+        pid = self._product(f"PinSibling_{id(self)}")
+        self._add(pid, amount=1, pinned=True)  # pins the product
+        second = self._add(pid, amount=2)      # plain add, no pin hint
+        assert second["pinned"] is True
+        assert all(r["pinned"] is True for r in self._rows(pid))
+
+    def test_persisted_pin_excludes_readded_row_from_reconcile(self, monkeypatch):
+        self._clear_all()
+        listed = self._product(f"PersistRecon_{id(self)}")
+        bought = self._product(f"PersistReconB_{id(self)}")
+        item = self._add(listed, amount=1, pinned=True)
+        client.delete(f"/api/shopping-list/{item['id']}")
+        self._add(listed, amount=1)  # re-add inherits the persisted pin
+        called = {"n": 0}
+        monkeypatch.setattr("routers.shopping.call_ai_json",
+                            lambda *a, **k: called.__setitem__("n", called["n"] + 1) or [])
+        r = client.post("/api/shopping-list/reconcile",
+                        json={"basket": [{"product_id": bought, "amount": 1}]}).json()
+        assert r["proposals"] == []
+        assert called["n"] == 0, "pinned-only list has no leftovers; AI must be skipped"
+
     # --- reconcile propose ---
     def test_no_leftovers_skips_ai(self, monkeypatch):
         self._clear_all()

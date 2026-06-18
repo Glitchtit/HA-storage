@@ -31,6 +31,18 @@ log = logging.getLogger(__name__)
 # to "done".
 _AMOUNT_EPSILON = 1e-9
 
+# A shopping row's `pinned` is derived from the product, never the stored
+# shopping_list.pinned column — products.pin_brand is the single source of
+# truth (see the pin_brand migration). Every read of a ShoppingItem goes
+# through this so all add paths inherit a product's persistent pin for free.
+_SHOPPING_SELECT = """
+    SELECT s.id, s.product_id, s.amount, s.unit_id, s.note, s.done,
+           s.recipe_id, s.auto_added, s.ha_item_name, s.created_at,
+           COALESCE(p.pin_brand, 0) AS pinned
+      FROM shopping_list s
+      LEFT JOIN products p ON p.id = s.product_id
+"""
+
 
 def _get_db():
     from main import get_connection
@@ -214,7 +226,7 @@ def consume_shopping_for_purchase(
 @router.get("/shopping-list", response_model=list[ShoppingItem])
 def list_shopping():
     return _get_db().execute(
-        "SELECT * FROM shopping_list ORDER BY done, created_at DESC"
+        _SHOPPING_SELECT + "ORDER BY s.done, s.created_at DESC"
     ).fetchall()
 
 
@@ -329,7 +341,7 @@ def reconcile_shopping(body: ReconcileRequest):
                COALESCE(s.ha_item_name, p.name) AS name
         FROM shopping_list s
         LEFT JOIN products p ON p.id = s.product_id
-        WHERE s.done = 0 AND s.pinned = 0 AND s.auto_added = 0
+        WHERE s.done = 0 AND COALESCE(p.pin_brand, 0) = 0 AND s.auto_added = 0
         ORDER BY s.created_at ASC, s.id ASC
         """
     ).fetchall()
@@ -450,6 +462,10 @@ def add_shopping_item(body: ShoppingItemCreate):
     product = conn.execute("SELECT id, name FROM products WHERE id = ?", (body.product_id,)).fetchone()
     if not product:
         raise HTTPException(400, f"Product {body.product_id} not found")
+    # An explicit pinned=True on add is a persistent product preference, not a
+    # one-off: promote it to the product so every future row inherits it.
+    if body.pinned:
+        conn.execute("UPDATE products SET pin_brand = 1 WHERE id = ?", (body.product_id,))
     cur = conn.execute(
         "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added, pinned)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -457,7 +473,7 @@ def add_shopping_item(body: ShoppingItemCreate):
          int(body.auto_added), int(body.pinned)),
     )
     conn.commit()
-    return conn.execute("SELECT * FROM shopping_list WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (cur.lastrowid,)).fetchone()
 
 
 @router.put("/shopping-list/{item_id}", response_model=ShoppingItem)
@@ -472,15 +488,21 @@ def update_shopping_item(item_id: int, body: ShoppingItemUpdate):
         if field in ("done", "pinned"):
             value = int(value)
         updates[field] = value
-    if not updates:
-        return existing
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    conn.execute(
-        f"UPDATE shopping_list SET {set_clause} WHERE id = ?",
-        list(updates.values()) + [item_id],
-    )
+    # Pinning is a product-level preference, not a row attribute: route it to
+    # products.pin_brand so it persists across re-adds and applies to every
+    # row of the product. The stored shopping_list.pinned is left untouched.
+    pin = updates.pop("pinned", None)
+    if pin is not None:
+        conn.execute("UPDATE products SET pin_brand = ? WHERE id = ?",
+                     (pin, existing["product_id"]))
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(
+            f"UPDATE shopping_list SET {set_clause} WHERE id = ?",
+            list(updates.values()) + [item_id],
+        )
     conn.commit()
-    return conn.execute("SELECT * FROM shopping_list WHERE id = ?", (item_id,)).fetchone()
+    return conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (item_id,)).fetchone()
 
 
 @router.delete("/shopping-list/{item_id}", status_code=204)

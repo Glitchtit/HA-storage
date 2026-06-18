@@ -1,3 +1,6 @@
+## 0.18.0
+- Shopping-list brand pinning is now persistent per product. Pinning a row sets a `pin_brand` preference on the product (the new single source of truth), so the pin survives ticking the item off and re-adding it later — and every add path (manual, recipe, auto-restock) inherits it without being asked. A row's `pinned` is derived from the product, and the cross-brand AI reconcile pass excludes any product whose brand is pinned. Existing pinned rows are migrated into the new product preference on upgrade.
+
 ## 0.17.1
 - New `POST /api/stock/correct-purchase` endpoint for undoing an over-scan during a shopping session. Unlike `/stock/consume` (FIFO + logs a `consume` event), it removes stock newest-lot-first and reduces the matching recent `purchase` history events — so scanning 2 by mistake then dialing back to 1 reads as a clean net purchase of 1, with no phantom consumption in the history or waste/consume stats.
 
