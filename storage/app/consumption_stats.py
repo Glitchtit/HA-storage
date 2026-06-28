@@ -21,6 +21,7 @@ so summing ``amount`` across history rows is safe without unit conversion.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Any
 
@@ -79,7 +80,9 @@ def compute_proposal(
             continue
 
         suggested = max(float(r["min_stock_amount"] or 0), weekly_rate * 2)
-        suggested = round(suggested + 0.05, 1)
+        # Shopping list carries whole units only — always round up so we never
+        # propose a fraction (e.g. 2.3 → 3).
+        suggested = float(math.ceil(suggested))
         proposal.append({
             "product_id": int(r["product_id"]),
             "product_name": r["product_name"],
@@ -187,7 +190,9 @@ def compute_cadence_suggestions(
         if threshold > 0 and current >= threshold:
             continue  # still well-stocked
 
-        suggested = round((avg_amount or min_stock or 1), 1)
+        # Whole units only on the shopping list — round the average purchase
+        # amount up rather than carrying a fraction.
+        suggested = float(math.ceil(avg_amount or min_stock or 1))
         out.append({
             "product_id": int(r["product_id"]),
             "product_name": r["product_name"],

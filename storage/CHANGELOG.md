@@ -1,3 +1,6 @@
+## 0.18.1
+- Shopping-list suggestions now round up to whole units. Both the consumption-velocity proposal and the purchase-cadence suggestion previously surfaced fractional amounts (e.g. 2.3), which made no sense on a shopping list — the suggested quantity is now ceil'd so it's always a whole number.
+
 ## 0.18.0
 - Shopping-list brand pinning is now persistent per product. Pinning a row sets a `pin_brand` preference on the product (the new single source of truth), so the pin survives ticking the item off and re-adding it later — and every add path (manual, recipe, auto-restock) inherits it without being asked. A row's `pinned` is derived from the product, and the cross-brand AI reconcile pass excludes any product whose brand is pinned. Existing pinned rows are migrated into the new product preference on upgrade.
 
