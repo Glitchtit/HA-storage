@@ -2614,3 +2614,123 @@ class TestFinanceStats:
         # Sorted by value descending.
         values = [g["value"] for g in sv["by_group"]]
         assert values == sorted(values, reverse=True)
+
+    # ── purchase-costs helpers ────────────────────────────────────────────
+
+    @staticmethod
+    def _months_back(n: int):
+        """(year, month, 'YYYY-MM', mid-month UTC timestamp) for n months ago.
+
+        Uses local time to pick the month (matching the endpoint's localtime
+        bucketing) and a day-15 12:00 UTC timestamp so the bucket is the same
+        in any timezone within ±11 h of UTC.
+        """
+        from datetime import datetime
+        now = datetime.now().astimezone()
+        y, m = now.year, now.month
+        for _ in range(n):
+            m -= 1
+            if m == 0:
+                y, m = y - 1, 12
+        return y, m, f"{y:04d}-{m:02d}", f"{y:04d}-{m:02d}-15 12:00:00"
+
+    @staticmethod
+    def _insert_history(product_id: int, event_type: str, amount: float,
+                        unit_price, created_at: str):
+        from main import get_connection
+        conn = get_connection()
+        conn.execute(
+            "INSERT INTO stock_history "
+            "(product_id, event_type, amount, unit_price, note, created_at) "
+            "VALUES (?, ?, ?, ?, '', ?)",
+            (product_id, event_type, amount, unit_price, created_at),
+        )
+        conn.commit()
+
+    # ── purchase-costs tests ──────────────────────────────────────────────
+
+    def test_purchase_costs_month_filtering(self):
+        pid = self._make_product("pc-months", unit_price=None)
+        y2, m2, ym2, ts2 = self._months_back(2)
+        _, _, ym3, ts3 = self._months_back(3)
+        self._insert_history(pid, "purchase", 2, 5.0, ts2)   # 10.0 two months ago
+        self._insert_history(pid, "purchase", 1, 7.0, ts3)   # 7.0 three months ago
+        r = client.get(f"/api/stats/purchase-costs?year={y2}&month={m2}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["year"] == y2 and data["month"] == m2
+        assert data["total_value"] == 10.0
+        assert data["event_count"] == 1
+        mine = [p for p in data["by_product"] if p["product_id"] == pid]
+        assert len(mine) == 1
+        assert mine[0]["amount"] == 2 and mine[0]["value"] == 10.0
+        # The 3-months-ago spend shows up in the trend series, not the month total.
+        series = {p["month"]: p["value"] for p in data["series"]}
+        assert series[ym3] == 7.0
+
+    def test_purchase_costs_series_shape(self):
+        y2, m2, ym2, _ = self._months_back(2)
+        r = client.get(f"/api/stats/purchase-costs?year={y2}&month={m2}")
+        series = r.json()["series"]
+        assert len(series) == 12
+        assert series[-1]["month"] == ym2          # ends at selected month
+        months = [p["month"] for p in series]
+        assert months == sorted(months)            # oldest → newest
+        assert all(isinstance(p["value"], (int, float)) for p in series)
+
+    def test_purchase_costs_defaults_to_current_month(self):
+        from datetime import datetime
+        pid = self._make_product("pc-default", unit_price=2.5)
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 4})
+        r = client.get("/api/stats/purchase-costs")
+        assert r.status_code == 200
+        data = r.json()
+        now = datetime.now().astimezone()
+        assert data["year"] == now.year and data["month"] == now.month
+        mine = [p for p in data["by_product"] if p["product_id"] == pid]
+        assert len(mine) == 1
+        assert mine[0]["value"] == 10.0            # 4 * 2.5 snapshot
+
+    def test_purchase_costs_price_fallback(self):
+        pid = self._make_product("pc-fallback", unit_price=6.0)
+        y4, m4, _, ts4 = self._months_back(4)
+        self._insert_history(pid, "purchase", 3, None, ts4)  # no snapshot price
+        r = client.get(f"/api/stats/purchase-costs?year={y4}&month={m4}")
+        mine = [p for p in r.json()["by_product"] if p["product_id"] == pid]
+        assert len(mine) == 1
+        assert mine[0]["value"] == 18.0            # falls back to product 6.0
+
+    def test_purchase_costs_ignores_non_purchase_events(self):
+        pid = self._make_product("pc-consume", unit_price=9.0)
+        y5, m5, _, ts5 = self._months_back(5)
+        self._insert_history(pid, "consume", 2, 9.0, ts5)
+        self._insert_history(pid, "spoil", 1, 9.0, ts5)
+        r = client.get(f"/api/stats/purchase-costs?year={y5}&month={m5}")
+        data = r.json()
+        assert all(p["product_id"] != pid for p in data["by_product"])
+
+    def test_purchase_costs_nets_out_corrections(self):
+        pid = self._make_product("pc-correct", unit_price=2.0)
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 3})
+        client.post("/api/stock/correct-purchase",
+                    json={"product_id": pid, "amount": 1})
+        r = client.get("/api/stats/purchase-costs")
+        mine = [p for p in r.json()["by_product"] if p["product_id"] == pid]
+        assert len(mine) == 1
+        assert mine[0]["amount"] == 2              # 3 bought, 1 corrected away
+        assert mine[0]["value"] == 4.0
+
+    def test_purchase_costs_validates_params(self):
+        assert client.get("/api/stats/purchase-costs?month=13").status_code == 422
+        assert client.get("/api/stats/purchase-costs?year=1999").status_code == 422
+
+    def test_purchase_costs_month_boundaries(self):
+        pid = self._make_product("pc-bounds", unit_price=None)
+        y6, m6, ym6, _ = self._months_back(6)
+        # Day 1 and day 28 at 12:00 UTC stay inside the month for any tz ±11 h.
+        self._insert_history(pid, "purchase", 1, 3.0, f"{ym6}-01 12:00:00")
+        self._insert_history(pid, "purchase", 1, 4.0, f"{ym6}-28 12:00:00")
+        r = client.get(f"/api/stats/purchase-costs?year={y6}&month={m6}")
+        mine = [p for p in r.json()["by_product"] if p["product_id"] == pid]
+        assert len(mine) == 1
+        assert mine[0]["value"] == 7.0

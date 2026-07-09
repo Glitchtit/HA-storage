@@ -283,6 +283,25 @@ class StatsStockValueResponse(BaseModel):
     unpriced_amount: float
     by_group: list[StatsStockValueGroup] = []
 
+class StatsPurchaseCostsProduct(BaseModel):
+    product_id: int
+    product_name: str
+    amount: float
+    value: float
+
+class StatsPurchaseCostsSeriesPoint(BaseModel):
+    month: str  # YYYY-MM
+    value: float
+
+class StatsPurchaseCostsResponse(BaseModel):
+    year: int
+    month: int
+    currency: str = "EUR"
+    total_value: float
+    event_count: int
+    by_product: list[StatsPurchaseCostsProduct] = []
+    series: list[StatsPurchaseCostsSeriesPoint] = []
+
 class PredictedRunout(BaseModel):
     product_id: int
     product_name: str

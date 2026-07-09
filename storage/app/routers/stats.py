@@ -16,6 +16,9 @@ from models import (
     PredictedRunout,
     StatsDigestResponse,
     StatsProductSummary,
+    StatsPurchaseCostsProduct,
+    StatsPurchaseCostsResponse,
+    StatsPurchaseCostsSeriesPoint,
     StatsRunoutsResponse,
     StatsStockValueGroup,
     StatsStockValueResponse,
@@ -282,6 +285,97 @@ def stats_stock_value():
         by_group=[
             StatsStockValueGroup(**{**g, "value": round(g["value"], 2)})
             for g in sorted(by_group.values(), key=lambda x: x["value"], reverse=True)
+        ],
+    )
+
+
+@router.get("/stats/purchase-costs", response_model=StatsPurchaseCostsResponse)
+def stats_purchase_costs(
+    year: int | None = Query(None, ge=2000, le=2100),
+    month: int | None = Query(None, ge=1, le=12),
+):
+    """Purchase spend for one local calendar month, plus a trailing 12-month trend.
+
+    Sums ``purchase`` history events valued at
+    ``amount * COALESCE(h.unit_price, p.unit_price)`` — the snapshot taken at
+    purchase time preferred, current product default as fallback for old rows.
+    ``/stock/correct-purchase`` already reduces purchase events retroactively,
+    so the sums are net of over-scan corrections. Timestamps are stored UTC;
+    bucketing converts to localtime so months match the user's calendar.
+    """
+    now_local = datetime.now().astimezone()
+    if year is None:
+        year = now_local.year
+    if month is None:
+        month = now_local.month
+
+    # Twelve YYYY-MM buckets ending at the selected month.
+    months: list[str] = []
+    y, m = year, month
+    for _ in range(12):
+        months.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    months.reverse()
+    selected = months[-1]
+
+    conn = _get_db()
+    rows = conn.execute(
+        """
+        SELECT strftime('%Y-%m', h.created_at, 'localtime') AS ym,
+               h.product_id, h.amount,
+               COALESCE(h.unit_price, p.unit_price) AS effective_price,
+               p.name AS product_name,
+               p.unit_price_currency AS currency
+        FROM stock_history h
+        JOIN products p ON p.id = h.product_id
+        WHERE h.event_type = 'purchase'
+          AND strftime('%Y-%m', h.created_at, 'localtime') BETWEEN ? AND ?
+        """,
+        (months[0], selected),
+    ).fetchall()
+
+    series = {ym: 0.0 for ym in months}
+    by_product: dict[int, dict] = {}
+    total_value = 0.0
+    event_count = 0
+    currency = "EUR"
+    for r in rows:
+        amt = float(r["amount"] or 0)
+        price = r["effective_price"]
+        val = amt * float(price) if price is not None else 0.0
+        if r["currency"]:
+            currency = r["currency"]
+        series[r["ym"]] += val
+        if r["ym"] != selected:
+            continue
+        total_value += val
+        event_count += 1
+        pid = r["product_id"]
+        bp = by_product.setdefault(pid, {
+            "product_id": pid, "product_name": r["product_name"],
+            "amount": 0.0, "value": 0.0,
+        })
+        bp["amount"] += amt
+        bp["value"] += val
+
+    top = sorted(by_product.values(), key=lambda x: x["value"], reverse=True)[:15]
+    return StatsPurchaseCostsResponse(
+        year=year,
+        month=month,
+        currency=currency,
+        total_value=round(total_value, 2),
+        event_count=event_count,
+        by_product=[
+            StatsPurchaseCostsProduct(
+                **{**p, "amount": round(p["amount"], 2), "value": round(p["value"], 2)}
+            )
+            for p in top
+        ],
+        series=[
+            StatsPurchaseCostsSeriesPoint(month=ym, value=round(series[ym], 2))
+            for ym in months
         ],
     )
 
