@@ -1,3 +1,7 @@
+## 0.20.0
+
+- New Finances section in Insights: current stock value (total + by product group, lots valued at price paid with product-price fallback; unpriced units surfaced separately) and monthly purchase costs with ‹ month › navigation, top products by spend, and a 12-month trend. Backed by new `GET /api/stats/stock-value` and `GET /api/stats/purchase-costs?year=&month=` endpoints.
+
 ## 0.19.1
 
 - "Will run out next 14 days" no longer lists products already at zero stock — those have already run out, so they don't belong in a forward-looking prediction. Affects `/api/stats/runouts` and the digest's `predicted_runouts_14d`.
