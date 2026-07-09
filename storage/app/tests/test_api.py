@@ -2210,6 +2210,14 @@ class TestPredictedRunouts:
         data = client.get("/api/stats/runouts?horizon=14").json()
         assert not any(r["product_id"] == pid for r in data["runouts"])
 
+    def test_runouts_excludes_products_already_at_zero_stock(self):
+        # Fully consumed → already ran out, must not appear as "will run out".
+        pid = self._make_product()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 10})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 10})
+        data = client.get("/api/stats/runouts?horizon=14").json()
+        assert not any(r["product_id"] == pid for r in data["runouts"])
+
 
 # ── Weekly Digest (0.12.0) ─────────────────────────────────────────────────
 

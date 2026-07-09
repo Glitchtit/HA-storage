@@ -1,3 +1,7 @@
+## 0.19.1
+
+- "Will run out next 14 days" no longer lists products already at zero stock — those have already run out, so they don't belong in a forward-looking prediction. Affects `/api/stats/runouts` and the digest's `predicted_runouts_14d`.
+
 ## 0.19.0
 
 - New stores registry and per-store product availability API (`PUT /api/stores/{id}`, `PUT /api/products/{id}/availability`), written by HA-scraper.

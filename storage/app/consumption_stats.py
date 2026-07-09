@@ -229,7 +229,8 @@ def predicted_runouts(
     (no ``min_stock_amount`` requirement) and doesn't suppress items already on
     the shopping list — callers want to *see* upcoming runouts in the dashboard
     even if a row has been added to the cart already. Sorted ascending by days
-    to runout. Products with no consumption in the window are excluded.
+    to runout. Products with no consumption in the window are excluded, as are
+    products already at zero stock — they've run out, not "will run out".
     """
     lookback_days = max(1, lookback_weeks) * 7
     rows = conn.execute(
@@ -262,6 +263,8 @@ def predicted_runouts(
         if avg_daily <= 0:
             continue
         current = float(r["current_qty"] or 0)
+        if current <= 0:
+            continue
         days_to_zero = current / avg_daily if avg_daily > 0 else float("inf")
         if days_to_zero >= horizon_days:
             continue
