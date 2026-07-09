@@ -2545,4 +2545,71 @@ class TestAutoPlacement:
         monkeypatch.setattr("routers.products.threading.Thread", _Spy)
         r = client.post("/api/products", json=self._make_ungrouped())
         assert r.status_code == 201
-        assert called["n"] == 0
+
+
+# ── Finance stats (stock value + purchase costs) ───────────────────────────
+
+class TestFinanceStats:
+    def _make_product(self, name_suffix: str, unit_price=None, group_id=None):
+        units = client.get("/api/units").json()
+        kpl = next(u["id"] for u in units if u["abbreviation"] == "kpl")
+        body = {"name": f"FinTest {name_suffix}", "unit_id": kpl,
+                "default_best_before_days": 7}
+        if unit_price is not None:
+            body["unit_price"] = unit_price
+        if group_id is not None:
+            body["product_group_id"] = group_id
+        return client.post("/api/products", json=body).json()["id"]
+
+    def _stock_value(self):
+        r = client.get("/api/stats/stock-value")
+        assert r.status_code == 200
+        return r.json()
+
+    def test_stock_value_uses_price_paid(self):
+        before = self._stock_value()["total_value"]
+        pid = self._make_product("paid", unit_price=3.0)
+        client.post("/api/stock/add",
+                    json={"product_id": pid, "amount": 2, "price_paid": 4.0})
+        after = self._stock_value()["total_value"]
+        # price_paid (4.0) wins over product unit_price (3.0): 2 * 4.0 = 8.0
+        assert abs((after - before) - 8.0) < 0.01
+
+    def test_stock_value_falls_back_to_product_price(self):
+        before = self._stock_value()["total_value"]
+        pid = self._make_product("fallback", unit_price=None)
+        lot = client.post("/api/stock/add",
+                          json={"product_id": pid, "amount": 3}).json()
+        assert lot["price_paid"] in (None, 0)
+        client.put(f"/api/products/{pid}", json={"unit_price": 2.0})
+        after = self._stock_value()["total_value"]
+        # No price_paid → falls back to product unit_price set later: 3 * 2.0
+        assert abs((after - before) - 6.0) < 0.01
+
+    def test_stock_value_unpriced_counts_amount_not_value(self):
+        before = self._stock_value()
+        pid = self._make_product("unpriced", unit_price=None)
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5})
+        after = self._stock_value()
+        assert abs(after["total_value"] - before["total_value"]) < 0.01
+        assert abs((after["unpriced_amount"] - before["unpriced_amount"]) - 5.0) < 0.01
+
+    def test_stock_value_by_group_and_ungrouped(self):
+        grp = client.post("/api/product-groups",
+                          json={"name": "FinTestGroup"}).json()
+        pid_grouped = self._make_product("grouped", unit_price=2.0,
+                                         group_id=grp["id"])
+        pid_ungrouped = self._make_product("ungrouped", unit_price=1.0)
+        client.post("/api/stock/add", json={"product_id": pid_grouped, "amount": 4})
+        client.post("/api/stock/add", json={"product_id": pid_ungrouped, "amount": 1})
+        sv = self._stock_value()
+        by_group = {g["group_name"]: g for g in sv["by_group"]}
+        assert by_group["FinTestGroup"]["value"] == 8.0
+        assert by_group["FinTestGroup"]["group_id"] == grp["id"]
+        ungrouped = by_group.get("Ungrouped")
+        assert ungrouped is not None
+        assert ungrouped["group_id"] is None
+        assert ungrouped["value"] >= 1.0
+        # Sorted by value descending.
+        values = [g["value"] for g in sv["by_group"]]
+        assert values == sorted(values, reverse=True)

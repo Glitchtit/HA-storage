@@ -18,6 +18,8 @@ from models import (
     StatsProductSummary,
     StatsRunoutsResponse,
     StatsSummary,
+    StatsStockValueGroup,
+    StatsStockValueResponse,
     StatsTimelinePoint,
     StatsTopItem,
     StatsWasteBreakdown,
@@ -221,6 +223,65 @@ def stats_waste(days: int = Query(30, ge=1, le=3650)):
         series=[
             StatsWasteSeriesPoint(week=v["week"], amount=round(v["amount"], 2), value=round(v["value"], 2))
             for v in sorted(series.values(), key=lambda x: x["week"])
+        ],
+    )
+
+
+@router.get("/stats/stock-value", response_model=StatsStockValueResponse)
+def stats_stock_value():
+    """Current monetary value of everything on hand.
+
+    Each lot is valued at ``amount * COALESCE(stock.price_paid, products.unit_price)``
+    — the price actually paid wins; the product's current default fills in for
+    lots recorded before prices were tracked. Lots with neither price count
+    toward ``unpriced_amount`` (units) and contribute nothing to ``total_value``.
+    """
+    conn = _get_db()
+    rows = conn.execute(
+        """
+        SELECT s.amount,
+               COALESCE(s.price_paid, p.unit_price) AS effective_price,
+               p.product_group_id AS group_id,
+               p.unit_price_currency AS currency
+        FROM stock s
+        JOIN products p ON p.id = s.product_id
+        WHERE s.amount > 0
+        """
+    ).fetchall()
+    groups = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM product_groups").fetchall()}
+
+    total_value = 0.0
+    priced_amount = 0.0
+    unpriced_amount = 0.0
+    currency = "EUR"
+    by_group: dict[int | None, dict] = {}
+    for r in rows:
+        amt = float(r["amount"] or 0)
+        price = r["effective_price"]
+        if r["currency"]:
+            currency = r["currency"]
+        if price is None:
+            unpriced_amount += amt
+            continue
+        val = amt * float(price)
+        total_value += val
+        priced_amount += amt
+        gid = r["group_id"]
+        bg = by_group.setdefault(gid, {
+            "group_id": gid,
+            "group_name": groups.get(gid, "Ungrouped") if gid else "Ungrouped",
+            "value": 0.0,
+        })
+        bg["value"] += val
+
+    return StatsStockValueResponse(
+        total_value=round(total_value, 2),
+        currency=currency,
+        priced_amount=round(priced_amount, 2),
+        unpriced_amount=round(unpriced_amount, 2),
+        by_group=[
+            StatsStockValueGroup(**{**g, "value": round(g["value"], 2)})
+            for g in sorted(by_group.values(), key=lambda x: x["value"], reverse=True)
         ],
     )
 

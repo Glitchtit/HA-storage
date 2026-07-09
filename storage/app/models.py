@@ -271,6 +271,18 @@ class StatsWasteResponse(BaseModel):
     by_category: list[StatsWasteBreakdown] = []
     series: list[StatsWasteSeriesPoint] = []
 
+class StatsStockValueGroup(BaseModel):
+    group_id: int | None = None
+    group_name: str
+    value: float
+
+class StatsStockValueResponse(BaseModel):
+    total_value: float
+    currency: str = "EUR"
+    priced_amount: float
+    unpriced_amount: float
+    by_group: list[StatsStockValueGroup] = []
+
 class PredictedRunout(BaseModel):
     product_id: int
     product_name: str
