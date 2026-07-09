@@ -130,9 +130,11 @@ export default function Insights() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     getStatsPurchaseCosts({ year: costMonth.year, month: costMonth.month })
-      .then((r) => { setCosts(r.data); setCostsUnavailable(false); })
-      .catch(() => setCostsUnavailable(true));
+      .then((r) => { if (!cancelled) { setCosts(r.data); setCostsUnavailable(false); } })
+      .catch(() => { if (!cancelled) setCostsUnavailable(true); });
+    return () => { cancelled = true; };
   }, [costMonth]);
 
   const consumedItems = useMemo(
