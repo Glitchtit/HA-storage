@@ -2545,6 +2545,7 @@ class TestAutoPlacement:
         monkeypatch.setattr("routers.products.threading.Thread", _Spy)
         r = client.post("/api/products", json=self._make_ungrouped())
         assert r.status_code == 201
+        assert called["n"] == 0
 
 
 # ── Finance stats (stock value + purchase costs) ───────────────────────────
