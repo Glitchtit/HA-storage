@@ -117,3 +117,37 @@ class TestAvailability:
         r = client.put(f"/api/products/{pid2}/availability",
                        json=[{"store_id": "K532", "available": True}])
         assert [row["store_id"] for row in r.json()] == ["K532"]
+
+
+class TestProductStoresField:
+    def test_products_list_includes_stores(self):
+        pid = _make_product("Storefield 1")
+        client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})
+        client.put(f"/api/products/{pid}/availability",
+                   json=[{"store_id": "N110", "available": True, "price": 3.5}])
+        r = client.get("/api/products")
+        assert r.status_code == 200
+        prod = next(p for p in r.json() if p["id"] == pid)
+        assert prod["stores"] == [{
+            "store_id": "N110",
+            "name": "K-Citymarket Kupittaa",
+            "available": True,
+            "price": 3.5,
+            "price_currency": "EUR",
+            "checked_at": prod["stores"][0]["checked_at"],
+        }]
+
+    def test_products_list_empty_stores_default(self):
+        pid = _make_product("Storefield 2")
+        r = client.get("/api/products")
+        prod = next(p for p in r.json() if p["id"] == pid)
+        assert prod["stores"] == []
+
+    def test_product_detail_includes_stores(self):
+        pid = _make_product("Storefield 3")
+        client.put(f"/api/products/{pid}/availability",
+                   json=[{"store_id": "K532", "available": False}])
+        r = client.get(f"/api/products/{pid}")
+        assert r.status_code == 200
+        assert len(r.json()["stores"]) == 1
+        assert r.json()["stores"][0]["available"] is False

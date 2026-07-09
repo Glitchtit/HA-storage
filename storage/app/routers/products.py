@@ -18,6 +18,32 @@ def _get_db():
     return get_connection()
 
 
+def _stores_by_product(conn, product_ids: list[int] | None = None) -> dict[int, list[dict]]:
+    """Map product_id → per-store availability dicts (joined with store names).
+    With product_ids=None the whole table is fetched (bulk list endpoint)."""
+    sql = """
+        SELECT pa.product_id, pa.store_id, s.name, pa.available,
+               pa.price, pa.price_currency, pa.checked_at
+        FROM product_availability pa
+        JOIN stores s ON s.id = pa.store_id
+    """
+    params: list = []
+    if product_ids is not None:
+        sql += " WHERE pa.product_id IN (%s)" % ",".join("?" for _ in product_ids)
+        params = list(product_ids)
+    out: dict[int, list[dict]] = {}
+    for r in conn.execute(sql + " ORDER BY pa.store_id", params).fetchall():
+        out.setdefault(r["product_id"], []).append({
+            "store_id": r["store_id"],
+            "name": r["name"],
+            "available": bool(r["available"]),
+            "price": r["price"],
+            "price_currency": r["price_currency"],
+            "checked_at": r["checked_at"],
+        })
+    return out
+
+
 def _ai_configured(conn) -> bool:
     """True only when the active AI provider has the credential it needs — no
     point spawning an auto-placement thread that will just fail (and it keeps
@@ -80,7 +106,7 @@ def list_products(
         clauses.append("p.product_group_id = ?")
         params.append(group_id)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    return conn.execute(
+    rows = conn.execute(
         f"""
         WITH child_totals AS (
             SELECT cp.parent_id AS pid,
@@ -105,6 +131,8 @@ def list_products(
         """,
         params,
     ).fetchall()
+    stores_map = _stores_by_product(conn)
+    return [{**row, "stores": stores_map.get(row["id"], [])} for row in rows]
 
 
 @router.get("/products/{product_id}", response_model=ProductDetail)
@@ -139,6 +167,7 @@ def get_product(product_id: int):
         "stock_opened": stock_row["opened"],
         "children_stock_amount": child_stock_row["total"],
         "children_stock_opened": child_stock_row["opened"],
+        "stores": _stores_by_product(conn, [product_id]).get(product_id, []),
     }
 
 
