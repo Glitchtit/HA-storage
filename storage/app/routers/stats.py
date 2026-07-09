@@ -321,6 +321,8 @@ def stats_purchase_costs(
     selected = months[-1]
 
     conn = _get_db()
+    # 'localtime' resolves via the container's TZ (injected by Supervisor).
+    # Outside Supervisor (bare docker/CI) months silently become UTC months.
     rows = conn.execute(
         """
         SELECT strftime('%Y-%m', h.created_at, 'localtime') AS ym,
