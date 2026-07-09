@@ -151,6 +151,23 @@ CREATE TABLE IF NOT EXISTS stock_history (
     created_at       TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS stores (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS product_availability (
+    product_id     INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    store_id       TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    available      INTEGER NOT NULL,
+    price          REAL,
+    price_currency TEXT DEFAULT 'EUR',
+    checked_at     TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (product_id, store_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_id);
 CREATE INDEX IF NOT EXISTS idx_products_group ON products(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_products_location ON products(location_id);

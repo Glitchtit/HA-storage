@@ -95,6 +95,31 @@ class ProductDetail(Product):
     barcodes: list["Barcode"] = []
     matched_pack_size: float = 1.0
 
+# ── Stores ─────────────────────────────────────────────────────────────────
+
+class StoreUpsert(BaseModel):
+    name: str
+
+class Store(BaseModel):
+    id: str
+    name: str
+    created_at: str
+    updated_at: str
+
+class AvailabilityEntry(BaseModel):
+    store_id: str
+    available: bool
+    price: float | None = None
+    price_currency: str = "EUR"
+
+class ProductStoreInfo(BaseModel):
+    store_id: str
+    name: str
+    available: bool
+    price: float | None = None
+    price_currency: str | None = None
+    checked_at: str
+
 # ── Barcodes ───────────────────────────────────────────────────────────────
 
 class BarcodeCreate(BaseModel):
