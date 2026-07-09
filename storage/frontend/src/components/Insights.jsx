@@ -8,6 +8,8 @@ import {
   getStatsWaste,
   getStatsRunouts,
   getStockEntries,
+  getStatsStockValue,
+  getStatsPurchaseCosts,
 } from '../api';
 import BarList from './charts/BarList';
 import Sparkline from './charts/Sparkline';
@@ -62,6 +64,16 @@ export default function Insights() {
   const [productTimeline, setProductTimeline] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Finances
+  const [stockValue, setStockValue] = useState(null);
+  const [stockValueUnavailable, setStockValueUnavailable] = useState(false);
+  const [costs, setCosts] = useState(null);
+  const [costsUnavailable, setCostsUnavailable] = useState(false);
+  const [costMonth, setCostMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  });
+
   const fetchCore = useCallback(async () => {
     setLoading(true);
     const [productsRes, tc, tp, sp, st, expRes] = await Promise.all([
@@ -111,6 +123,18 @@ export default function Insights() {
       .catch(() => setProductTimeline([]));
   }, [selectedProduct, days]);
 
+  useEffect(() => {
+    getStatsStockValue()
+      .then((r) => { setStockValue(r.data); setStockValueUnavailable(false); })
+      .catch(() => setStockValueUnavailable(true));
+  }, []);
+
+  useEffect(() => {
+    getStatsPurchaseCosts({ year: costMonth.year, month: costMonth.month })
+      .then((r) => { setCosts(r.data); setCostsUnavailable(false); })
+      .catch(() => setCostsUnavailable(true));
+  }, [costMonth]);
+
   const consumedItems = useMemo(
     () => topConsumed.map((r) => ({ key: r.product_id, label: r.product_name, value: r.total_amount })),
     [topConsumed]
@@ -145,6 +169,38 @@ export default function Insights() {
     [waste]
   );
 
+  const stockValueGroups = useMemo(
+    () => (stockValue?.by_group ?? []).map((g) => ({
+      key: g.group_id ?? 'ungrouped', label: g.group_name, value: g.value,
+    })),
+    [stockValue]
+  );
+  const costProducts = useMemo(
+    () => (costs?.by_product ?? []).map((p) => ({
+      key: p.product_id, label: p.product_name, value: p.value,
+    })),
+    [costs]
+  );
+  const costSeries = useMemo(
+    () => (costs?.series ?? []).map((p) => ({ day: p.month, value: p.value })),
+    [costs]
+  );
+
+  const today = new Date();
+  const isCurrentMonth =
+    costMonth.year === today.getFullYear() && costMonth.month === today.getMonth() + 1;
+  const shiftMonth = (delta) => {
+    setCostMonth(({ year, month }) => {
+      let m = month + delta;
+      let y = year;
+      if (m === 0) { m = 12; y -= 1; }
+      if (m === 13) { m = 1; y += 1; }
+      return { year: y, month: m };
+    });
+  };
+  const monthLabel = new Date(costMonth.year, costMonth.month - 1, 1)
+    .toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+
   return (
     <div className="space-y-4 max-w-6xl mx-auto">
       {/* Header / window selector */}
@@ -165,6 +221,83 @@ export default function Insights() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Finances */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card title="🏦 Stock value" subtitle="What everything on hand is worth right now.">
+          {stockValueUnavailable ? (
+            <p className="text-sm text-gray-500">/api/stats/stock-value not available on this backend yet.</p>
+          ) : stockValue ? (
+            <div>
+              <p className="text-3xl font-bold text-brand-cobalt">{fmtEur(stockValue.total_value)}</p>
+              <div className="mt-3">
+                <p className="text-xs text-gray-500 mb-2">By product group</p>
+                <BarList
+                  items={stockValueGroups}
+                  color="var(--brand-cobalt)"
+                  formatValue={fmtEur}
+                  emptyLabel="No priced stock."
+                />
+              </div>
+              {stockValue.unpriced_amount > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  {fmtNum(stockValue.unpriced_amount)} units have no price and are excluded.
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">Loading…</p>
+          )}
+        </Card>
+        <Card
+          title="🧾 Monthly costs"
+          subtitle="Spend from recorded purchases."
+          right={
+            <div className="flex items-center gap-1 text-sm">
+              <button
+                onClick={() => shiftMonth(-1)}
+                className="px-2 py-0.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+                aria-label="Previous month"
+              >
+                ‹
+              </button>
+              <span className="text-gray-200 tabular-nums whitespace-nowrap">{monthLabel}</span>
+              <button
+                onClick={() => shiftMonth(1)}
+                disabled={isCurrentMonth}
+                className="px-2 py-0.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-700 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                aria-label="Next month"
+              >
+                ›
+              </button>
+            </div>
+          }
+        >
+          {costsUnavailable ? (
+            <p className="text-sm text-gray-500">/api/stats/purchase-costs not available on this backend yet.</p>
+          ) : costs ? (
+            <div>
+              <p className="text-3xl font-bold text-brand-orange">{fmtEur(costs.total_value)}</p>
+              <div className="mt-3">
+                <p className="text-xs text-gray-500 mb-1">12-month trend</p>
+                <Sparkline data={costSeries} color="var(--brand-orange)" formatValue={fmtEur} />
+              </div>
+              <div className="mt-3">
+                <p className="text-xs text-gray-500 mb-2">Top products</p>
+                <BarList
+                  items={costProducts}
+                  color="var(--brand-orange)"
+                  formatValue={fmtEur}
+                  onClick={(it) => setSelectedProduct(it.key)}
+                  emptyLabel="No purchases this month."
+                />
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">Loading…</p>
+          )}
+        </Card>
       </div>
 
       {/* Waste headline */}

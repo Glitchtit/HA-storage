@@ -39,6 +39,8 @@ export const getProductStats = (productId) => api.get(`/stats/product/${productI
 export const getStatsWaste = (params) => api.get('/stats/waste', { params });
 export const getStatsRunouts = (params) => api.get('/stats/runouts', { params });
 export const getStatsDigest = () => api.get('/stats/digest');
+export const getStatsStockValue = () => api.get('/stats/stock-value');
+export const getStatsPurchaseCosts = (params) => api.get('/stats/purchase-costs', { params });
 
 // ── Barcodes ──────────────────────────────────────────────────────────────
 export const getBarcodes = () => api.get('/barcodes');
