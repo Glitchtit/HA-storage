@@ -1,3 +1,8 @@
+## 0.19.0
+
+- New stores registry and per-store product availability API (`PUT /api/stores/{id}`, `PUT /api/products/{id}/availability`), written by HA-scraper.
+- Products responses now include a `stores` array with per-store assortment availability and price.
+
 ## 0.18.1
 - Shopping-list suggestions now round up to whole units. Both the consumption-velocity proposal and the purchase-cadence suggestion previously surfaced fractional amounts (e.g. 2.3), which made no sense on a shopping list — the suggested quantity is now ceil'd so it's always a whole number.
 
