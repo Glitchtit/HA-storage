@@ -1,3 +1,7 @@
+## 0.20.3
+
+- The product edit form now has an Active checkbox, so products deactivated in bulk operations (e.g. retired group masters) can be reactivated from the UI — previously the flag was only writable via the API. The detail header also shows an Inactive badge when applicable.
+
 ## 0.20.2
 
 - Moved the 7d/30d/90d/1y window selector from the Insights page header into the Waste card, where the window it controls actually lives — at page level it read as if it applied to the new Finances cards, which have their own month navigation.

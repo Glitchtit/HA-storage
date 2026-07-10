@@ -361,6 +361,21 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
           onChange={(e) => field('unit_price', e.target.value === '' ? null : Number(e.target.value))}
         />
       </div>
+
+      {/* Active flag — only present when editing an existing product */}
+      {'active' in form && (
+        <div className="flex items-end pb-2">
+          <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={form.active}
+              onChange={(e) => field('active', e.target.checked)}
+              className="rounded border-gray-600 text-emerald-600 focus:ring-emerald-500 bg-gray-700"
+            />
+            Active
+          </label>
+        </div>
+      )}
     </div>
   );
 }
@@ -615,6 +630,7 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         unit_price: data.unit_price ?? null,
         picture_filename: data.picture_filename ?? null,
         pictureFile: null,
+        active: Boolean(data.active),
       });
     } catch (err) {
       console.error('Load product failed', err);
@@ -682,7 +698,14 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
                 </div>
               )}
               <div>
-                <h3 className="font-semibold text-lg text-gray-100">{detail.name}</h3>
+                <h3 className="font-semibold text-lg text-gray-100">
+                  {detail.name}
+                  {!detail.active && (
+                    <span className="ml-2 align-middle text-xs font-medium px-2 py-0.5 rounded-lg bg-amber-900/40 text-amber-300">
+                      Inactive
+                    </span>
+                  )}
+                </h3>
                 {detail.description && (
                   <p className="text-sm text-gray-400">{detail.description}</p>
                 )}
