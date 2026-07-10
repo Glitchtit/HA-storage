@@ -238,6 +238,11 @@ def stats_stock_value():
     — the price actually paid wins; the product's current default fills in for
     lots recorded before prices were tracked. Lots with neither price count
     toward ``unpriced_amount`` (units) and contribute nothing to ``total_value``.
+
+    Only active products count: deactivated (retired) products can leave
+    orphaned stock rows behind, and those are phantom inventory — the rest of
+    the app hides inactive products entirely (same ``p.active = 1`` rule as
+    the shopping proposal and runout queries).
     """
     conn = _get_db()
     rows = conn.execute(
@@ -249,6 +254,7 @@ def stats_stock_value():
         FROM stock s
         JOIN products p ON p.id = s.product_id
         WHERE s.amount > 0
+          AND p.active = 1
         """
     ).fetchall()
     groups = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM product_groups").fetchall()}

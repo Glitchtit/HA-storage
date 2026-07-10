@@ -2595,6 +2595,16 @@ class TestFinanceStats:
         assert abs(after["total_value"] - before["total_value"]) < 0.01
         assert abs((after["unpriced_amount"] - before["unpriced_amount"]) - 5.0) < 0.01
 
+    def test_stock_value_excludes_inactive_products(self):
+        pid = self._make_product("inactive", unit_price=5.0)
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2})
+        before = self._stock_value()["total_value"]
+        # Deactivating a product retires it everywhere; its leftover stock
+        # rows must stop counting toward inventory value.
+        client.put(f"/api/products/{pid}", json={"active": False})
+        after = self._stock_value()["total_value"]
+        assert abs((before - after) - 10.0) < 0.01
+
     def test_stock_value_by_group_and_ungrouped(self):
         grp = client.post("/api/product-groups",
                           json={"name": "FinTestGroup"}).json()

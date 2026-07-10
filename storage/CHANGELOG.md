@@ -1,3 +1,7 @@
+## 0.20.1
+
+- Stock value no longer counts stock left behind on deactivated (retired) products. Phantom lots on inactive products — invisible everywhere else in the app — were inflating the total and surfacing as a bogus "Group master" bar; valuation now applies the same `active = 1` rule as the shopping proposal and runout queries.
+
 ## 0.20.0
 
 - New Finances section in Insights: current stock value (total + by product group, lots valued at price paid with product-price fallback; unpriced units surfaced separately) and monthly purchase costs with ‹ month › navigation, top products by spend, and a 12-month trend. Backed by new `GET /api/stats/stock-value` and `GET /api/stats/purchase-costs?year=&month=` endpoints.
