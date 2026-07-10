@@ -1,3 +1,7 @@
+## 0.20.2
+
+- Moved the 7d/30d/90d/1y window selector from the Insights page header into the Waste card, where the window it controls actually lives — at page level it read as if it applied to the new Finances cards, which have their own month navigation.
+
 ## 0.20.1
 
 - Stock value no longer counts stock left behind on deactivated (retired) products. Phantom lots on inactive products — invisible everywhere else in the app — were inflating the total and surfacing as a bogus "Group master" bar; valuation now applies the same `active = 1` rule as the shopping proposal and runout queries.

@@ -205,24 +205,9 @@ export default function Insights() {
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto">
-      {/* Header / window selector */}
+      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-xl font-bold">📈 Insights</h1>
-        <div className="inline-flex rounded-lg bg-gray-800 p-1">
-          {WINDOWS.map((w) => (
-            <button
-              key={w.id}
-              onClick={() => setDays(w.id)}
-              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                days === w.id
-                  ? 'bg-brand-cobalt text-white'
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              {w.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Finances */}
@@ -308,6 +293,23 @@ export default function Insights() {
         subtitle={wasteUnavailable
           ? 'Add unit prices to products to enable monetary waste tracking.'
           : `Spoiled value across the last ${days} days.`}
+        right={
+          <div className="inline-flex rounded-lg bg-gray-900/60 p-1 shrink-0">
+            {WINDOWS.map((w) => (
+              <button
+                key={w.id}
+                onClick={() => setDays(w.id)}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  days === w.id
+                    ? 'bg-brand-cobalt text-white'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+        }
       >
         {wasteUnavailable ? (
           <p className="text-sm text-gray-500">/api/stats/waste not available on this backend yet.</p>
