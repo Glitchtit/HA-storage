@@ -2519,7 +2519,13 @@ class TestAutoPlacement:
         def fake_opt(conn, *, product_ids=None, **k):
             captured["product_ids"] = product_ids
             return {"updated": len(product_ids or [])}
+        def no_ai(prompt, conn, **k):
+            # Linker runs first now; keep it from making a real (slow, retried)
+            # AI call so this stays a fast, deterministic unit test — it
+            # should find nothing and fall through to the optimizer fallback.
+            raise ValueError("AI offline")
         monkeypatch.setattr("optimizer.run_optimize", fake_opt)
+        monkeypatch.setattr("linker.call_ai_json", no_ai)
         monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
         monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
 
@@ -2531,6 +2537,7 @@ class TestAutoPlacement:
         def boom(*a, **k):
             raise RuntimeError("ai down")
         monkeypatch.setattr("optimizer.run_optimize", boom)
+        monkeypatch.setattr("linker.call_ai_json", boom)
         monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
         monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
         r = client.post("/api/products", json=self._make_ungrouped())

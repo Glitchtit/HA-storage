@@ -71,17 +71,19 @@ def _autoplace_enabled(conn) -> bool:
 
 
 def _autoplace_product(product_id: int) -> None:
-    """Background, best-effort: assign a type-parent + category to a just-created
-    product via the AI optimizer. Opens its OWN connection — never shares the
-    request connection across threads. Any failure (AI offline, etc.) is a
-    no-op; product creation already succeeded."""
+    """Background, best-effort: place a just-created product in the tree via
+    the linker; if the linker finds nothing, fall back to the AI optimizer
+    (which also assigns a product group). Opens its OWN connection."""
     try:
         from main import DB_PATH
         from database import get_db
+        from linker import link_products
         from optimizer import run_optimize
         conn = get_db(DB_PATH)
         try:
-            run_optimize(conn, product_ids=[product_id])
+            res = link_products(conn, [product_id])
+            if not res["linked"] and not res["proposed"]:
+                run_optimize(conn, product_ids=[product_id])
         finally:
             conn.close()
     except Exception as exc:

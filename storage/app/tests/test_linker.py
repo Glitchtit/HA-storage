@@ -37,3 +37,113 @@ class TestSchema:
         names = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         assert "link_proposals" in names
+
+
+import linker
+
+
+def _mk(name, parent_id=None, active=True):
+    r = client.post("/api/products", json={
+        "name": name, "unit_id": _unit_id(), "parent_id": parent_id, "active": active})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+class TestApplyLink:
+    def test_sets_parent_and_history(self):
+        conn = get_connection()
+        cat = _mk("lohi-l1")
+        sku = _mk("Pirkka savulohi 200g l1")
+        linker.apply_link(conn, sku, cat, note="test")
+        row = conn.execute("SELECT parent_id FROM products WHERE id = ?", (sku,)).fetchone()
+        assert row["parent_id"] == cat
+        ev = conn.execute(
+            "SELECT * FROM stock_history WHERE product_id = ? AND event_type = 'link'",
+            (sku,)).fetchone()
+        assert ev is not None
+
+
+class TestLinkProducts:
+    def test_exact_normalized_match_no_ai(self, monkeypatch):
+        def boom(prompt, conn, **k):
+            raise AssertionError("AI must not be called for exact matches")
+        monkeypatch.setattr("linker.call_ai_json", boom)
+        conn = get_connection()
+        cat = _mk("Cheddar-l2")
+        dup = _mk("cheddar-l2")  # same name, case-insensitive
+        res = linker.link_products(conn, [dup])
+        assert dup in res["linked"]
+
+    def test_ai_high_confidence_autolinks(self, monkeypatch):
+        conn = get_connection()
+        cat = _mk("lohi-l3")
+        sku = _mk("Pirkka savulohifileepala 200g ASC l3")
+
+        def fake(prompt, conn_, **k):
+            return [{"product_id": sku, "parent_id": cat, "confidence": "high"}]
+        monkeypatch.setattr("linker.call_ai_json", fake)
+        res = linker.link_products(conn, [sku])
+        assert sku in res["linked"]
+        row = conn.execute("SELECT parent_id FROM products WHERE id = ?", (sku,)).fetchone()
+        assert row["parent_id"] == cat
+
+    def test_ai_medium_confidence_queues_proposal(self, monkeypatch):
+        conn = get_connection()
+        cat = _mk("voi-l4")
+        sku = _mk("Valio Oivariini 350g l4")
+
+        def fake(prompt, conn_, **k):
+            return [{"product_id": sku, "parent_id": cat, "confidence": "medium"}]
+        monkeypatch.setattr("linker.call_ai_json", fake)
+        res = linker.link_products(conn, [sku])
+        assert sku in res["proposed"]
+        row = conn.execute(
+            "SELECT * FROM link_proposals WHERE product_id = ? AND status = 'pending'",
+            (sku,)).fetchone()
+        assert row["proposed_parent_id"] == cat
+        # product NOT linked yet
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (sku,)).fetchone()["parent_id"] is None
+
+    def test_rejected_pair_never_reproposed(self, monkeypatch):
+        conn = get_connection()
+        cat = _mk("margariini-l5")
+        sku = _mk("Voi-tuote l5")
+        conn.execute(
+            "INSERT INTO link_proposals (product_id, proposed_parent_id, confidence, status) "
+            "VALUES (?, ?, 'medium', 'rejected')", (sku, cat))
+        conn.commit()
+
+        def fake(prompt, conn_, **k):
+            return [{"product_id": sku, "parent_id": cat, "confidence": "high"}]
+        monkeypatch.setattr("linker.call_ai_json", fake)
+        res = linker.link_products(conn, [sku])
+        assert sku not in res["linked"] and sku not in res["proposed"]
+
+    def test_ai_offline_degrades(self, monkeypatch):
+        conn = get_connection()
+        sku = _mk("Tuntematon tuote 123g l6")
+
+        def boom(prompt, conn_, **k):
+            raise ValueError("AI offline")
+        monkeypatch.setattr("linker.call_ai_json", boom)
+        res = linker.link_products(conn, [sku])
+        assert sku in res["unmatched"]
+
+
+class TestRunReconcile:
+    def test_sweep_links_and_backfills(self, monkeypatch):
+        conn = get_connection()
+        cat = _mk("kerma-l7")
+        sku = _mk("Testikerma 2dl l7")
+        # simulate a pre-parser product: wipe its conversion to test backfill
+        conn.execute("DELETE FROM unit_conversions WHERE product_id = ?", (sku,))
+        conn.commit()
+
+        def fake(prompt, conn_, **k):
+            return [{"product_id": sku, "parent_id": cat, "confidence": "high"}]
+        monkeypatch.setattr("linker.call_ai_json", fake)
+        res = linker.run_reconcile(conn)
+        assert res["linked"] >= 1
+        assert conn.execute(
+            "SELECT 1 FROM unit_conversions WHERE product_id = ?", (sku,)).fetchone()
