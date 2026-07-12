@@ -431,10 +431,16 @@ def reconcile_apply(body: ReconcileApplyRequest):
     """Apply user-confirmed cross-brand fulfillments. Decrements each matched
     row by its amount via the shared helper; rows already gone/done land in
     ``skipped`` (idempotent). Runs one ``sync_auto_shopping`` afterward, matching
-    the ``/stock/add`` ordering."""
+    the ``/stock/add`` ordering. As a side effect, each confirmed match whose
+    bought product differs from the row's product and is still unparented gets
+    persisted as a tree link (bought SKU parented under the row's node) — link
+    failures are logged and never fail the apply."""
+    from linker import apply_link
+
     conn = _get_db()
     applied: list[int] = []
     skipped: list[int] = []
+    links_to_apply: list[tuple[int, int]] = []
     for m in body.matches:
         row = conn.execute(
             "SELECT product_id FROM shopping_list WHERE id = ?", (m.shopping_row_id,)
@@ -446,22 +452,25 @@ def reconcile_apply(body: ReconcileApplyRequest):
         applied.append(touched)
         # A confirmed cross-brand match is ground truth: persist it as a tree
         # link so recipe availability sees this SKU under the generic node.
+        # Only collect here — apply_link commits internally, and committing
+        # mid-loop would flush partial decrements before the batch commit.
         if row and row["product_id"] and m.bought_product_id != row["product_id"]:
             bought = conn.execute(
                 "SELECT parent_id FROM products WHERE id = ?", (m.bought_product_id,)
             ).fetchone()
             if bought and bought["parent_id"] is None:
-                try:
-                    from linker import apply_link
-                    apply_link(conn, m.bought_product_id, row["product_id"],
-                               note="confirmed via shopping reconcile")
-                except ValueError as exc:
-                    log.warning("Reconcile link %d→%d skipped: %s",
-                                m.bought_product_id, row["product_id"], exc)
+                links_to_apply.append((m.bought_product_id, row["product_id"]))
     if applied:
         conn.commit()
         log.info("Reconcile apply: applied=%d, skipped=%d", len(applied), len(skipped))
         sync_auto_shopping(conn)
+    for bought_id, parent_id in links_to_apply:
+        try:
+            apply_link(conn, bought_id, parent_id,
+                       note="confirmed via shopping reconcile")
+        except Exception as exc:  # Link is best-effort; apply must never fail.
+            log.warning("Reconcile link %d->%d skipped: %s",
+                        bought_id, parent_id, exc)
     return {"applied": applied, "skipped": skipped}
 
 
