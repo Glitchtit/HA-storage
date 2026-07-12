@@ -8,6 +8,7 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 
 from models import Product, ProductCreate, ProductDetail, ProductUpdate
+import tree
 
 router = APIRouter(tags=["products"])
 log = logging.getLogger(__name__)
@@ -189,6 +190,10 @@ def create_product(body: ProductCreate):
     # Validate unit exists
     if not conn.execute("SELECT id FROM units WHERE id = ?", (body.unit_id,)).fetchone():
         raise HTTPException(400, f"Unit {body.unit_id} not found")
+    try:
+        tree.assert_valid_parent(conn, None, body.parent_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     cur = conn.execute(
         """INSERT INTO products (name, description, parent_id, location_id,
            product_group_id, unit_id, default_best_before_days, min_stock_amount,
@@ -234,6 +239,12 @@ def update_product(product_id: int, body: ProductUpdate):
     if "unit_id" in updates:
         if not conn.execute("SELECT id FROM units WHERE id = ?", (updates["unit_id"],)).fetchone():
             raise HTTPException(400, f"Unit {updates['unit_id']} not found")
+
+    if "parent_id" in updates:
+        try:
+            tree.assert_valid_parent(conn, product_id, updates["parent_id"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     params = list(updates.values()) + [product_id]
