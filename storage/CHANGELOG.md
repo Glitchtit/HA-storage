@@ -1,3 +1,9 @@
+## 0.21.1
+
+- Reconcile-apply links land on category/variant nodes only — never under another SKU
+- Recipe availability applies pack counts only to piece (kpl) amounts
+- Receipt-commit purchases now trigger the background product linker
+
 ## 0.21.0
 
 - Product tree is now arbitrary-depth (category → variant → SKU); stock and recipe availability aggregate the full subtree
