@@ -45,29 +45,33 @@ def ensure_pack_conversions(conn: sqlite3.Connection, product_id: int) -> bool:
     piece_id = units.get("kpl")
     wrote = False
 
-    if parsed["amount"] and parsed["unit"] and piece_id:
-        to_unit = units.get(parsed["unit"])
-        if to_unit and to_unit != piece_id:
-            exists = conn.execute(
-                "SELECT 1 FROM unit_conversions WHERE product_id = ? "
-                "AND from_unit_id = ? AND to_unit_id = ?",
-                (product_id, piece_id, to_unit),
-            ).fetchone()
-            if not exists:
-                conn.execute(
-                    "INSERT INTO unit_conversions (from_unit_id, to_unit_id, factor, product_id) "
-                    "VALUES (?, ?, ?, ?)",
-                    (piece_id, to_unit, parsed["amount"], product_id),
-                )
-                wrote = True
+    try:
+        if parsed["amount"] and parsed["unit"] and piece_id:
+            to_unit = units.get(parsed["unit"])
+            if to_unit and to_unit != piece_id:
+                exists = conn.execute(
+                    "SELECT 1 FROM unit_conversions WHERE product_id = ? "
+                    "AND from_unit_id = ? AND to_unit_id = ?",
+                    (product_id, piece_id, to_unit),
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        "INSERT INTO unit_conversions (from_unit_id, to_unit_id, factor, product_id) "
+                        "VALUES (?, ?, ?, ?)",
+                        (piece_id, to_unit, parsed["amount"], product_id),
+                    )
+                    wrote = True
 
-    if parsed["count"] and not prod["pack_count"]:
-        conn.execute(
-            "UPDATE products SET pack_count = ? WHERE id = ?",
-            (float(parsed["count"]), product_id),
-        )
-        wrote = True
+        if parsed["count"] and not prod["pack_count"]:
+            conn.execute(
+                "UPDATE products SET pack_count = ? WHERE id = ?",
+                (float(parsed["count"]), product_id),
+            )
+            wrote = True
 
-    if wrote:
-        conn.commit()
+        if wrote:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return wrote
