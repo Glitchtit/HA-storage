@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+import tree
 from cook_recipe import cook_recipe
 from models import (
     CookRecipeRequest,
@@ -67,6 +68,132 @@ def get_recipe(recipe_id: int):
 
     ingredients = [IngredientDetail(**r) for r in rows]
     return RecipeDetail(**recipe, ingredients=ingredients)
+
+
+def _convert_amount(
+    amount: float, from_unit: int, to_unit: int, product_id: int, conversions: list[dict]
+) -> float | None:
+    """BFS over global + product-specific conversions (port of HA-recipes logic)."""
+    if from_unit == to_unit:
+        return amount
+    graph: dict[int, dict[int, float]] = {}
+    for c in conversions:
+        cpid = c["product_id"]
+        if cpid is not None and int(cpid) != product_id:
+            continue
+        f, t, factor = int(c["from_unit_id"]), int(c["to_unit_id"]), float(c["factor"])
+        graph.setdefault(f, {})[t] = factor
+        if factor != 0:
+            graph.setdefault(t, {})[f] = 1.0 / factor
+    visited = {from_unit}
+    queue = [(from_unit, amount)]
+    while queue:
+        unit, amt = queue.pop(0)
+        if unit == to_unit:
+            return amt
+        for nxt, factor in graph.get(unit, {}).items():
+            if nxt not in visited:
+                visited.add(nxt)
+                queue.append((nxt, amt * factor))
+    return None
+
+
+@router.get("/recipes/{recipe_id}/availability")
+def recipe_availability(recipe_id: int):
+    """Per-ingredient stock status with recursive subtree aggregation.
+
+    Status semantics (port of HA-recipes `_get_recipe_detail`):
+    - staple product -> always green, available null.
+    - amount_needed == 0 ("to taste") -> green if any subtree stock > 0 else yellow.
+    - otherwise sum subtree stock converted into recipe units (same-unit uses
+      pack_count; cross-unit uses per-product conversion BFS; unconvertible
+      stock counts 0 toward available but marks the row).
+    - available >= needed -> green, except yellow when total unopened pieces
+      <= 1 and something is opened.
+    - available < needed but subtree has unconvertible stock >= 1 piece ->
+      yellow (have some, cannot verify amount).
+    - else red.
+    """
+    conn = _get_db()
+    if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
+        raise HTTPException(404, f"Recipe {recipe_id} not found")
+
+    conversions = [dict(r) for r in conn.execute("SELECT * FROM unit_conversions").fetchall()]
+    rows = conn.execute(
+        """
+        SELECT ri.id AS ingredient_id, ri.product_id, ri.amount, ri.unit_id,
+               ri.specificity, p.name AS product_name, p.parent_id,
+               COALESCE(p.staple, 0) AS staple, u.abbreviation AS unit_abbrev
+        FROM recipe_ingredients ri
+        JOIN products p ON p.id = ri.product_id
+        JOIN units u ON u.id = ri.unit_id
+        WHERE ri.recipe_id = ?
+        ORDER BY ri.sort_order, ri.id
+        """,
+        (recipe_id,),
+    ).fetchall()
+
+    out = []
+    for ri in rows:
+        pid = ri["product_id"]
+        needed = ri["amount"] or 0
+        subtree = [pid] + tree.descendant_ids(conn, pid)
+        qmarks = ",".join("?" * len(subtree))
+        stock_rows = conn.execute(
+            f"""
+            SELECT s.product_id, s.amount, s.amount_opened, p.unit_id, p.pack_count
+            FROM stock s JOIN products p ON p.id = s.product_id
+            WHERE s.product_id IN ({qmarks})
+            """,
+            subtree,
+        ).fetchall()
+
+        available: float | None = 0.0
+        pieces = 0.0
+        opened = 0.0
+        unconvertible_pieces = 0.0
+        for s in stock_rows:
+            amt = s["amount"] or 0
+            if amt <= 0:
+                continue
+            pieces += amt
+            opened += s["amount_opened"] or 0
+            if s["unit_id"] == ri["unit_id"]:
+                available += amt * (s["pack_count"] or 1)
+            else:
+                conv = _convert_amount(
+                    amt, s["unit_id"], ri["unit_id"], s["product_id"], conversions
+                )
+                if conv is not None:
+                    available += conv
+                else:
+                    unconvertible_pieces += amt
+
+        if ri["staple"]:
+            status, available = "green", None
+        elif needed == 0:
+            status = "green" if pieces > 0 else "yellow"
+        elif available >= needed:
+            status = "yellow" if pieces <= 1 and opened >= 1 else "green"
+        elif unconvertible_pieces >= 1:
+            status = "yellow"
+        else:
+            status = "red"
+
+        out.append({
+            "ingredient_id": ri["ingredient_id"],
+            "product_id": pid,
+            "product_name": ri["product_name"],
+            "parent_id": ri["parent_id"],
+            "amount_needed": needed,
+            "unit_id": ri["unit_id"],
+            "unit_abbrev": ri["unit_abbrev"],
+            "specificity": ri["specificity"] or "loose",
+            "status": status,
+            "available": available,
+        })
+
+    return {"recipe_id": recipe_id, "ingredients": out}
 
 
 @router.post("/recipes", response_model=RecipeDetail, status_code=201)
