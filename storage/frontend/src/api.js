@@ -13,6 +13,12 @@ export const createProduct = (data) => api.post('/products', data);
 export const updateProduct = (id, data) => api.put(`/products/${id}`, data);
 export const deleteProduct = (id) => api.delete(`/products/${id}`);
 
+// ── Link Proposals ───────────────────────────────────────────────────────
+export const getLinkProposals = () => api.get('/link-proposals');
+export const acceptLinkProposal = (id) => api.post(`/link-proposals/${id}/accept`);
+export const rejectLinkProposal = (id) => api.post(`/link-proposals/${id}/reject`);
+export const reconcileProducts = () => api.post('/products/reconcile');
+
 // ── Stock ─────────────────────────────────────────────────────────────────
 export const getStock = () => api.get('/stock');
 export const getStockEntries = (params) => api.get('/stock/entries', { params });

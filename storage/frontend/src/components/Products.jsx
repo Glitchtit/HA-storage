@@ -14,6 +14,9 @@ import {
   productImageUrl,
   uploadProductImage,
   deleteProductImage,
+  getLinkProposals,
+  acceptLinkProposal,
+  rejectLinkProposal,
 } from '../api';
 
 /* ── helpers ────────────────────────────────────────────────────────────── */
@@ -30,6 +33,7 @@ const EMPTY_FORM = {
   unit_price: null,
   picture_filename: null,
   pictureFile: null,
+  staple: false,
 };
 
 const lookup = (list, id) => list.find((i) => i.id === id);
@@ -376,6 +380,18 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
           </label>
         </div>
       )}
+
+      <div className="flex items-end pb-2">
+        <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={Boolean(form.staple)}
+            onChange={(e) => field('staple', e.target.checked)}
+            className="rounded border-gray-600 text-emerald-600 focus:ring-emerald-500 bg-gray-700"
+          />
+          Perustarvike (aina saatavilla)
+        </label>
+      </div>
     </div>
   );
 }
@@ -631,6 +647,7 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         picture_filename: data.picture_filename ?? null,
         pictureFile: null,
         active: Boolean(data.active),
+        staple: Boolean(data.staple),
       });
     } catch (err) {
       console.error('Load product failed', err);
@@ -840,6 +857,76 @@ function Thumb({ filename }) {
   );
 }
 
+/* ── Link proposal review queue ─────────────────────────────────────────── */
+
+function LinkProposals({ onApplied }) {
+  const [proposals, setProposals] = useState([]);
+  const [busy, setBusy] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const { data } = await getLinkProposals();
+      setProposals(data);
+    } catch (err) {
+      console.error('Load link proposals failed', err);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (id, fn) => {
+    setBusy(id);
+    try {
+      await fn(id);
+      await load();
+      onApplied?.();
+    } catch (err) {
+      console.error('Link proposal action failed', err);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (proposals.length === 0) return null;
+  return (
+    <div className="bg-gray-800 rounded-xl p-4 mb-4">
+      <h3 className="text-sm font-bold text-gray-300 mb-2">
+        🔗 Ehdotetut linkitykset
+      </h3>
+      <ul className="space-y-2">
+        {proposals.map((p) => (
+          <li key={p.id} className="flex items-center gap-3 text-sm">
+            <span className="flex-1 min-w-0 truncate text-gray-100">
+              {p.product_name}
+              <span className="text-gray-500"> → </span>
+              <span className="text-gray-300">{p.proposed_parent_name}</span>
+              {p.confidence !== 'high' && (
+                <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-300/80">
+                  epävarma
+                </span>
+              )}
+            </span>
+            <button
+              disabled={busy === p.id}
+              onClick={() => act(p.id, acceptLinkProposal)}
+              className="px-3 py-1 rounded-xl text-white text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
+            >
+              Hyväksy
+            </button>
+            <button
+              disabled={busy === p.id}
+              onClick={() => act(p.id, rejectLinkProposal)}
+              className="px-3 py-1 rounded-xl text-gray-300 text-xs font-semibold bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
+            >
+              Hylkää
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /* ── Main component ─────────────────────────────────────────────────────── */
 
 export default function Products() {
@@ -1042,6 +1129,9 @@ export default function Products() {
           {filtered.length} products
         </span>
       </div>
+
+      {/* Link proposal review queue */}
+      <LinkProposals onApplied={loadProducts} />
 
       {/* Products table */}
       <div className="bg-gray-800 rounded-xl shadow overflow-hidden">
