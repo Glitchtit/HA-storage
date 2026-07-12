@@ -2555,6 +2555,67 @@ class TestAutoPlacement:
         assert called["n"] == 0
 
 
+class TestOptimizerDepthGuard:
+    """Variant subtrees (category → variant → SKU) must survive the
+    optimizer's clean-slate parent strip as atomic units. Only top-level
+    parents (parent_id IS NULL) are strippable; a variant node — itself a
+    child of a top-level category — must never be deactivated or detached
+    from its own SKU children."""
+
+    def _kpl_id(self):
+        return next(u["id"] for u in client.get("/api/units").json()
+                    if u["abbreviation"] == "kpl")
+
+    @staticmethod
+    def _log(*a, **k):
+        pass
+
+    def test_strip_parents_preserves_variant_subtrees(self):
+        import optimizer
+        from main import get_connection
+
+        kpl = self._kpl_id()
+        cat = client.post(
+            "/api/products", json={"name": f"OptCat_{id(self)}", "unit_id": kpl}
+        ).json()["id"]
+        variant = client.post(
+            "/api/products",
+            json={"name": f"OptVariant_{id(self)}", "unit_id": kpl, "parent_id": cat},
+        ).json()["id"]
+        sku = client.post(
+            "/api/products",
+            json={"name": f"OptSku_{id(self)} 200g", "unit_id": kpl, "parent_id": variant},
+        ).json()["id"]
+
+        conn = get_connection()
+        products = [dict(r) for r in conn.execute(
+            "SELECT id, name, parent_id, product_group_id, active FROM products"
+        ).fetchall()]
+
+        optimizer._strip_parents(conn, products, self._log)
+
+        # The top-level category is stripped/deactivated as before.
+        cat_row = conn.execute(
+            "SELECT active FROM products WHERE id = ?", (cat,)
+        ).fetchone()
+        assert cat_row["active"] == 0
+
+        # The variant is an atomic subtree root: it must survive as active
+        # (never deactivated), even though it gets detached from its
+        # stripped parent category so phase 2 can re-parent it.
+        variant_row = conn.execute(
+            "SELECT active, parent_id FROM products WHERE id = ?", (variant,)
+        ).fetchone()
+        assert variant_row["active"] != 0
+        assert variant_row["parent_id"] is None
+
+        # The SKU still hangs under the variant — the subtree is atomic.
+        sku_row = conn.execute(
+            "SELECT parent_id FROM products WHERE id = ?", (sku,)
+        ).fetchone()
+        assert sku_row["parent_id"] == variant
+
+
 # ── Finance stats (stock value + purchase costs) ───────────────────────────
 
 class TestFinanceStats:

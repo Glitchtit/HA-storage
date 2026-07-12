@@ -156,11 +156,17 @@ def _strip_parents(
     Returns a tuple of (all_parent_ids, recipe_linked_ids) so the caller can
     preserve recipe-linked parents in name_to_product for reuse.
     """
-    # 1. Products referenced as a parent by any other product
+    # 1. Products referenced as a parent by any other product.
+    # Only TOP-LEVEL parents (parent_id IS NULL) are strippable placeholders.
+    # A variant node (a parent that is itself someone's child) is an atomic
+    # subtree root: phase 2 may re-parent it, but we never strip or
+    # deactivate it, so its SKU children follow it wherever it lands.
+    top_level_ids = {int(p["id"]) for p in products if not p.get("parent_id")}
     has_children: set[int] = set()
     for p in products:
-        if p.get("parent_id"):
-            has_children.add(int(p["parent_id"]))
+        pid = p.get("parent_id")
+        if pid and int(pid) in top_level_ids:
+            has_children.add(int(pid))
 
     # 2. Optimizer-created group-master products (safe to delete unless in a recipe)
     group_master_prods: set[int] = set()
@@ -196,10 +202,15 @@ def _strip_parents(
             list(all_parent_ids),
         )
 
-    # Strip parent_id links from children before deleting parents
+    # Strip parent_id links from direct children of stripped parents only —
+    # NOT a blanket strip of every parent_id in the tree. A variant's own
+    # SKU children keep pointing at it; only links to a stripped top-level
+    # parent are cut (so the orphaned variant is free for phase 2 to
+    # re-parent, subtree intact).
     stripped = 0
     for p in products:
-        if p.get("parent_id"):
+        pid = p.get("parent_id")
+        if pid and int(pid) in all_parent_ids:
             conn.execute("UPDATE products SET parent_id = NULL WHERE id = ?", (p["id"],))
             p["parent_id"] = None
             stripped += 1
