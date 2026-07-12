@@ -436,11 +436,28 @@ def reconcile_apply(body: ReconcileApplyRequest):
     applied: list[int] = []
     skipped: list[int] = []
     for m in body.matches:
+        row = conn.execute(
+            "SELECT product_id FROM shopping_list WHERE id = ?", (m.shopping_row_id,)
+        ).fetchone()
         touched = _decrement_one_row(conn, m.shopping_row_id, m.amount)
         if touched is None:
             skipped.append(m.shopping_row_id)
-        else:
-            applied.append(touched)
+            continue
+        applied.append(touched)
+        # A confirmed cross-brand match is ground truth: persist it as a tree
+        # link so recipe availability sees this SKU under the generic node.
+        if row and row["product_id"] and m.bought_product_id != row["product_id"]:
+            bought = conn.execute(
+                "SELECT parent_id FROM products WHERE id = ?", (m.bought_product_id,)
+            ).fetchone()
+            if bought and bought["parent_id"] is None:
+                try:
+                    from linker import apply_link
+                    apply_link(conn, m.bought_product_id, row["product_id"],
+                               note="confirmed via shopping reconcile")
+                except ValueError as exc:
+                    log.warning("Reconcile link %d→%d skipped: %s",
+                                m.bought_product_id, row["product_id"], exc)
     if applied:
         conn.commit()
         log.info("Reconcile apply: applied=%d, skipped=%d", len(applied), len(skipped))

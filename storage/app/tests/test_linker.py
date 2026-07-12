@@ -193,3 +193,34 @@ class TestLinksRouter:
         r = client.post("/api/products/reconcile")
         assert r.status_code == 200
         assert "linked" in r.json()
+
+
+class TestReconcileApplyLinks:
+    def test_confirmed_match_links_bought_under_row_product(self):
+        conn = get_connection()
+        node = _mk("vispikerma-h1")
+        bought = _mk("Valio kuohukerma 3,3dl h1")
+        # put node on the shopping list
+        r = client.post("/api/shopping-list", json={"product_id": node, "amount": 1})
+        row_id = r.json()["id"]
+        r = client.post("/api/shopping-list/reconcile/apply", json={"matches": [{
+            "shopping_row_id": row_id, "bought_product_id": bought, "amount": 1,
+            "confidence": "high", "shopping_name": "vispikerma-h1",
+            "bought_name": "Valio kuohukerma 3,3dl h1"}]})
+        assert r.status_code == 200
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (bought,)).fetchone()["parent_id"] == node
+
+    def test_already_parented_bought_product_untouched(self):
+        conn = get_connection()
+        node = _mk("juusto-h2")
+        other = _mk("cheddar-h2")
+        bought = _mk("Valio juustoraaste h2", parent_id=other)
+        r = client.post("/api/shopping-list", json={"product_id": node, "amount": 1})
+        row_id = r.json()["id"]
+        client.post("/api/shopping-list/reconcile/apply", json={"matches": [{
+            "shopping_row_id": row_id, "bought_product_id": bought, "amount": 1,
+            "confidence": "high", "shopping_name": "juusto-h2",
+            "bought_name": "Valio juustoraaste h2"}]})
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (bought,)).fetchone()["parent_id"] == other
