@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from models import Product, ProductCreate, ProductDetail, ProductUpdate
 import tree
+import pack_size
 
 router = APIRouter(tags=["products"])
 log = logging.getLogger(__name__)
@@ -218,6 +219,11 @@ def create_product(body: ProductCreate):
     )
     conn.commit()
     new = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
+    try:
+        pack_size.ensure_pack_conversions(conn, new["id"])
+        new = conn.execute("SELECT * FROM products WHERE id = ?", (new["id"],)).fetchone()
+    except Exception as exc:
+        log.warning("Pack-size parse for product %d failed: %s", new["id"], exc)
     # New brands scanned during shopping arrive ungrouped; place them under the
     # right type-parent so the catalog (and future exact matching) stays tidy.
     # Best-effort, off the request path — never blocks or fails the create.
