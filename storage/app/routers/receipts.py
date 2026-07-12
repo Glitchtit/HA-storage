@@ -74,6 +74,7 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     conn = _get_db()
     added = 0
     errors: list[str] = []
+    purchased_product_ids: set[int] = set()
     for idx, line in enumerate(body.lines):
         try:
             product = conn.execute(
@@ -129,9 +130,21 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
                 unit_price=price_paid,
             )
             added += 1
+            purchased_product_ids.add(line.product_id)
         except Exception as exc:
             errors.append(f"Line {idx}: {exc}")
 
     conn.commit()
     log.info("Receipt commit: added=%d, failed=%d", added, len(errors))
+
+    # Best-effort background linking, same trigger /stock/add uses: a
+    # receipt purchase of a still-unparented, still-childless product is a
+    # fresh signal the tree may want it categorised.
+    try:
+        import linker
+        for product_id in purchased_product_ids:
+            linker.maybe_link_after_purchase(conn, product_id)
+    except Exception as exc:
+        log.warning("Receipt commit: post-commit linker trigger failed: %s", exc)
+
     return {"added": added, "failed": len(errors), "errors": errors}

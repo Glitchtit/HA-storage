@@ -79,6 +79,17 @@ class TestAvailability:
                         "unit_id": _unit_id("kpl"), "specificity": "loose"}])
         assert list(_avail(rid).values())[0]["status"] == "green"
 
+    def test_pack_count_not_applied_to_non_piece_unit_match(self):
+        # Same-unit (g == g) match on a product with pack_count=10 must NOT
+        # multiply by pack_count — that multiplier only applies when the
+        # shared unit is kpl. 100 g * 10 would wrongly satisfy a 500 g need.
+        cat = _mk("packcount-guard-a2b", unit="g")
+        sku = _mk("Guarded sku a2b 100g", unit="g", parent_id=cat, pack_count=10)
+        _stock(sku, 100)
+        rid = _recipe([{"product_id": cat, "amount": 500,
+                        "unit_id": _unit_id("g"), "specificity": "loose"}])
+        assert list(_avail(rid).values())[0]["status"] == "red"
+
     def test_conversion_via_pack_size(self):
         # babypinaatti: SKU auto-parsed 65g pack, need 30 g
         cat = _mk("babypinaatti-a3", unit="g")

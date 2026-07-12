@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import threading
 
 from fastapi import APIRouter, HTTPException
 
@@ -190,21 +189,8 @@ def add_stock(body: StockAdd):
              body.amount, body.product_id, purchased_date, bb_days)
     # Best-effort background linking: a purchase of a still-unparented, still-
     # childless product is a fresh signal the tree may want it categorised.
-    prod = conn.execute(
-        """
-        SELECT p.parent_id,
-               EXISTS(SELECT 1 FROM products c WHERE c.parent_id = p.id) AS has_children
-        FROM products p WHERE p.id = ?
-        """,
-        (body.product_id,),
-    ).fetchone()
-    if prod and prod["parent_id"] is None and not prod["has_children"]:
-        from routers.products import _autoplace_enabled
-        if _autoplace_enabled(conn):
-            import linker
-            threading.Thread(
-                target=linker.link_async, args=(body.product_id,), daemon=True
-            ).start()
+    import linker
+    linker.maybe_link_after_purchase(conn, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
     consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id)
     sync_auto_shopping(conn)

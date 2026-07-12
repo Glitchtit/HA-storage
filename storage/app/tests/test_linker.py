@@ -224,3 +224,35 @@ class TestReconcileApplyLinks:
             "bought_name": "Valio juustoraaste h2"}]})
         assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
                             (bought,)).fetchone()["parent_id"] == other
+
+    def test_sku_shaped_row_product_links_under_its_own_parent(self):
+        # Row product is itself SKU-shaped (has a pack-size token) but has a
+        # parent — the bought product must land under that parent, never
+        # directly under the row's own SKU.
+        conn = get_connection()
+        parent = _mk("rowsku-node-h3")
+        rowsku = _mk("Rowsku 200g h3", parent_id=parent)
+        bought = _mk("Other rowsku 200g h3b")
+        r = client.post("/api/shopping-list", json={"product_id": rowsku, "amount": 1})
+        row_id = r.json()["id"]
+        client.post("/api/shopping-list/reconcile/apply", json={"matches": [{
+            "shopping_row_id": row_id, "bought_product_id": bought, "amount": 1,
+            "confidence": "high", "shopping_name": "Rowsku 200g h3",
+            "bought_name": "Other rowsku 200g h3b"}]})
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (bought,)).fetchone()["parent_id"] == parent
+
+    def test_sku_shaped_row_product_without_parent_skips_link(self):
+        # Row product is SKU-shaped and has no parent of its own — there is
+        # no safe target, so the bought product must stay unparented.
+        conn = get_connection()
+        rowsku = _mk("Rowsku 200g h3c")
+        bought = _mk("Another rowsku 200g h3d")
+        r = client.post("/api/shopping-list", json={"product_id": rowsku, "amount": 1})
+        row_id = r.json()["id"]
+        client.post("/api/shopping-list/reconcile/apply", json={"matches": [{
+            "shopping_row_id": row_id, "bought_product_id": bought, "amount": 1,
+            "confidence": "high", "shopping_name": "Rowsku 200g h3c",
+            "bought_name": "Another rowsku 200g h3d"}]})
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (bought,)).fetchone()["parent_id"] is None

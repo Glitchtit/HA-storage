@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
+from pack_size import parse_pack_size
 from models import (
     CadenceSuggestionResponse,
     ReconcileApplyRequest,
@@ -426,6 +427,37 @@ def reconcile_shopping(body: ReconcileRequest):
     return {"proposals": proposals, "ai_available": True}
 
 
+def _reconcile_link_target(conn, row_product_id: int) -> int | None:
+    """Resolve the safe parent to link a bought SKU under, given the shopping
+    row's own product. Uses the same node-shaped test as
+    ``linker._candidate_nodes``: has children, is in the 'Group master'
+    group, or its name carries no pack-size/count token. A node-shaped row
+    product is itself a valid link target. A SKU-shaped row product is NOT —
+    parenting one SKU under another creates a fake placeholder parent that
+    the optimizer's strip-parents pass will later deactivate (a real product
+    with stock would vanish). In that case fall back to the row product's
+    own parent, if any; otherwise there is no safe target."""
+    row_prod = conn.execute(
+        """
+        SELECT p.name, p.parent_id,
+               EXISTS(SELECT 1 FROM products c WHERE c.parent_id = p.id) AS has_children,
+               (SELECT 1 FROM product_groups g
+                 WHERE g.id = p.product_group_id AND g.name = 'Group master') AS is_gm
+        FROM products p WHERE p.id = ?
+        """,
+        (row_product_id,),
+    ).fetchone()
+    if row_prod is None:
+        return None
+    sized = parse_pack_size(row_prod["name"])
+    node_shaped = bool(row_prod["has_children"]) or bool(row_prod["is_gm"]) or (
+        sized["amount"] is None and sized["count"] is None
+    )
+    if node_shaped:
+        return row_product_id
+    return row_prod["parent_id"]
+
+
 @router.post("/shopping-list/reconcile/apply", response_model=ReconcileApplyResponse)
 def reconcile_apply(body: ReconcileApplyRequest):
     """Apply user-confirmed cross-brand fulfillments. Decrements each matched
@@ -433,8 +465,10 @@ def reconcile_apply(body: ReconcileApplyRequest):
     ``skipped`` (idempotent). Runs one ``sync_auto_shopping`` afterward, matching
     the ``/stock/add`` ordering. As a side effect, each confirmed match whose
     bought product differs from the row's product and is still unparented gets
-    persisted as a tree link (bought SKU parented under the row's node) — link
-    failures are logged and never fail the apply."""
+    persisted as a tree link — under the row's node if it is node-shaped, or
+    under the row product's own parent if the row product is itself a SKU (never
+    directly under another SKU); link failures are logged and never fail the
+    apply."""
     from linker import apply_link
 
     conn = _get_db()
@@ -459,7 +493,9 @@ def reconcile_apply(body: ReconcileApplyRequest):
                 "SELECT parent_id FROM products WHERE id = ?", (m.bought_product_id,)
             ).fetchone()
             if bought and bought["parent_id"] is None:
-                links_to_apply.append((m.bought_product_id, row["product_id"]))
+                target = _reconcile_link_target(conn, row["product_id"])
+                if target is not None:
+                    links_to_apply.append((m.bought_product_id, target))
     if applied:
         conn.commit()
         log.info("Reconcile apply: applied=%d, skipped=%d", len(applied), len(skipped))

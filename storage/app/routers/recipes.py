@@ -105,9 +105,10 @@ def recipe_availability(recipe_id: int):
     Status semantics (port of HA-recipes `_get_recipe_detail`):
     - staple product -> always green, available null.
     - amount_needed == 0 ("to taste") -> green if any subtree stock > 0 else yellow.
-    - otherwise sum subtree stock converted into recipe units (same-unit uses
-      pack_count; cross-unit uses per-product conversion BFS; unconvertible
-      stock counts 0 toward available but marks the row).
+    - otherwise sum subtree stock converted into recipe units (same-unit in
+      kpl uses pack_count; any other same-unit match uses 1:1; cross-unit
+      uses per-product conversion BFS; unconvertible stock counts 0 toward
+      available but marks the row).
     - available >= needed -> green, except yellow when total unopened pieces
       <= 1 and something is opened.
     - available < needed but subtree has unconvertible stock >= 1 piece ->
@@ -117,6 +118,11 @@ def recipe_availability(recipe_id: int):
     conn = _get_db()
     if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
         raise HTTPException(404, f"Recipe {recipe_id} not found")
+
+    kpl_row = conn.execute(
+        "SELECT id FROM units WHERE abbreviation = 'kpl'"
+    ).fetchone()
+    kpl_unit_id = kpl_row["id"] if kpl_row else None
 
     conversions = [dict(r) for r in conn.execute("SELECT * FROM unit_conversions").fetchall()]
     rows = conn.execute(
@@ -159,7 +165,12 @@ def recipe_availability(recipe_id: int):
             pieces += amt
             opened += s["amount_opened"] or 0
             if s["unit_id"] == ri["unit_id"]:
-                available += amt * (s["pack_count"] or 1)
+                # pack_count multiplies discrete piece counts (e.g. a 10-pack
+                # of eggs) into the recipe's kpl need. Applying it to any
+                # same-unit match (e.g. grams) would inflate stock that
+                # merely shares a unit with the recipe by the pack size.
+                multiplier = s["pack_count"] or 1 if ri["unit_id"] == kpl_unit_id else 1
+                available += amt * multiplier
             else:
                 conv = _convert_amount(
                     amt, s["unit_id"], ri["unit_id"], s["product_id"], conversions

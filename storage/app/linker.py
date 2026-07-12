@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 
 from ai_client import call_ai_json
 from pack_size import ensure_pack_conversions, parse_pack_size
@@ -69,6 +70,31 @@ def apply_link(conn: sqlite3.Connection, product_id: int, parent_id: int, *, not
         note=note or f"linked under {parent['name'] if parent else parent_id}",
     )
     conn.commit()
+
+
+def maybe_link_after_purchase(conn: sqlite3.Connection, product_id: int) -> None:
+    """Fire a background link attempt for an unparented, childless product
+    when autoplace is enabled. A purchase is a fresh signal the tree may want
+    it categorised. Best-effort; never raises — every caller (stock add,
+    receipt commit) must be able to trust this can't fail their write."""
+    try:
+        prod = conn.execute(
+            """
+            SELECT p.parent_id,
+                   EXISTS(SELECT 1 FROM products c WHERE c.parent_id = p.id) AS has_children
+            FROM products p WHERE p.id = ?
+            """,
+            (product_id,),
+        ).fetchone()
+        if not prod or prod["parent_id"] is not None or prod["has_children"]:
+            return
+        from routers.products import _autoplace_enabled  # lazy: avoid import cycle
+        if _autoplace_enabled(conn):
+            threading.Thread(
+                target=link_async, args=(product_id,), daemon=True
+            ).start()
+    except Exception as exc:
+        log.warning("maybe_link_after_purchase(%s) failed: %s", product_id, exc)
 
 
 def _candidate_nodes(conn: sqlite3.Connection, exclude: set[int]) -> list[dict]:
