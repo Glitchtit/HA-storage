@@ -862,6 +862,7 @@ function Thumb({ filename }) {
 function LinkProposals({ onApplied }) {
   const [proposals, setProposals] = useState([]);
   const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -876,12 +877,14 @@ function LinkProposals({ onApplied }) {
 
   const act = async (id, fn) => {
     setBusy(id);
+    setError(null);
     try {
       await fn(id);
       await load();
       onApplied?.();
     } catch (err) {
       console.error('Link proposal action failed', err);
+      setError('Linkityksen käsittely epäonnistui — yritä uudelleen.');
     } finally {
       setBusy(null);
     }
@@ -893,6 +896,7 @@ function LinkProposals({ onApplied }) {
       <h3 className="text-sm font-bold text-gray-300 mb-2">
         🔗 Ehdotetut linkitykset
       </h3>
+      {error && <p className="text-sm text-red-400 mb-2">{error}</p>}
       <ul className="space-y-2">
         {proposals.map((p) => (
           <li key={p.id} className="flex items-center gap-3 text-sm">
