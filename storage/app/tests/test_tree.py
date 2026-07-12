@@ -65,3 +65,27 @@ class TestCycleGuard:
         c = _mk("deep-c")
         r = client.put(f"/api/products/{c}", json={"parent_id": b})
         assert r.status_code == 200
+
+
+class TestRecursiveAggregation:
+    def _stock_add(self, pid, amount=1):
+        r = client.post("/api/stock/add", json={"product_id": pid, "amount": amount})
+        assert r.status_code in (200, 201), r.text
+
+    def test_list_children_stock_spans_grandchildren(self):
+        cat = _mk("agg-cat")
+        variant = _mk("agg-variant", parent_id=cat)
+        sku = _mk("agg-sku", parent_id=variant)
+        self._stock_add(sku, 3)
+        rows = client.get("/api/products", params={"active_only": "false"}).json()
+        by_id = {p["id"]: p for p in rows}
+        assert by_id[cat]["children_stock_amount"] == 3
+        assert by_id[variant]["children_stock_amount"] == 3
+
+    def test_get_product_child_stock_recursive(self):
+        cat = _mk("agg2-cat")
+        variant = _mk("agg2-variant", parent_id=cat)
+        sku = _mk("agg2-sku", parent_id=variant)
+        self._stock_add(sku, 2)
+        detail = client.get(f"/api/products/{cat}").json()
+        assert detail["children_stock_amount"] == 2

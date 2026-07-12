@@ -109,14 +109,19 @@ def list_products(
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     rows = conn.execute(
         f"""
-        WITH child_totals AS (
-            SELECT cp.parent_id AS pid,
+        WITH RECURSIVE closure(ancestor, descendant) AS (
+            SELECT parent_id, id FROM products WHERE parent_id IS NOT NULL
+            UNION
+            SELECT c.ancestor, p.id
+            FROM products p JOIN closure c ON p.parent_id = c.descendant
+        ),
+        child_totals AS (
+            SELECT c.ancestor AS pid,
                    COALESCE(SUM(cs.amount), 0) AS amount,
                    COALESCE(SUM(cs.amount_opened), 0) AS opened
-            FROM products cp
-            JOIN stock cs ON cs.product_id = cp.id
-            WHERE cp.parent_id IS NOT NULL
-            GROUP BY cp.parent_id
+            FROM closure c
+            JOIN stock cs ON cs.product_id = c.descendant
+            GROUP BY c.ancestor
         )
         SELECT p.*,
                COALESCE(SUM(s.amount), 0) AS stock_amount,
@@ -154,11 +159,16 @@ def get_product(product_id: int):
         "FROM stock WHERE product_id = ?",
         (product_id,),
     ).fetchone()
-    child_stock_row = conn.execute(
-        "SELECT COALESCE(SUM(s.amount), 0) as total, COALESCE(SUM(s.amount_opened), 0) as opened "
-        "FROM stock s JOIN products p ON p.id = s.product_id WHERE p.parent_id = ?",
-        (product_id,),
-    ).fetchone()
+    desc = tree.descendant_ids(conn, product_id)
+    if desc:
+        qmarks = ",".join("?" * len(desc))
+        child_stock_row = conn.execute(
+            f"SELECT COALESCE(SUM(amount), 0) AS total, COALESCE(SUM(amount_opened), 0) AS opened "
+            f"FROM stock WHERE product_id IN ({qmarks})",
+            desc,
+        ).fetchone()
+    else:
+        child_stock_row = {"total": 0, "opened": 0}
 
     return {
         **row,

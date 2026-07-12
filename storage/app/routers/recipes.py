@@ -47,7 +47,14 @@ def get_recipe(recipe_id: int):
                    WHERE s.product_id = ri.product_id
                       OR (
                           ri.specificity = 'loose'
-                          AND s.product_id IN (SELECT id FROM products WHERE parent_id = ri.product_id)
+                          AND s.product_id IN (
+                              WITH RECURSIVE d(id) AS (
+                                  SELECT id FROM products WHERE parent_id = ri.product_id
+                                  UNION
+                                  SELECT p.id FROM products p JOIN d ON p.parent_id = d.id
+                              )
+                              SELECT id FROM d
+                          )
                       )
                ), 0) as stock_amount,
                p.unit_id as stock_unit_id
