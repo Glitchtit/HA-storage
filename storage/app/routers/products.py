@@ -197,13 +197,13 @@ def create_product(body: ProductCreate):
     cur = conn.execute(
         """INSERT INTO products (name, description, parent_id, location_id,
            product_group_id, unit_id, default_best_before_days, min_stock_amount,
-           picture_filename, active, unit_price, unit_price_currency)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           picture_filename, active, unit_price, unit_price_currency, pack_count, staple)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             body.name, body.description, body.parent_id, body.location_id,
             body.product_group_id, body.unit_id, body.default_best_before_days,
             body.min_stock_amount, body.picture_filename, int(body.active),
-            body.unit_price, body.unit_price_currency or "EUR",
+            body.unit_price, body.unit_price_currency or "EUR", body.pack_count, int(body.staple),
         ),
     )
     conn.commit()
@@ -230,6 +230,8 @@ def update_product(product_id: int, body: ProductUpdate):
     updates = {}
     for field, value in body.model_dump(exclude_unset=True).items():
         if field == "active":
+            value = int(value)
+        if field == "staple":
             value = int(value)
         updates[field] = value
 

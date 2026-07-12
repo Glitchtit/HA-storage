@@ -11,7 +11,7 @@ from models import StockHistoryEntry, StockHistoryEntryWithProduct
 router = APIRouter(tags=["history"])
 log = logging.getLogger(__name__)
 
-VALID_EVENTS = {"purchase", "consume", "open", "transfer", "spoil"}
+VALID_EVENTS = {"purchase", "consume", "open", "transfer", "spoil", "link"}
 
 
 def _get_db():

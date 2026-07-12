@@ -48,6 +48,8 @@ class ProductCreate(BaseModel):
     active: bool = True
     unit_price: float | None = None
     unit_price_currency: str = "EUR"
+    pack_count: float | None = None
+    staple: bool = False
 
 class ProductUpdate(BaseModel):
     name: str | None = None
@@ -62,6 +64,8 @@ class ProductUpdate(BaseModel):
     active: bool | None = None
     unit_price: float | None = None
     unit_price_currency: str | None = None
+    pack_count: float | None = None
+    staple: bool | None = None
 
 class Product(BaseModel):
     id: int
@@ -77,6 +81,8 @@ class Product(BaseModel):
     active: bool
     unit_price: float | None = None
     unit_price_currency: str | None = None
+    pack_count: float | None = None
+    staple: int | bool = 0
     created_at: str
     updated_at: str
     stock_amount: float = 0

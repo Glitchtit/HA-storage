@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS products (
     pin_brand               INTEGER DEFAULT 0,
     unit_price              REAL,
     unit_price_currency     TEXT DEFAULT 'EUR',
+    pack_count              REAL,
+    staple                  INTEGER DEFAULT 0,
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -166,6 +168,16 @@ CREATE TABLE IF NOT EXISTS product_availability (
     price_currency TEXT DEFAULT 'EUR',
     checked_at     TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (product_id, store_id)
+);
+
+CREATE TABLE IF NOT EXISTS link_proposals (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id         INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    proposed_parent_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    confidence         TEXT NOT NULL DEFAULT 'medium',
+    status             TEXT NOT NULL DEFAULT 'pending',
+    created_at         TEXT DEFAULT (datetime('now')),
+    UNIQUE(product_id, proposed_parent_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_id);
@@ -453,6 +465,35 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
         if upgraded:
             log.info("Backfilled %d recipe_ingredients row(s) to specificity=strict.", upgraded)
+
+    # ── Recursive-tree / linker support (2026-07) ─────────────────────────
+    product_cols = {r["name"] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
+    if "pack_count" not in product_cols:
+        conn.execute("ALTER TABLE products ADD COLUMN pack_count REAL")
+        conn.commit()
+        log.info("Added pack_count column to products.")
+    if "staple" not in product_cols:
+        conn.execute("ALTER TABLE products ADD COLUMN staple INTEGER DEFAULT 0")
+        conn.commit()
+        log.info("Added staple column to products.")
+    tables = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "link_proposals" not in tables:
+        conn.executescript(
+            """
+            CREATE TABLE link_proposals (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id         INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                proposed_parent_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                confidence         TEXT NOT NULL DEFAULT 'medium',
+                status             TEXT NOT NULL DEFAULT 'pending',
+                created_at         TEXT DEFAULT (datetime('now')),
+                UNIQUE(product_id, proposed_parent_id)
+            );
+            """
+        )
+        conn.commit()
+        log.info("Created link_proposals table.")
 
 
 def _backfill_recipe_specificity(conn: sqlite3.Connection) -> int:
