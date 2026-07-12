@@ -1,3 +1,13 @@
+## 0.21.0
+
+- Product tree is now arbitrary-depth (category → variant → SKU); stock and recipe availability aggregate the full subtree
+- New linker: products are auto-placed in the tree at creation, purchase, and via the reconcile sweep (POST /api/products/reconcile)
+- High-confidence AI links apply automatically with a history event; uncertain ones queue in a review list in the Products view
+- Confirmed shopping reconcile matches now persist as tree links
+- Pack sizes (65g, 10kpl/580g, 3,3dl) are parsed from product names at creation into unit conversions and pack counts
+- New GET /api/recipes/{id}/availability endpoint computing per-ingredient stock status
+- New staple flag: pantry staples (vesi, suola) always show green in recipes
+
 ## 0.20.3
 
 - The product edit form now has an Active checkbox, so products deactivated in bulk operations (e.g. retired group masters) can be reactivated from the UI — previously the flag was only writable via the API. The detail header also shows an Inactive badge when applicable.
