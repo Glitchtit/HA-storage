@@ -113,3 +113,24 @@ class TestAvailability:
         rid = _recipe([{"product_id": pid, "amount": 3,
                         "unit_id": _unit_id("dl"), "specificity": "loose"}])
         assert list(_avail(rid).values())[0]["status"] == "yellow"
+
+    # ── Two branches the brief's 7 tests don't exercise: "to taste" green,
+    # and the opened/low-piece-count downgrade of an otherwise-green row. ──
+
+    def test_to_taste_green_with_stock(self):
+        pid = _mk("Muskottipahka-a8", unit="g")
+        _stock(pid, 5)
+        rid = _recipe([{"product_id": pid, "amount": 0,
+                        "unit_id": _unit_id("g"), "specificity": "loose"}])
+        assert list(_avail(rid).values())[0]["status"] == "green"
+
+    def test_opened_single_pack_downgrades_to_yellow(self):
+        # Enough stock to cover the need, but it's a single opened pack —
+        # can't be sure the remaining amount still meets `needed`.
+        pid = _mk("Voi-a9")
+        _stock(pid, 1)
+        r = client.post("/api/stock/open", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 200, r.text
+        rid = _recipe([{"product_id": pid, "amount": 1,
+                        "unit_id": _unit_id("kpl"), "specificity": "loose"}])
+        assert list(_avail(rid).values())[0]["status"] == "yellow"
