@@ -234,6 +234,7 @@ from routers import (
     stats,
     receipts,
     stores,
+    links,
 )
 
 app.include_router(products.router, prefix="/api")
@@ -252,6 +253,7 @@ app.include_router(history.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(receipts.router, prefix="/api")
 app.include_router(stores.router, prefix="/api")
+app.include_router(links.router, prefix="/api")
 
 
 # ── Error handler ──────────────────────────────────────────────────────────

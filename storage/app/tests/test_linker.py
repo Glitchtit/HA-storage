@@ -147,3 +147,49 @@ class TestRunReconcile:
         assert res["linked"] >= 1
         assert conn.execute(
             "SELECT 1 FROM unit_conversions WHERE product_id = ?", (sku,)).fetchone()
+
+
+class TestLinksRouter:
+    def _proposal(self, sku_name, cat_name):
+        conn = get_connection()
+        cat = _mk(cat_name)
+        sku = _mk(sku_name)
+        conn.execute(
+            "INSERT INTO link_proposals (product_id, proposed_parent_id, confidence) "
+            "VALUES (?, ?, 'medium')", (sku, cat))
+        conn.commit()
+        row = conn.execute(
+            "SELECT id FROM link_proposals WHERE product_id = ?", (sku,)).fetchone()
+        return row["id"], sku, cat
+
+    def test_list_pending(self):
+        prop_id, sku, cat = self._proposal("router-sku-1", "router-cat-1")
+        items = client.get("/api/link-proposals").json()
+        mine = [i for i in items if i["id"] == prop_id]
+        assert mine and mine[0]["product_name"] == "router-sku-1"
+
+    def test_accept_links(self):
+        prop_id, sku, cat = self._proposal("router-sku-2", "router-cat-2")
+        r = client.post(f"/api/link-proposals/{prop_id}/accept")
+        assert r.status_code == 200
+        conn = get_connection()
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (sku,)).fetchone()["parent_id"] == cat
+        assert conn.execute("SELECT status FROM link_proposals WHERE id = ?",
+                            (prop_id,)).fetchone()["status"] == "accepted"
+
+    def test_reject_remembers(self):
+        prop_id, sku, cat = self._proposal("router-sku-3", "router-cat-3")
+        r = client.post(f"/api/link-proposals/{prop_id}/reject")
+        assert r.status_code == 200
+        conn = get_connection()
+        assert conn.execute("SELECT status FROM link_proposals WHERE id = ?",
+                            (prop_id,)).fetchone()["status"] == "rejected"
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (sku,)).fetchone()["parent_id"] is None
+
+    def test_reconcile_endpoint(self, monkeypatch):
+        monkeypatch.setattr("linker.call_ai_json", lambda p, c, **k: [])
+        r = client.post("/api/products/reconcile")
+        assert r.status_code == 200
+        assert "linked" in r.json()
