@@ -135,6 +135,7 @@ class TestProductStoresField:
             "price": 3.5,
             "price_currency": "EUR",
             "checked_at": prod["stores"][0]["checked_at"],
+            "source": "scraper",
         }]
 
     def test_products_list_empty_stores_default(self):
@@ -151,3 +152,90 @@ class TestProductStoresField:
         assert r.status_code == 200
         assert len(r.json()["stores"]) == 1
         assert r.json()["stores"][0]["available"] is False
+
+    def test_stores_ordered_available_first_then_name(self):
+        pid = _make_product("Storefield 4")
+        client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})
+        client.put("/api/stores/K532", json={"name": "A-Market Aakkonen"})
+        client.put(f"/api/products/{pid}/availability",
+                   json=[{"store_id": "K532", "available": False},
+                         {"store_id": "N110", "available": True}])
+        r = client.get(f"/api/products/{pid}")
+        rows = r.json()["stores"]
+        assert [row["store_id"] for row in rows] == ["N110", "K532"]
+
+
+class TestManualStores:
+    def test_add_by_existing_store_id(self):
+        pid = _make_product("Manualtuote 1")
+        client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})
+        r = client.post(f"/api/products/{pid}/stores", json={"store_id": "N110"})
+        assert r.status_code == 200
+        rows = r.json()
+        assert len(rows) == 1
+        assert rows[0]["store_id"] == "N110"
+        assert rows[0]["available"] is True
+        assert rows[0]["source"] == "manual"
+        assert rows[0]["price"] is None
+
+    def test_add_by_name_creates_manual_store(self):
+        pid = _make_product("Manualtuote 2")
+        r = client.post(f"/api/products/{pid}/stores",
+                        json={"name": "Lidl Kivistö"})
+        assert r.status_code == 200
+        rows = r.json()
+        assert rows[0]["store_id"] == "manual-lidl-kivisto"
+        assert rows[0]["name"] == "Lidl Kivistö"
+        assert rows[0]["available"] is True
+        assert rows[0]["source"] == "manual"
+        # Store landed in the registry too
+        ids = [s["id"] for s in client.get("/api/stores").json()]
+        assert "manual-lidl-kivisto" in ids
+
+    def test_add_by_name_reuses_existing_manual_store(self):
+        pid1 = _make_product("Manualtuote 3")
+        pid2 = _make_product("Manualtuote 4")
+        client.post(f"/api/products/{pid1}/stores", json={"name": "Tokmanni"})
+        r = client.post(f"/api/products/{pid2}/stores", json={"name": "Tokmanni"})
+        assert r.status_code == 200
+        assert r.json()[0]["store_id"] == "manual-tokmanni"
+
+    def test_add_unknown_store_id_404(self):
+        pid = _make_product("Manualtuote 5")
+        r = client.post(f"/api/products/{pid}/stores",
+                        json={"store_id": "NOPE999"})
+        assert r.status_code == 404
+
+    def test_add_product_404(self):
+        r = client.post("/api/products/999999/stores", json={"name": "Lidl"})
+        assert r.status_code == 404
+
+    def test_add_requires_exactly_one_field(self):
+        pid = _make_product("Manualtuote 6")
+        assert client.post(f"/api/products/{pid}/stores", json={}).status_code == 400
+        assert client.post(
+            f"/api/products/{pid}/stores",
+            json={"store_id": "N110", "name": "Lidl"},
+        ).status_code == 400
+
+    def test_scraper_upsert_overrides_manual_source(self):
+        pid = _make_product("Manualtuote 7")
+        client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})
+        client.post(f"/api/products/{pid}/stores", json={"store_id": "N110"})
+        r = client.put(f"/api/products/{pid}/availability",
+                       json=[{"store_id": "N110", "available": False}])
+        row = r.json()[0]
+        assert row["available"] is False
+        assert row["source"] == "scraper"
+
+    def test_delete_removes_row(self):
+        pid = _make_product("Manualtuote 8")
+        client.post(f"/api/products/{pid}/stores", json={"name": "Prisma Halli"})
+        r = client.delete(f"/api/products/{pid}/stores/manual-prisma-halli")
+        assert r.status_code == 204
+        assert client.get(f"/api/products/{pid}").json()["stores"] == []
+
+    def test_delete_missing_row_404(self):
+        pid = _make_product("Manualtuote 9")
+        r = client.delete(f"/api/products/{pid}/stores/manual-nope")
+        assert r.status_code == 404

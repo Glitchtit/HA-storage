@@ -1,3 +1,10 @@
+## 0.22.0
+
+- Product details now show per-store availability: which mapped stores carry the product, with price and last-checked date
+- Stores can be added manually to a product ("I know this store carries it") — pick a known store or type a new name; manual rows are labeled and removable
+- New endpoints: POST /api/products/{id}/stores (manual add), DELETE /api/products/{id}/stores/{store_id}
+- Availability rows carry a source marker (scraper/manual); a scraper check always overrides a manual claim for that store
+
 ## 0.21.2
 
 - Adding a product already on the shopping list now increments the existing row instead of creating a duplicate (POST /api/shopping-list merges plain manual adds by product+unit; returns 200 on merge, 201 on create)

@@ -25,7 +25,7 @@ def _stores_by_product(conn, product_ids: list[int] | None = None) -> dict[int, 
     With product_ids=None the whole table is fetched (bulk list endpoint)."""
     sql = """
         SELECT pa.product_id, pa.store_id, s.name, pa.available,
-               pa.price, pa.price_currency, pa.checked_at
+               pa.price, pa.price_currency, pa.checked_at, pa.source
         FROM product_availability pa
         JOIN stores s ON s.id = pa.store_id
     """
@@ -34,7 +34,8 @@ def _stores_by_product(conn, product_ids: list[int] | None = None) -> dict[int, 
         sql += " WHERE pa.product_id IN (%s)" % ",".join("?" for _ in product_ids)
         params = list(product_ids)
     out: dict[int, list[dict]] = {}
-    for r in conn.execute(sql + " ORDER BY pa.store_id", params).fetchall():
+    order = " ORDER BY pa.available DESC, s.name COLLATE NOCASE, pa.store_id"
+    for r in conn.execute(sql + order, params).fetchall():
         out.setdefault(r["product_id"], []).append({
             "store_id": r["store_id"],
             "name": r["name"],
@@ -42,6 +43,7 @@ def _stores_by_product(conn, product_ids: list[int] | None = None) -> dict[int, 
             "price": r["price"],
             "price_currency": r["price_currency"],
             "checked_at": r["checked_at"],
+            "source": r["source"],
         })
     return out
 

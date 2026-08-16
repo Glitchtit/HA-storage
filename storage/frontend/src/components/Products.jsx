@@ -17,6 +17,9 @@ import {
   getLinkProposals,
   acceptLinkProposal,
   rejectLinkProposal,
+  getStores,
+  addProductStore,
+  removeProductStore,
 } from '../api';
 
 /* ── helpers ────────────────────────────────────────────────────────────── */
@@ -572,6 +575,137 @@ function BarcodeSection({ barcodes, productId, units, onChanged }) {
   );
 }
 
+/* ── Stores section inside detail panel ─────────────────────────────────── */
+
+function StoresSection({ stores, productId, onChanged }) {
+  const [registry, setRegistry] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [newName, setNewName] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getStores()
+      .then(({ data }) => setRegistry(data))
+      .catch((err) => console.error('Load stores failed', err));
+  }, []);
+
+  const mappedIds = new Set(stores.map((s) => s.store_id));
+  const unmapped = registry.filter((s) => !mappedIds.has(s.id));
+
+  const handleAdd = async () => {
+    const name = newName.trim();
+    if (!name && !selectedId) return;
+    setAdding(true);
+    setError('');
+    try {
+      await addProductStore(productId, name ? { name } : { store_id: selectedId });
+      setSelectedId('');
+      setNewName('');
+      onChanged();
+    } catch (err) {
+      console.error('Add store failed', err);
+      setError(err.response?.data?.detail ?? 'Add store failed');
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleRemove = async (storeId) => {
+    try {
+      await removeProductStore(productId, storeId);
+      onChanged();
+    } catch (err) {
+      console.error('Remove store failed', err);
+    }
+  };
+
+  return (
+    <div>
+      <h4 className="text-sm font-semibold text-gray-400 mb-2">Stores</h4>
+      {stores.length > 0 ? (
+        <ul className="space-y-1 mb-3">
+          {stores.map((s) => (
+            <li
+              key={s.store_id}
+              className="flex items-center gap-2 bg-gray-700/50 rounded px-3 py-1.5 text-sm"
+            >
+              <span
+                className={`px-1.5 rounded text-xs ${
+                  s.available
+                    ? 'bg-emerald-900/40 text-emerald-300'
+                    : 'bg-gray-800 text-gray-500'
+                }`}
+                title={s.available ? 'In assortment' : 'Not carried'}
+              >
+                {s.available ? '✓' : '✕'}
+              </span>
+              <span className="text-gray-100 flex-1 truncate">{s.name}</span>
+              {s.price != null && (
+                <span className="text-gray-300 text-xs">
+                  {s.price.toFixed(2)} {s.price_currency === 'EUR' ? '€' : s.price_currency}
+                </span>
+              )}
+              <span className="text-gray-500 text-xs">{s.checked_at?.slice(0, 10)}</span>
+              {s.source === 'manual' && (
+                <>
+                  <span className="px-1.5 rounded text-xs bg-gray-700 text-gray-300">
+                    manual
+                  </span>
+                  <button
+                    onClick={() => handleRemove(s.store_id)}
+                    className="text-red-400 hover:text-red-600 text-xs"
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-gray-400 mb-3">No store data yet</p>
+      )}
+
+      {/* Add form: pick a known store, or type a new one (text wins) */}
+      <div className="flex gap-2 items-end flex-wrap">
+        <div className="flex-1 min-w-[140px]">
+          <label className="block text-xs text-gray-500 mb-0.5">Known store</label>
+          <select
+            className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-2 py-1 text-sm"
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+            disabled={!!newName.trim()}
+          >
+            <option value="">Select store…</option>
+            {unmapped.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[140px]">
+          <label className="block text-xs text-gray-500 mb-0.5">or new store name</label>
+          <input
+            className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-2 py-1 text-sm"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="e.g. Lidl Kivistö"
+          />
+        </div>
+        <button
+          onClick={handleAdd}
+          disabled={adding || (!selectedId && !newName.trim())}
+          className="px-3 py-1 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+    </div>
+  );
+}
+
 /* ── Detail / edit panel ────────────────────────────────────────────────── */
 
 function ProductHistorySection({ productId }) {
@@ -797,6 +931,15 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
               barcodes={detail.barcodes ?? []}
               productId={product.id}
               units={units}
+              onChanged={load}
+            />
+          </div>
+
+          {/* Stores */}
+          <div className="bg-gray-800 rounded-lg p-4 mb-4 border border-gray-600">
+            <StoresSection
+              stores={detail.stores ?? []}
+              productId={product.id}
               onChanged={load}
             />
           </div>

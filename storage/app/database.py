@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS product_availability (
     price          REAL,
     price_currency TEXT DEFAULT 'EUR',
     checked_at     TEXT DEFAULT (datetime('now')),
+    source         TEXT NOT NULL DEFAULT 'scraper',
     PRIMARY KEY (product_id, store_id)
 );
 
@@ -494,6 +495,18 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
         conn.commit()
         log.info("Created link_proposals table.")
+
+    # ── Manual store availability (2026-08) ───────────────────────────────
+    if "product_availability" in tables:
+        pa_cols = {r["name"] for r in conn.execute(
+            "PRAGMA table_info(product_availability)").fetchall()}
+        if "source" not in pa_cols:
+            conn.execute(
+                "ALTER TABLE product_availability "
+                "ADD COLUMN source TEXT NOT NULL DEFAULT 'scraper'"
+            )
+            conn.commit()
+            log.info("Added source column to product_availability.")
 
 
 def _backfill_recipe_specificity(conn: sqlite3.Connection) -> int:

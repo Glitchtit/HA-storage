@@ -128,6 +128,14 @@ class ProductStoreInfo(BaseModel):
     price: float | None = None
     price_currency: str | None = None
     checked_at: str
+    source: str = "scraper"
+
+class ManualAvailabilityCreate(BaseModel):
+    """Manually assert "this store carries the product". Exactly one of
+    store_id (existing registry store) or name (free-text; auto-registers a
+    manual-<slug> store) must be given."""
+    store_id: str | None = None
+    name: str | None = None
 
 # ── Barcodes ───────────────────────────────────────────────────────────────
 

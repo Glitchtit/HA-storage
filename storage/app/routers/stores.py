@@ -7,10 +7,18 @@ assortment-level ("this store carries the product"), written by HA-scraper.
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from models import AvailabilityEntry, ProductStoreInfo, Store, StoreUpsert
+from models import (
+    AvailabilityEntry,
+    ManualAvailabilityCreate,
+    ProductStoreInfo,
+    Store,
+    StoreUpsert,
+)
 
 router = APIRouter(tags=["stores"])
 log = logging.getLogger(__name__)
@@ -19,6 +27,31 @@ log = logging.getLogger(__name__)
 def _get_db():
     from main import get_connection
     return get_connection()
+
+
+def _slugify(name: str) -> str:
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")
+
+
+def _product_stores(conn, product_id: int):
+    return conn.execute(
+        """
+        SELECT pa.store_id, s.name, pa.available, pa.price,
+               pa.price_currency, pa.checked_at, pa.source
+        FROM product_availability pa
+        JOIN stores s ON s.id = pa.store_id
+        WHERE pa.product_id = ?
+        ORDER BY pa.store_id
+        """,
+        (product_id,),
+    ).fetchall()
+
+
+def _require_product(conn, product_id: int) -> None:
+    if not conn.execute("SELECT id FROM products WHERE id = ?",
+                        (product_id,)).fetchone():
+        raise HTTPException(404, f"Product {product_id} not found")
 
 
 @router.get("/stores", response_model=list[Store])
@@ -50,9 +83,7 @@ def set_product_availability(product_id: int, body: list[AvailabilityEntry]):
     a scraper run that could not reach a store never erases its last-known
     state. ``checked_at`` is stamped server-side."""
     conn = _get_db()
-    row = conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, f"Product {product_id} not found")
+    _require_product(conn, product_id)
 
     for entry in body:
         # Auto-register unknown stores under their raw ID; the scraper's
@@ -61,29 +92,77 @@ def set_product_availability(product_id: int, body: list[AvailabilityEntry]):
             "INSERT OR IGNORE INTO stores (id, name) VALUES (?, ?)",
             (entry.store_id, entry.store_id),
         )
+        # source flips back to 'scraper': a checked store beats a manual claim.
         conn.execute(
             """
             INSERT INTO product_availability
-                (product_id, store_id, available, price, price_currency, checked_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+                (product_id, store_id, available, price, price_currency,
+                 checked_at, source)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), 'scraper')
             ON CONFLICT(product_id, store_id) DO UPDATE SET
                 available      = excluded.available,
                 price          = excluded.price,
                 price_currency = excluded.price_currency,
-                checked_at     = excluded.checked_at
+                checked_at     = excluded.checked_at,
+                source         = excluded.source
             """,
             (product_id, entry.store_id, int(entry.available),
              entry.price, entry.price_currency),
         )
     conn.commit()
-    return conn.execute(
+    return _product_stores(conn, product_id)
+
+
+@router.post("/products/{product_id}/stores",
+             response_model=list[ProductStoreInfo])
+def add_manual_store(product_id: int, body: ManualAvailabilityCreate):
+    """Manually mark a store as carrying *product_id*. Pass store_id for a
+    registry store, or name to register a free-text 'manual-<slug>' store."""
+    conn = _get_db()
+    _require_product(conn, product_id)
+
+    if bool(body.store_id) == bool(body.name and body.name.strip()):
+        raise HTTPException(400, "Provide exactly one of store_id or name")
+
+    if body.store_id:
+        store_id = body.store_id
+        if not conn.execute("SELECT id FROM stores WHERE id = ?",
+                            (store_id,)).fetchone():
+            raise HTTPException(404, f"Store {store_id} not found")
+    else:
+        name = body.name.strip()
+        slug = _slugify(name)
+        if not slug:
+            raise HTTPException(400, "Store name has no usable characters")
+        store_id = f"manual-{slug}"
+        conn.execute("INSERT OR IGNORE INTO stores (id, name) VALUES (?, ?)",
+                     (store_id, name))
+
+    conn.execute(
         """
-        SELECT pa.store_id, s.name, pa.available, pa.price,
-               pa.price_currency, pa.checked_at
-        FROM product_availability pa
-        JOIN stores s ON s.id = pa.store_id
-        WHERE pa.product_id = ?
-        ORDER BY pa.store_id
+        INSERT INTO product_availability
+            (product_id, store_id, available, checked_at, source)
+        VALUES (?, ?, 1, datetime('now'), 'manual')
+        ON CONFLICT(product_id, store_id) DO UPDATE SET
+            available  = 1,
+            checked_at = excluded.checked_at,
+            source     = 'manual'
         """,
-        (product_id,),
-    ).fetchall()
+        (product_id, store_id),
+    )
+    conn.commit()
+    return _product_stores(conn, product_id)
+
+
+@router.delete("/products/{product_id}/stores/{store_id}", status_code=204)
+def remove_product_store(product_id: int, store_id: str):
+    conn = _get_db()
+    cur = conn.execute(
+        "DELETE FROM product_availability WHERE product_id = ? AND store_id = ?",
+        (product_id, store_id),
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        raise HTTPException(404, f"No availability row for product {product_id} "
+                                 f"at store {store_id}")
+    return Response(status_code=204)
