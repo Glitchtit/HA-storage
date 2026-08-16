@@ -1,3 +1,9 @@
+## 0.22.1
+
+- Store rows in product details are now clickable: the ✓/✕ badge toggles carries / does not carry (recorded as a manual override; a later scraper check of that store wins again)
+- POST /api/products/{id}/stores accepts an optional available flag for explicit "does not carry" entries
+- Manual store rows now use 🗑️ for remove, so it isn't confused with the ✕ not-carried badge
+
 ## 0.22.0
 
 - Product details now show per-store availability: which mapped stores carry the product, with price and last-checked date

@@ -620,6 +620,18 @@ function StoresSection({ stores, productId, onChanged }) {
     }
   };
 
+  const handleToggle = async (s) => {
+    try {
+      await addProductStore(productId, {
+        store_id: s.store_id,
+        available: !s.available,
+      });
+      onChanged();
+    } catch (err) {
+      console.error('Toggle store availability failed', err);
+    }
+  };
+
   return (
     <div>
       <h4 className="text-sm font-semibold text-gray-400 mb-2">Stores</h4>
@@ -630,16 +642,19 @@ function StoresSection({ stores, productId, onChanged }) {
               key={s.store_id}
               className="flex items-center gap-2 bg-gray-700/50 rounded px-3 py-1.5 text-sm"
             >
-              <span
-                className={`px-1.5 rounded text-xs ${
+              <button
+                onClick={() => handleToggle(s)}
+                className={`px-1.5 rounded text-xs cursor-pointer ${
                   s.available
-                    ? 'bg-emerald-900/40 text-emerald-300'
-                    : 'bg-gray-800 text-gray-500'
+                    ? 'bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/70'
+                    : 'bg-gray-800 text-gray-500 hover:bg-gray-600 hover:text-gray-300'
                 }`}
-                title={s.available ? 'In assortment' : 'Not carried'}
+                title={s.available
+                  ? 'Carries — click to mark not carried'
+                  : 'Not carried — click to mark as carried'}
               >
                 {s.available ? '✓' : '✕'}
-              </span>
+              </button>
               <span className="text-gray-100 flex-1 truncate">{s.name}</span>
               {s.price != null && (
                 <span className="text-gray-300 text-xs">
@@ -657,7 +672,7 @@ function StoresSection({ stores, productId, onChanged }) {
                     className="text-red-400 hover:text-red-600 text-xs"
                     title="Remove"
                   >
-                    ✕
+                    🗑️
                   </button>
                 </>
               )}

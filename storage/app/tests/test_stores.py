@@ -218,6 +218,32 @@ class TestManualStores:
             json={"store_id": "N110", "name": "Lidl"},
         ).status_code == 400
 
+    def test_add_with_available_false_marks_not_carried(self):
+        pid = _make_product("Manualtuote 10")
+        client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})
+        r = client.post(f"/api/products/{pid}/stores",
+                        json={"store_id": "N110", "available": False})
+        assert r.status_code == 200
+        row = r.json()[0]
+        assert row["available"] is False
+        assert row["source"] == "manual"
+
+    def test_toggle_flips_existing_row(self):
+        pid = _make_product("Manualtuote 11")
+        client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})
+        # Scraper says not carried; user overrides to carried.
+        client.put(f"/api/products/{pid}/availability",
+                   json=[{"store_id": "N110", "available": False}])
+        r = client.post(f"/api/products/{pid}/stores",
+                        json={"store_id": "N110", "available": True})
+        row = r.json()[0]
+        assert row["available"] is True
+        assert row["source"] == "manual"
+        # And back to not carried.
+        r = client.post(f"/api/products/{pid}/stores",
+                        json={"store_id": "N110", "available": False})
+        assert r.json()[0]["available"] is False
+
     def test_scraper_upsert_overrides_manual_source(self):
         pid = _make_product("Manualtuote 7")
         client.put("/api/stores/N110", json={"name": "K-Citymarket Kupittaa"})

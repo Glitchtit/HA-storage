@@ -142,13 +142,13 @@ def add_manual_store(product_id: int, body: ManualAvailabilityCreate):
         """
         INSERT INTO product_availability
             (product_id, store_id, available, checked_at, source)
-        VALUES (?, ?, 1, datetime('now'), 'manual')
+        VALUES (?, ?, ?, datetime('now'), 'manual')
         ON CONFLICT(product_id, store_id) DO UPDATE SET
-            available  = 1,
+            available  = excluded.available,
             checked_at = excluded.checked_at,
             source     = 'manual'
         """,
-        (product_id, store_id),
+        (product_id, store_id, int(body.available)),
     )
     conn.commit()
     return _product_stores(conn, product_id)

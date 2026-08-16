@@ -133,9 +133,11 @@ class ProductStoreInfo(BaseModel):
 class ManualAvailabilityCreate(BaseModel):
     """Manually assert "this store carries the product". Exactly one of
     store_id (existing registry store) or name (free-text; auto-registers a
-    manual-<slug> store) must be given."""
+    manual-<slug> store) must be given. available=False records an explicit
+    "does not carry" override."""
     store_id: str | None = None
     name: str | None = None
+    available: bool = True
 
 # ── Barcodes ───────────────────────────────────────────────────────────────
 
