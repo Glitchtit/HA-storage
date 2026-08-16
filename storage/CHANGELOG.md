@@ -1,3 +1,8 @@
+## 0.21.2
+
+- Adding a product already on the shopping list now increments the existing row instead of creating a duplicate (POST /api/shopping-list merges plain manual adds by product+unit; returns 200 on merge, 201 on create)
+- Free-text (noted), recipe-attributed, done, and auto-added rows are never merged
+
 ## 0.21.1
 
 - Reconcile-apply links land on category/variant nodes only — never under another SKU

@@ -498,6 +498,58 @@ class TestShoppingList:
         r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 2, "unit_id": kpl})
         assert r.status_code == 201
 
+    def test_add_same_product_merges_into_existing_row(self):
+        pid, kpl = self._make_product()
+        first = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1})
+        assert first.status_code == 201
+        r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 2})
+        assert r.status_code == 200  # merged, not created
+        merged = r.json()
+        assert merged["id"] == first.json()["id"]
+        assert float(merged["amount"]) == 3
+        rows = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(rows) == 1
+
+    def test_add_with_note_never_merges(self):
+        # Free-text rows (Muistilappu sentinel) share one product_id and are
+        # distinguished only by note — they must never collapse into each other
+        # or into a plain row.
+        pid, kpl = self._make_product()
+        client.post("/api/shopping-list", json={"product_id": pid, "amount": 1})
+        r1 = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1, "note": "maito"})
+        r2 = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1, "note": "leipä"})
+        assert r1.status_code == 201 and r2.status_code == 201
+        rows = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(rows) == 3
+
+    def test_add_does_not_merge_into_done_row(self):
+        pid, kpl = self._make_product()
+        item = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1}).json()
+        client.put(f"/api/shopping-list/{item['id']}", json={"done": True})
+        r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 201
+        rows = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(rows) == 2
+
+    def test_add_does_not_merge_across_units(self):
+        pid, kpl = self._make_product()
+        g = next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == "g")
+        client.post("/api/shopping-list", json={"product_id": pid, "amount": 1, "unit_id": kpl})
+        r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 100, "unit_id": g})
+        assert r.status_code == 201
+        rows = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(rows) == 2
+
+    def test_auto_added_row_not_merged_by_manual_add(self):
+        # Auto rows are owned by sync_auto_shopping (amount = live deficit);
+        # a manual add must not fold into one.
+        pid, kpl = self._make_product()
+        client.post("/api/shopping-list", json={"product_id": pid, "amount": 2, "auto_added": True})
+        r = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1})
+        assert r.status_code == 201
+        rows = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == pid]
+        assert len(rows) == 2
+
     def test_toggle_done(self):
         pid, kpl = self._make_product()
         item = client.post("/api/shopping-list", json={"product_id": pid, "amount": 1}).json()

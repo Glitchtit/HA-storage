@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
@@ -519,7 +519,7 @@ def clear_done():
 
 
 @router.post("/shopping-list", response_model=ShoppingItem, status_code=201)
-def add_shopping_item(body: ShoppingItemCreate):
+def add_shopping_item(body: ShoppingItemCreate, response: Response):
     conn = _get_db()
     product = conn.execute("SELECT id, name FROM products WHERE id = ?", (body.product_id,)).fetchone()
     if not product:
@@ -528,6 +528,34 @@ def add_shopping_item(body: ShoppingItemCreate):
     # one-off: promote it to the product so every future row inherits it.
     if body.pinned:
         conn.execute("UPDATE products SET pin_brand = 1 WHERE id = ?", (body.product_id,))
+    # A plain manual add (no note, no recipe attribution) merges into an
+    # existing plain manual row for the same product+unit instead of creating
+    # a duplicate — re-scanning or re-picking a product means "+N", not a new
+    # row. Excluded on purpose: noted rows (free-text Muistilappu entries share
+    # one sentinel product and differ only by note), recipe-attributed rows,
+    # done rows (active shopping-trip history), and auto_added rows (their
+    # amount is owned by sync_auto_shopping's live-deficit reconciliation).
+    # Returns 200 on merge vs 201 on create.
+    if not body.auto_added and not body.note and body.recipe_id is None:
+        existing = conn.execute(
+            """
+            SELECT id FROM shopping_list
+            WHERE product_id = ? AND done = 0 AND auto_added = 0
+              AND recipe_id IS NULL AND (note IS NULL OR note = '')
+              AND unit_id IS ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (body.product_id, body.unit_id),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE shopping_list SET amount = amount + ? WHERE id = ?",
+                (body.amount, existing["id"]),
+            )
+            conn.commit()
+            response.status_code = 200
+            return conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (existing["id"],)).fetchone()
     cur = conn.execute(
         "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added, pinned)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
