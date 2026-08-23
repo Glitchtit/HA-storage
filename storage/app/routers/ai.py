@@ -119,6 +119,40 @@ def _run_optimize_task(
                 _running_task_id = None
 
 
+def _run_expiry_fix_task(task_id: str, product_ids: list[int] | None) -> None:
+    global _running_task_id
+
+    def emit(msg: str) -> None:
+        _append_log(task_id, msg)
+
+    try:
+        from main import get_connection
+        import optimizer as _opt
+
+        conn = get_connection()
+        result = _opt.run_expiry_fix(conn, product_ids=product_ids, emit=emit)
+
+        with _tasks_lock:
+            t = _tasks.get(task_id)
+            if t:
+                t["status"] = "done"
+                t["updated"] = result["updated"]
+                t["finished_at"] = time.time()
+
+    except Exception as exc:
+        logger.exception("Expiry fix task %s failed", task_id)
+        emit(f"ERROR: {exc}")
+        with _tasks_lock:
+            t = _tasks.get(task_id)
+            if t:
+                t["status"] = "error"
+                t["finished_at"] = time.time()
+    finally:
+        with _tasks_lock:
+            if _running_task_id == task_id:
+                _running_task_id = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -226,6 +260,56 @@ def start_optimize(body: dict[str, Any] = None):  # type: ignore[assignment]
         args=(task_id, product_ids, enforced_categories, fresh_seed),
         daemon=True,
         name=f"optimizer-{task_id}",
+    )
+    t.start()
+
+    return {"task_id": task_id, "status": "running"}
+
+
+@router.post("/ai/fix-expiry")
+def start_expiry_fix(body: dict[str, Any] = None):  # type: ignore[assignment]
+    """Start a focused background job that fixes best-before defaults only.
+
+    Runs the AI over all active/stocked products (or an explicit product_ids
+    list), updates products.default_best_before_days, and rebases stock lots
+    that inherited the old default. No structural changes (categories,
+    parents, locations, packs) are made. Shares the optimize single-flight
+    lock; poll status via GET /api/ai/optimize/{task_id}.
+    """
+    global _running_task_id
+
+    if body is None:
+        body = {}
+    product_ids: list[int] | None = body.get("product_ids") or None
+
+    with _tasks_lock:
+        if _running_task_id is not None:
+            existing = _tasks.get(_running_task_id)
+            if existing and existing.get("status") == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Optimize already running (task {_running_task_id})",
+                )
+            _running_task_id = None
+
+        task_id = str(uuid.uuid4())[:8]
+        _running_task_id = task_id
+
+    _store_task(task_id, {
+        "task_id": task_id,
+        "status": "running",
+        "logs": [],
+        "updated": 0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "mode": "expiry-fix",
+    })
+
+    t = threading.Thread(
+        target=_run_expiry_fix_task,
+        args=(task_id, product_ids),
+        daemon=True,
+        name=f"expiry-fix-{task_id}",
     )
     t.start()
 

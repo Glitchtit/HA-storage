@@ -1,3 +1,10 @@
+## 0.23.0
+
+- AI expiry logic overhauled: non-perishable household goods (toilet paper, laundry detergent, cleaning agents, tampons, baking paper, candles, etc.) now get best_before_days = 0 = "does not expire", and shelf-stable foods get realistic long estimates (condiments 540d, dry pasta 1095d, canned 1095d, ...) instead of inheriting the 60-day default
+- When the AI changes a product's best-before default, existing stock lots that inherited the old default are rebased to the new date (manual per-lot overrides stay untouched); 0 clears the lot date so the item leaves the expiring/expired panel
+- New POST /api/ai/fix-expiry background task: fixes best-before defaults and lot dates across all active/stocked products without touching categories, parents, locations, or pack structure; poll via GET /api/ai/optimize/{task_id}
+- AI best-before values are sanity-clamped (negative = ignored, capped at 10 years)
+
 ## 0.22.1
 
 - Store rows in product details are now clickable: the ✓/✕ badge toggles carries / does not carry (recorded as a manual override; a later scraper check of that store wins again)

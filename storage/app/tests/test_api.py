@@ -2864,3 +2864,151 @@ class TestFinanceStats:
         mine = [p for p in r.json()["by_product"] if p["product_id"] == pid]
         assert len(mine) == 1
         assert mine[0]["value"] == 7.0
+
+
+# ── AI expiry fix ───────────────────────────────────────────────────────────
+
+class TestExpiryFix:
+    """Focused AI pass: fix default_best_before_days + rebase inherited lots."""
+
+    def _make_product_with_lots(self, name, default_days=60):
+        from main import get_connection
+        conn = get_connection()
+        unit = conn.execute("SELECT id FROM units LIMIT 1").fetchone()["id"]
+        loc = conn.execute("SELECT id FROM locations LIMIT 1").fetchone()
+        if not loc:
+            cur = conn.execute("INSERT INTO locations (name) VALUES ('TestLoc')")
+            loc_id = cur.lastrowid
+        else:
+            loc_id = loc["id"]
+        cur = conn.execute(
+            "INSERT INTO products (name, active, unit_id, default_best_before_days) "
+            "VALUES (?, 1, ?, ?)",
+            (name, unit, default_days),
+        )
+        pid = cur.lastrowid
+        # Lot that inherited the product default at purchase time
+        cur = conn.execute(
+            "INSERT INTO stock (product_id, location_id, amount, unit_id, "
+            "best_before_date, best_before_days, purchased_date) "
+            "VALUES (?, ?, 1, ?, date('2026-06-01', '+' || ? || ' days'), ?, '2026-06-01')",
+            (pid, loc_id, unit, default_days, default_days),
+        )
+        inherited_lot = cur.lastrowid
+        # Lot with a manual best-before override (different days snapshot)
+        cur = conn.execute(
+            "INSERT INTO stock (product_id, location_id, amount, unit_id, "
+            "best_before_date, best_before_days, purchased_date) "
+            "VALUES (?, ?, 1, ?, '2026-06-15', 14, '2026-06-01')",
+            (pid, loc_id, unit,),
+        )
+        manual_lot = cur.lastrowid
+        conn.commit()
+        return conn, pid, inherited_lot, manual_lot
+
+    def test_nonperishable_gets_zero_and_lot_date_cleared(self, monkeypatch):
+        import optimizer
+        conn, pid, inherited_lot, manual_lot = self._make_product_with_lots(
+            "Vanish tahranpoistaja EXPIRYTEST"
+        )
+        prompts = []
+
+        def fake_ai(prompt, conn_, **kw):
+            prompts.append(prompt)
+            return {str(pid): 0}
+
+        monkeypatch.setattr("optimizer.call_ai_json", fake_ai)
+        try:
+            result = optimizer.run_expiry_fix(conn, product_ids=[pid])
+            assert result["updated"] >= 1
+            row = conn.execute(
+                "SELECT default_best_before_days FROM products WHERE id = ?", (pid,)
+            ).fetchone()
+            assert row["default_best_before_days"] == 0
+            lot = conn.execute(
+                "SELECT best_before_date, best_before_days FROM stock WHERE id = ?",
+                (inherited_lot,),
+            ).fetchone()
+            assert lot["best_before_date"] is None
+            assert lot["best_before_days"] == 0
+            # Manual override untouched
+            manual = conn.execute(
+                "SELECT best_before_date, best_before_days FROM stock WHERE id = ?",
+                (manual_lot,),
+            ).fetchone()
+            assert manual["best_before_date"] == "2026-06-15"
+            assert manual["best_before_days"] == 14
+            # Prompt must explain the 0 = no-expiry convention
+            assert any("Return 0" in p and "expiry" in p.lower() for p in prompts)
+        finally:
+            conn.execute("DELETE FROM products WHERE id = ?", (pid,))
+            conn.commit()
+
+    def test_shelf_stable_food_gets_longer_date(self, monkeypatch):
+        import optimizer
+        conn, pid, inherited_lot, manual_lot = self._make_product_with_lots(
+            "Rummo fusilli EXPIRYTEST"
+        )
+        monkeypatch.setattr(
+            "optimizer.call_ai_json", lambda prompt, c, **kw: {str(pid): 1095}
+        )
+        try:
+            optimizer.run_expiry_fix(conn, product_ids=[pid])
+            row = conn.execute(
+                "SELECT default_best_before_days FROM products WHERE id = ?", (pid,)
+            ).fetchone()
+            assert row["default_best_before_days"] == 1095
+            lot = conn.execute(
+                "SELECT best_before_date, best_before_days FROM stock WHERE id = ?",
+                (inherited_lot,),
+            ).fetchone()
+            assert lot["best_before_days"] == 1095
+            assert lot["best_before_date"] == "2029-05-31"  # 2026-06-01 + 1095d
+        finally:
+            conn.execute("DELETE FROM products WHERE id = ?", (pid,))
+            conn.commit()
+
+    def test_absurd_values_clamped_and_unknown_skipped(self, monkeypatch):
+        import optimizer
+        conn, pid, inherited_lot, _ = self._make_product_with_lots(
+            "Outo tuote EXPIRYTEST"
+        )
+        monkeypatch.setattr(
+            "optimizer.call_ai_json", lambda prompt, c, **kw: {str(pid): -5}
+        )
+        try:
+            optimizer.run_expiry_fix(conn, product_ids=[pid])
+            row = conn.execute(
+                "SELECT default_best_before_days FROM products WHERE id = ?", (pid,)
+            ).fetchone()
+            # Negative → treated as unknown, product left as-is
+            assert row["default_best_before_days"] == 60
+        finally:
+            conn.execute("DELETE FROM products WHERE id = ?", (pid,))
+            conn.commit()
+
+    def test_fix_expiry_endpoint(self, monkeypatch):
+        from routers import ai as ai_mod
+        import threading as _th
+
+        class _Sync:
+            def __init__(self, target, args=(), daemon=True, name=""):
+                self._t, self._a = target, args
+            def start(self):
+                self._t(*self._a)
+
+        monkeypatch.setattr(_th, "Thread", _Sync)
+        import optimizer
+        monkeypatch.setattr(
+            optimizer, "run_expiry_fix",
+            lambda conn, emit=None, product_ids=None: {"updated": 3},
+        )
+        r = client.post("/api/ai/fix-expiry")
+        assert r.status_code == 200
+        task_id = r.json()["task_id"]
+        r = client.get(f"/api/ai/optimize/{task_id}")
+        assert r.status_code == 200
+        assert r.json()["status"] == "done"
+        assert r.json()["updated"] == 3
+        with ai_mod._tasks_lock:
+            ai_mod._running_task_id = None

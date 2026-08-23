@@ -39,6 +39,80 @@ def _canonical_unit(name: str) -> str | None:
     return _UNIT_ALIASES.get(name.lower().strip())
 
 
+# Shared best-before guidance for every AI pass that estimates shelf life.
+# 0 is a first-class value meaning "does not meaningfully expire" — the stock
+# flow stores NULL best_before_date for such products, so they never appear in
+# the expiring/expired panel.
+_SHELF_LIFE_GUIDE = (
+    "Best-before rules (days, for an UNOPENED package):\n"
+    "- Return 0 for products with NO practical expiry: paper goods (toilet "
+    "paper, paper towels, baking paper, foil, freezer/waste bags), cleaning & "
+    "laundry products (detergent, stain remover, dishwasher tablets, "
+    "all-purpose cleaners, air fresheners), hygiene consumables (tampons, "
+    "pads, cotton swabs, razor blades), candles, batteries, matches and "
+    "similar non-food household goods. These must NEVER get a food-like "
+    "expiry estimate.\n"
+    "- Food estimates: fresh milk 10; yogurt/fresh dairy 21; fresh meat/fish "
+    "4; bread 7; eggs 28; butter 90; hard cheese 180; fresh produce 10; "
+    "cereal/muesli/crackers 365; chocolate/candy 365; soft drinks/juice 270; "
+    "beer/cider 270; wine/spirits 1825; coffee/tea 540; condiments & sauces "
+    "(ketchup, mustard, mayonnaise, soy sauce, vinegar, syrup, jam, honey) "
+    "540; oil 540; spices & dried herbs 1095; dry pasta/rice/flour/sugar "
+    "1095; canned goods 1095; frozen 365; supplements/vitamins 730; "
+    "cosmetics/toothpaste/shampoo 1095.\n"
+    "- Shelf-stable products must never get a short (<180 day) estimate; when "
+    "unsure between two ranges, choose the LONGER one.\n"
+)
+
+# Anything above 10 years is an AI hallucination; treat 0..3650 as sane.
+_MAX_BB_DAYS = 3650
+
+
+def _sanitize_bb_days(value: Any) -> int | None:
+    """Normalise an AI best_before_days value; None when unusable."""
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return None
+    if days < 0:
+        return None
+    return min(days, _MAX_BB_DAYS)
+
+
+def _rebase_inherited_stock_dates(
+    conn: sqlite3.Connection,
+    product_id: int,
+    old_days: int,
+    new_days: int,
+) -> int:
+    """Recompute lot best-before dates that inherited the product's old default.
+
+    Only lots whose best_before_days snapshot equals *old_days* were derived
+    from the product default at purchase time — manual overrides carry their
+    own diff and stay untouched. new_days == 0 clears the date entirely.
+    Returns the number of rebased lots.
+    """
+    if new_days == old_days:
+        return 0
+    if new_days > 0:
+        cur = conn.execute(
+            """UPDATE stock SET
+                   best_before_days = ?,
+                   best_before_date = date(
+                       COALESCE(purchased_date, date(created_at), date('now')),
+                       '+' || ? || ' days')
+               WHERE product_id = ? AND best_before_days = ?""",
+            (new_days, new_days, product_id, old_days),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE stock SET best_before_days = 0, best_before_date = NULL "
+            "WHERE product_id = ? AND best_before_days = ?",
+            (product_id, old_days),
+        )
+    return cur.rowcount
+
+
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -453,7 +527,8 @@ def _phase2_details(
             "For each product below, return a JSON object mapping the product "
             "ID (as a string) to an object with:\n"
             '  "location_id": (integer) the most appropriate storage location ID, or null.\n'
-            '  "best_before_days": (integer) estimated days until best-before for an unopened product.\n'
+            '  "best_before_days": (integer) estimated days until best-before for an unopened '
+            "product, or 0 when the product does not meaningfully expire (see rules below).\n"
             '  "pack_size": (integer) ONLY when N identical, separately-sold consumer units are '
             "bundled under one barcode -- e.g. 6-pack of 0.33L soda cans, 4-pack of 200g yogurt "
             "cups, 12-pack of toilet rolls. Do NOT set when the number describes contents of one "
@@ -473,9 +548,7 @@ def _phase2_details(
             "toothpaste, shampoo, soap, deodorant, etc.) -> bathroom; dry goods/canned/packaged/"
             "eggs -> pantry/cupboard. If a product shows [current location], preserve it unless "
             "it is clearly incorrect.\n"
-            "- Best-before: fresh milk ~7-14d; yogurt ~21d; butter ~90d; hard cheese ~180d; "
-            "eggs ~28d; bread ~7d; canned ~730d; dry pasta/rice ~1095d; oil ~365d; frozen ~730d; "
-            "cleaning/laundry ~1095d.\n"
+            f"- {_SHELF_LIFE_GUIDE}"
             "- Pack: detect ONLY genuine multi-packs: 4-pack, 6x0.33l, monipakkaus, 6kpl Sprite. "
             "NOT when number describes package contents.\n\n"
             "Return ONLY a valid JSON object (not a list). Example:\n"
@@ -664,14 +737,19 @@ def _phase2_details(
                     log("  ! Could not set location for '%s': %s", product.get("name"), exc)
 
             # --- Best-before ---
-            days = info.get("best_before_days")
+            days = _sanitize_bb_days(info.get("best_before_days"))
             if days is not None:
                 try:
+                    old_days = int(product.get("default_best_before_days") or 0)
                     conn.execute(
                         "UPDATE products SET default_best_before_days = ? WHERE id = ?",
-                        (int(days), product_id),
+                        (days, product_id),
                     )
-                    log("  -> Set %d best-before days for '%s'.", int(days), product.get("name"))
+                    log("  -> Set %d best-before days for '%s'.", days, product.get("name"))
+                    rebased = _rebase_inherited_stock_dates(conn, product_id, old_days, days)
+                    if rebased:
+                        log("  -> Rebased %d stock lot(s) from %dd default to %dd.",
+                            rebased, old_days, days)
                     updated += 1
                 except Exception as exc:
                     log("  ! Could not set best-before for '%s': %s", product.get("name"), exc)
@@ -1148,4 +1226,109 @@ def run_optimize(
         log("Recipe repair: no issues found.")
 
     log("Optimize complete — %d field(s) updated.", updated)
+    return {"updated": updated}
+
+
+# ---------------------------------------------------------------------------
+# Focused expiry fix — no structural changes, safe to run any time
+# ---------------------------------------------------------------------------
+
+def run_expiry_fix(
+    conn: sqlite3.Connection,
+    *,
+    product_ids: list[int] | None = None,
+    emit: Callable[[str], None] | None = None,
+) -> dict[str, int]:
+    """AI pass that ONLY fixes default_best_before_days on products and
+    rebases stock lots that inherited the old default.
+
+    Unlike run_optimize, this never touches categories, parents, locations,
+    or pack structure — it is safe to run over the whole database to repair
+    bad expiry defaults (e.g. the hardcoded 60-day default on scanned
+    products).
+    """
+    def log(msg: str, *args: Any) -> None:
+        formatted = msg % args if args else msg
+        logger.info(formatted)
+        if emit:
+            emit(formatted)
+
+    cfg = _get_ai_config(conn)
+    batch_size = get_batch_size(conn)
+
+    if product_ids:
+        placeholders = ",".join("?" * len(product_ids))
+        rows = conn.execute(
+            f"SELECT id, name, default_best_before_days FROM products "
+            f"WHERE id IN ({placeholders})",
+            product_ids,
+        ).fetchall()
+    else:
+        # Active products plus anything that still holds stock.
+        rows = conn.execute(
+            "SELECT id, name, default_best_before_days FROM products p "
+            "WHERE p.active = 1 "
+            "   OR EXISTS (SELECT 1 FROM stock s WHERE s.product_id = p.id)"
+        ).fetchall()
+    products = [dict(r) for r in rows]
+
+    if not products:
+        log("No products for expiry fix.")
+        return {"updated": 0}
+
+    log("Starting expiry fix for %d product(s)…", len(products))
+    updated = 0
+
+    for batch_idx, i in enumerate(range(0, len(products), batch_size)):
+        batch = products[i: i + batch_size]
+        product_lines = "\n".join(
+            f"  {p['id']}: {p.get('name', p['id'])}" for p in batch
+        )
+        prompt = (
+            "You are a grocery database expert maintaining a Finnish home "
+            "pantry. For each product below, estimate the best-before shelf "
+            "life in days.\n\n"
+            f"{_SHELF_LIFE_GUIDE}\n"
+            "Return ONLY a valid JSON object mapping product ID (as a string) "
+            'to an integer number of days. Example: {"1": 540, "2": 0}\n\n'
+            "Products:\n"
+            f"{product_lines}"
+        )
+
+        try:
+            mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
+        except Exception as exc:
+            log("Expiry batch %d failed: %s", batch_idx + 1, exc)
+            continue
+        if not isinstance(mapping, dict):
+            log("Expiry batch %d: expected dict, got %s — skipping.",
+                batch_idx + 1, type(mapping).__name__)
+            continue
+
+        for product in batch:
+            product_id = int(product["id"])
+            days = _sanitize_bb_days(mapping.get(str(product_id)))
+            if days is None:
+                continue
+            old_days = int(product.get("default_best_before_days") or 0)
+            try:
+                if days != old_days:
+                    conn.execute(
+                        "UPDATE products SET default_best_before_days = ? WHERE id = ?",
+                        (days, product_id),
+                    )
+                    log("  -> '%s': %dd -> %dd.", product.get("name"), old_days, days)
+                    updated += 1
+                rebased = _rebase_inherited_stock_dates(conn, product_id, old_days, days)
+                if rebased:
+                    log("  -> Rebased %d stock lot(s) for '%s'.",
+                        rebased, product.get("name"))
+            except Exception as exc:
+                log("  ! Could not fix expiry for '%s': %s", product.get("name"), exc)
+
+        conn.commit()
+        log("Expiry batch %d/%d done.",
+            batch_idx + 1, -(-len(products) // batch_size))
+
+    log("Expiry fix complete — %d product(s) updated.", updated)
     return {"updated": updated}
