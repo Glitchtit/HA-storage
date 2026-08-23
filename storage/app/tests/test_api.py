@@ -3012,3 +3012,37 @@ class TestExpiryFix:
         assert r.json()["updated"] == 3
         with ai_mod._tasks_lock:
             ai_mod._running_task_id = None
+
+    def test_legacy_60day_lot_rebased_even_when_default_unchanged(self, monkeypatch):
+        """A lot snapshotted at the historic 60d creation default must be
+        rebased even when the product default was already fixed by an earlier
+        optimize run (old == new, lot snapshot == 60)."""
+        import optimizer
+        from main import get_connection
+        conn, pid, _, _ = self._make_product_with_lots(
+            "Legacy60 EXPIRYTEST", default_days=540
+        )
+        unit = conn.execute("SELECT id FROM units LIMIT 1").fetchone()["id"]
+        loc = conn.execute("SELECT id FROM locations LIMIT 1").fetchone()["id"]
+        cur = conn.execute(
+            "INSERT INTO stock (product_id, location_id, amount, unit_id, "
+            "best_before_date, best_before_days, purchased_date) "
+            "VALUES (?, ?, 1, ?, '2026-07-31', 60, '2026-06-01')",
+            (pid, loc, unit),
+        )
+        legacy_lot = cur.lastrowid
+        conn.commit()
+        monkeypatch.setattr(
+            "optimizer.call_ai_json", lambda prompt, c, **kw: {str(pid): 540}
+        )
+        try:
+            optimizer.run_expiry_fix(conn, product_ids=[pid])
+            lot = conn.execute(
+                "SELECT best_before_date, best_before_days FROM stock WHERE id = ?",
+                (legacy_lot,),
+            ).fetchone()
+            assert lot["best_before_days"] == 540
+            assert lot["best_before_date"] == "2027-11-23"  # 2026-06-01 + 540d
+        finally:
+            conn.execute("DELETE FROM products WHERE id = ?", (pid,))
+            conn.commit()

@@ -1,3 +1,7 @@
+## 0.23.1
+
+- Expiry rebase now also catches stock lots still carrying the historic 60-day creation default under products whose best-before default was changed by an earlier optimize run (previously only lots matching the current default were rebased, so pre-existing 60-day lots kept their bogus dates)
+
 ## 0.23.0
 
 - AI expiry logic overhauled: non-perishable household goods (toilet paper, laundry detergent, cleaning agents, tampons, baking paper, candles, etc.) now get best_before_days = 0 = "does not expire", and shelf-stable foods get realistic long estimates (condiments 540d, dry pasta 1095d, canned 1095d, ...) instead of inheriting the 60-day default

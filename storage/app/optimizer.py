@@ -67,6 +67,11 @@ _SHELF_LIFE_GUIDE = (
 # Anything above 10 years is an AI hallucination; treat 0..3650 as sane.
 _MAX_BB_DAYS = 3650
 
+# The hardcoded default every product was created with before the AI ever
+# saw it (database.py column default, scraper StorageClient). Lots carrying
+# this exact snapshot are treated as inherited, never as manual overrides.
+_LEGACY_DEFAULT_BB_DAYS = 60
+
 
 def _sanitize_bb_days(value: Any) -> int | None:
     """Normalise an AI best_before_days value; None when unusable."""
@@ -85,30 +90,36 @@ def _rebase_inherited_stock_dates(
     old_days: int,
     new_days: int,
 ) -> int:
-    """Recompute lot best-before dates that inherited the product's old default.
+    """Recompute lot best-before dates that inherited a product default.
 
-    Only lots whose best_before_days snapshot equals *old_days* were derived
-    from the product default at purchase time — manual overrides carry their
-    own diff and stay untouched. new_days == 0 clears the date entirely.
-    Returns the number of rebased lots.
+    A lot is considered inherited (not a manual override) when its
+    best_before_days snapshot equals *old_days* — the product default at the
+    time of this pass — or the historic hardcoded creation default of 60 that
+    every scanned product started with (earlier optimize runs changed product
+    defaults without rebasing lots, so stale 60-day snapshots survive under
+    products whose default has long since moved on). Manual overrides carry
+    their own arbitrary diff and stay untouched. new_days == 0 clears the
+    date entirely. Returns the number of rebased lots.
     """
-    if new_days == old_days:
+    inherited = {old_days, _LEGACY_DEFAULT_BB_DAYS} - {new_days}
+    if not inherited:
         return 0
+    placeholders = ",".join("?" * len(inherited))
     if new_days > 0:
         cur = conn.execute(
-            """UPDATE stock SET
+            f"""UPDATE stock SET
                    best_before_days = ?,
                    best_before_date = date(
                        COALESCE(purchased_date, date(created_at), date('now')),
                        '+' || ? || ' days')
-               WHERE product_id = ? AND best_before_days = ?""",
-            (new_days, new_days, product_id, old_days),
+               WHERE product_id = ? AND best_before_days IN ({placeholders})""",
+            (new_days, new_days, product_id, *inherited),
         )
     else:
         cur = conn.execute(
-            "UPDATE stock SET best_before_days = 0, best_before_date = NULL "
-            "WHERE product_id = ? AND best_before_days = ?",
-            (product_id, old_days),
+            f"UPDATE stock SET best_before_days = 0, best_before_date = NULL "
+            f"WHERE product_id = ? AND best_before_days IN ({placeholders})",
+            (product_id, *inherited),
         )
     return cur.rowcount
 
