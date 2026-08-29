@@ -142,3 +142,46 @@ def delete_bundle(bundle_id: int):
     _bundle_row(conn, bundle_id)  # 404 guard
     conn.execute("DELETE FROM bundles WHERE id = ?", (bundle_id,))
     conn.commit()
+
+
+@router.post("/bundles/{bundle_id}/to-shopping", response_model=BundleToShoppingResponse)
+def bundle_to_shopping(bundle_id: int, body: BundleToShoppingRequest):
+    """Push the checked subset of a bundle onto the shopping list.
+
+    Adds amount 1 of each product with bundle attribution. Products that
+    already have an active (done = 0) shopping row are skipped — pushing a
+    bundle twice, or pushing over an existing manual row, never duplicates.
+    """
+    conn = _get_db()
+    _bundle_row(conn, bundle_id)  # 404 guard
+    member_ids = {
+        r["product_id"]
+        for r in conn.execute(
+            "SELECT product_id FROM bundle_items WHERE bundle_id = ?", (bundle_id,)
+        ).fetchall()
+    }
+    outside = [pid for pid in body.product_ids if pid not in member_ids]
+    if outside:
+        raise HTTPException(400, f"Products not in bundle {bundle_id}: {outside}")
+
+    added = 0
+    skipped = 0
+    for pid in body.product_ids:
+        active = conn.execute(
+            "SELECT id FROM shopping_list WHERE product_id = ? AND done = 0 LIMIT 1",
+            (pid,),
+        ).fetchone()
+        if active:
+            skipped += 1
+            continue
+        name_row = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()
+        conn.execute(
+            "INSERT INTO shopping_list"
+            " (product_id, amount, unit_id, note, recipe_id, bundle_id, ha_item_name, auto_added, pinned)"
+            " VALUES (?, 1, NULL, '', NULL, ?, ?, 0, 0)",
+            (pid, bundle_id, name_row["name"] if name_row else None),
+        )
+        added += 1
+    conn.commit()
+    log.info("Bundle %d pushed to shopping: added=%d skipped=%d", bundle_id, added, skipped)
+    return {"added": added, "skipped": skipped}

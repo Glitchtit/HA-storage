@@ -139,3 +139,66 @@ class TestBundleCrud:
         # Verify name was NOT changed (mutation was rejected before commit)
         updated = client.get(f"/api/bundles/{b['id']}").json()
         assert updated["name"] == "Keitto"
+
+
+class TestBundleToShopping:
+    def _bundle_with_products(self, *names):
+        pids = [_make_product(n) for n in names]
+        b = client.post("/api/bundles", json={
+            "name": "Push-testi " + names[0],
+            "items": [{"product_id": p} for p in pids],
+        }).json()
+        return b["id"], pids
+
+    def test_push_adds_checked_items_with_bundle_id(self):
+        bid, pids = self._bundle_with_products("Pushtuote A", "Pushtuote B")
+        r = client.post(f"/api/bundles/{bid}/to-shopping", json={"product_ids": pids})
+        assert r.status_code == 200
+        assert r.json() == {"added": 2, "skipped": 0}
+        rows = [x for x in client.get("/api/shopping-list").json()
+                if x["product_id"] in pids]
+        assert len(rows) == 2
+        for row in rows:
+            assert row["bundle_id"] == bid
+            assert row["amount"] == 1
+            assert row["unit_id"] is None
+
+    def test_push_skips_products_already_on_list(self):
+        bid, pids = self._bundle_with_products("Pushtuote C")
+        client.post("/api/shopping-list", json={"product_id": pids[0]})
+        r = client.post(f"/api/bundles/{bid}/to-shopping", json={"product_ids": pids})
+        assert r.json() == {"added": 0, "skipped": 1}
+        rows = [x for x in client.get("/api/shopping-list").json()
+                if x["product_id"] == pids[0] and not x["done"]]
+        assert len(rows) == 1  # no duplicate row
+
+    def test_double_push_is_idempotent(self):
+        bid, pids = self._bundle_with_products("Pushtuote D")
+        assert client.post(f"/api/bundles/{bid}/to-shopping",
+                           json={"product_ids": pids}).json() == {"added": 1, "skipped": 0}
+        assert client.post(f"/api/bundles/{bid}/to-shopping",
+                           json={"product_ids": pids}).json() == {"added": 0, "skipped": 1}
+
+    def test_push_rejects_ids_outside_bundle(self):
+        bid, _ = self._bundle_with_products("Pushtuote E")
+        stranger = _make_product("Vieras tuote")
+        r = client.post(f"/api/bundles/{bid}/to-shopping",
+                        json={"product_ids": [stranger]})
+        assert r.status_code == 400
+
+    def test_push_unknown_bundle_404(self):
+        assert client.post("/api/bundles/999999/to-shopping",
+                           json={"product_ids": []}).status_code == 404
+
+    def test_plain_manual_add_does_not_merge_into_bundle_row(self):
+        bid, pids = self._bundle_with_products("Pushtuote F")
+        client.post(f"/api/bundles/{bid}/to-shopping", json={"product_ids": pids})
+        # A plain manual add of the same product must create a NEW row (201),
+        # not merge into (and double-count) the badged bundle row.
+        r = client.post("/api/shopping-list", json={"product_id": pids[0]})
+        assert r.status_code == 201
+        rows = [x for x in client.get("/api/shopping-list").json()
+                if x["product_id"] == pids[0] and not x["done"]]
+        assert len(rows) == 2
+        bundle_row = next(x for x in rows if x["bundle_id"] == bid)
+        assert bundle_row["amount"] == 1  # untouched by the manual add

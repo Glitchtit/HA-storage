@@ -500,6 +500,7 @@ class ShoppingItem(BaseModel):
     note: str
     done: bool
     recipe_id: int | None
+    bundle_id: int | None = None
     auto_added: bool = False
     ha_item_name: str | None = None
     pinned: bool = False

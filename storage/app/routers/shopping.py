@@ -38,7 +38,7 @@ _AMOUNT_EPSILON = 1e-9
 # through this so all add paths inherit a product's persistent pin for free.
 _SHOPPING_SELECT = """
     SELECT s.id, s.product_id, s.amount, s.unit_id, s.note, s.done,
-           s.recipe_id, s.auto_added, s.ha_item_name, s.created_at,
+           s.recipe_id, s.bundle_id, s.auto_added, s.ha_item_name, s.created_at,
            COALESCE(p.pin_brand, 0) AS pinned
       FROM shopping_list s
       LEFT JOIN products p ON p.id = s.product_id
@@ -533,15 +533,17 @@ def add_shopping_item(body: ShoppingItemCreate, response: Response):
     # a duplicate — re-scanning or re-picking a product means "+N", not a new
     # row. Excluded on purpose: noted rows (free-text Muistilappu entries share
     # one sentinel product and differ only by note), recipe-attributed rows,
-    # done rows (active shopping-trip history), and auto_added rows (their
-    # amount is owned by sync_auto_shopping's live-deficit reconciliation).
-    # Returns 200 on merge vs 201 on create.
+    # bundle-attributed rows, done rows (active shopping-trip history), and
+    # auto_added rows (their amount is owned by sync_auto_shopping's
+    # live-deficit reconciliation). Bundle rows are excluded so a plain re-add
+    # never double-counts or un-badges them. Returns 200 on merge vs 201 on create.
     if not body.auto_added and not body.note and body.recipe_id is None:
         existing = conn.execute(
             """
             SELECT id FROM shopping_list
             WHERE product_id = ? AND done = 0 AND auto_added = 0
-              AND recipe_id IS NULL AND (note IS NULL OR note = '')
+              AND recipe_id IS NULL AND bundle_id IS NULL
+              AND (note IS NULL OR note = '')
               AND unit_id IS ?
             ORDER BY created_at ASC, id ASC
             LIMIT 1
