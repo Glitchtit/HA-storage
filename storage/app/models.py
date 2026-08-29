@@ -539,6 +539,49 @@ class CadenceSuggestionResponse(BaseModel):
     min_purchases: int
     suggestions: list[CadenceSuggestionItem]
 
+# ── Bundles (quick-add shopping sets) ──────────────────────────────────────
+
+class BundleItemCreate(BaseModel):
+    product_id: int
+
+class BundleCreate(BaseModel):
+    name: str
+    emoji: str = "🧺"
+    sort_order: int = 0
+    items: list[BundleItemCreate] = []
+
+class BundleUpdate(BaseModel):
+    name: str | None = None
+    emoji: str | None = None
+    sort_order: int | None = None
+    items: list[BundleItemCreate] | None = None
+
+class Bundle(BaseModel):
+    id: int
+    name: str
+    emoji: str
+    sort_order: int
+    created_at: str
+    item_count: int = 0
+
+class BundleItemDetail(BaseModel):
+    id: int
+    product_id: int
+    product_name: str = ""
+    sort_order: int = 0
+    stock_amount: float = 0
+    on_list: bool = False
+
+class BundleDetail(Bundle):
+    items: list[BundleItemDetail] = []
+
+class BundleToShoppingRequest(BaseModel):
+    product_ids: list[int]
+
+class BundleToShoppingResponse(BaseModel):
+    added: int
+    skipped: int
+
 # ── Shopping reconcile (cross-brand fulfillment) ─────────────────────────────
 
 class BasketItem(BaseModel):

@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS shopping_list (
     note       TEXT DEFAULT '',
     done       INTEGER DEFAULT 0,
     recipe_id  INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+    bundle_id  INTEGER REFERENCES bundles(id) ON DELETE SET NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -181,6 +182,22 @@ CREATE TABLE IF NOT EXISTS link_proposals (
     UNIQUE(product_id, proposed_parent_id)
 );
 
+CREATE TABLE IF NOT EXISTS bundles (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    emoji      TEXT NOT NULL DEFAULT '🧺',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS bundle_items (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    bundle_id  INTEGER NOT NULL REFERENCES bundles(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(bundle_id, product_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_id);
 CREATE INDEX IF NOT EXISTS idx_products_group ON products(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_products_location ON products(location_id);
@@ -197,6 +214,7 @@ CREATE INDEX IF NOT EXISTS idx_barcode_queue_status ON barcode_queue(status);
 CREATE INDEX IF NOT EXISTS idx_stock_history_product ON stock_history(product_id);
 CREATE INDEX IF NOT EXISTS idx_stock_history_created ON stock_history(created_at);
 CREATE INDEX IF NOT EXISTS idx_stock_history_event ON stock_history(event_type);
+CREATE INDEX IF NOT EXISTS idx_bundle_items_bundle ON bundle_items(bundle_id);
 """
 
 # Standard Finnish measurement units
@@ -507,6 +525,40 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             )
             conn.commit()
             log.info("Added source column to product_availability.")
+
+    # ── Quick-add shopping bundles (2026-08) ──────────────────────────────
+    tables = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "bundles" not in tables:
+        conn.executescript(
+            """
+            CREATE TABLE bundles (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL,
+                emoji      TEXT NOT NULL DEFAULT '🧺',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE bundle_items (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                bundle_id  INTEGER NOT NULL REFERENCES bundles(id) ON DELETE CASCADE,
+                product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(bundle_id, product_id)
+            );
+            CREATE INDEX idx_bundle_items_bundle ON bundle_items(bundle_id);
+            """
+        )
+        conn.commit()
+        log.info("Created bundles and bundle_items tables.")
+
+    sl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(shopping_list)").fetchall()}
+    if "bundle_id" not in sl_cols:
+        conn.execute(
+            "ALTER TABLE shopping_list ADD COLUMN bundle_id INTEGER REFERENCES bundles(id) ON DELETE SET NULL"
+        )
+        conn.commit()
+        log.info("Added bundle_id column to shopping_list.")
 
 
 def _backfill_recipe_specificity(conn: sqlite3.Connection) -> int:
