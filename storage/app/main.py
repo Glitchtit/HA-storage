@@ -226,6 +226,7 @@ from routers import (
     groups,
     recipes,
     shopping,
+    bundles,
     files,
     config,
     migrate,
@@ -245,6 +246,7 @@ app.include_router(locations.router, prefix="/api")
 app.include_router(groups.router, prefix="/api")
 app.include_router(recipes.router, prefix="/api")
 app.include_router(shopping.router, prefix="/api")
+app.include_router(bundles.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
 app.include_router(migrate.router, prefix="/api")
