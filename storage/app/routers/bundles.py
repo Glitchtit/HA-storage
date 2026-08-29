@@ -116,6 +116,9 @@ def create_bundle(body: BundleCreate):
 def update_bundle(bundle_id: int, body: BundleUpdate):
     conn = _get_db()
     _bundle_row(conn, bundle_id)  # 404 guard
+    # Validate products BEFORE any mutations
+    if body.items is not None:
+        _validate_products(conn, [i.product_id for i in body.items])
     updates = {}
     for field in ("name", "emoji", "sort_order"):
         value = getattr(body, field)
@@ -128,7 +131,6 @@ def update_bundle(bundle_id: int, body: BundleUpdate):
             list(updates.values()) + [bundle_id],
         )
     if body.items is not None:
-        _validate_products(conn, [i.product_id for i in body.items])
         _replace_items(conn, bundle_id, body.items)
     conn.commit()
     return _bundle_detail(conn, bundle_id)

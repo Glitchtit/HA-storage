@@ -123,3 +123,19 @@ class TestBundleCrud:
         item = client.get(f"/api/bundles/{b['id']}").json()["items"][0]
         assert item["stock_amount"] == 2
         assert item["on_list"] is True
+
+    def test_update_rejects_unknown_product_before_mutation(self):
+        # Verify validation runs BEFORE mutation: if items contain unknown product,
+        # 400 is raised and the name is NOT changed (catches transaction leak).
+        p1 = _make_product("Kaali")
+        b = client.post("/api/bundles", json={
+            "name": "Keitto", "items": [{"product_id": p1}],
+        }).json()
+        # Try to update name AND add unknown product
+        r = client.put(f"/api/bundles/{b['id']}", json={
+            "name": "Uusi nimi", "items": [{"product_id": 999999}],
+        })
+        assert r.status_code == 400
+        # Verify name was NOT changed (mutation was rejected before commit)
+        updated = client.get(f"/api/bundles/{b['id']}").json()
+        assert updated["name"] == "Keitto"
