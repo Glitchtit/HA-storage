@@ -1,3 +1,8 @@
+## 0.24.0
+
+- New quick-add shopping bundles API (`/api/bundles`): named sets of products ("Taco night") that can be pushed onto the shopping list in one tap; pushes skip products already on the list, and shopping rows remember their source bundle (`bundle_id`)
+- Plain manual shopping adds no longer merge into bundle-attributed rows
+
 ## 0.23.1
 
 - Expiry rebase now also catches stock lots still carrying the historic 60-day creation default under products whose best-before default was changed by an earlier optimize run (previously only lots matching the current default were rebased, so pre-existing 60-day lots kept their bogus dates)
