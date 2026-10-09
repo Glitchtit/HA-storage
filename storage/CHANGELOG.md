@@ -1,3 +1,8 @@
+## 0.24.1
+
+- Integration 0.5.3: the Storage Shopping List todo entity supports adding items again, so the Home Assistant voice/AI assistant can add to it ("add X to the storage shopping list"). The item text is resolved to an existing Storage product (exact, then substring match); an ambiguous or unknown name now returns a readable error the assistant can relay (and an HTTP 400 with the message over the REST API) instead of a generic "Error handling HassListAddItem"
+- When a spoken name doesn't resolve (e.g. "milk" vs Finnish product names), the error also lists the household's most frequently bought products from the past year, so the assistant can add the usual one (e.g. the usual milk) on its own and say which it picked
+
 ## 0.24.0
 
 - New quick-add shopping bundles API (`/api/bundles`): named sets of products ("Taco night") that can be pushed onto the shopping list in one tap; pushes skip products already on the list, and shopping rows remember their source bundle (`bundle_id`)

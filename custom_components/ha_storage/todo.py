@@ -13,11 +13,14 @@ from homeassistant.components.todo import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import intent
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
+from .resolver import describe_add_failure, resolve_product_by_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,20 +32,32 @@ async def async_setup_entry(
     async_add_entities([StorageShoppingListTodo(coordinator, entry)])
 
 
+class ShoppingListAddError(intent.IntentHandleError, ServiceValidationError):
+    """A shopping-list add that failed because the name didn't resolve.
+
+    Subclasses both so the message reaches every caller: HA's intent layer
+    passes IntentErrors through to the Assist/LLM agent (any other exception is
+    masked as "Error handling HassListAddItem"), and the REST API returns a
+    ServiceValidationError as HTTP 400 with the message.
+    """
+
+
 class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
     """The Storage shopping list, exposed as a HA todo entity.
 
-    Read + check/uncheck + delete are supported. Adding items is intentionally
-    NOT exposed here: shopping items must tie to a Storage product, and HA's
-    `todo.add_item` can't return a structured result, so an agent calling it via
-    the REST API gets an opaque HTTP 500 on any name that doesn't resolve. Use
-    the `ha_storage.add_to_shopping_list_by_name` service instead — it resolves
-    the name to a product and returns `status` (added / ambiguous / not_found)
-    the caller can act on.
+    Read + check/uncheck + delete + create are supported. Shopping items must
+    tie to a Storage product, so create resolves the free-text summary to an
+    existing product with the same resolver as the
+    `ha_storage.add_to_shopping_list_by_name` service. Ambiguous or unknown
+    names raise ShoppingListAddError with a readable message instead of adding
+    a product-less row. Callers that need a structured result should still use
+    the by-name service.
     """
 
     _attr_supported_features = (
-        TodoListEntityFeature.UPDATE_TODO_ITEM | TodoListEntityFeature.DELETE_TODO_ITEM
+        TodoListEntityFeature.CREATE_TODO_ITEM
+        | TodoListEntityFeature.UPDATE_TODO_ITEM
+        | TodoListEntityFeature.DELETE_TODO_ITEM
     )
 
     def __init__(self, coordinator: StorageCoordinator, entry: ConfigEntry):
@@ -70,6 +85,59 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
                 )
             )
         return items
+
+    async def async_create_todo_item(self, item: TodoItem) -> None:
+        """Add an item to the shopping list by resolving its text to a product."""
+        name = (item.summary or "").strip()
+        if not name:
+            raise ShoppingListAddError("The shopping list item needs a product name.")
+
+        products = self.coordinator.data.get("products") if self.coordinator.data else None
+        try:
+            if products is None:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(f"{self.coordinator.addon_url}/api/products")
+                    resp.raise_for_status()
+                    products = resp.json()
+
+            status, result = resolve_product_by_name(name, products)
+            if status != "added":
+                history = await self._async_purchase_history()
+                raise ShoppingListAddError(
+                    describe_add_failure(
+                        name, status, result if status == "ambiguous" else None, history
+                    )
+                )
+
+            payload: dict = {"product_id": result["id"], "amount": 1}
+            if item.description:
+                payload["note"] = item.description
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{self.coordinator.addon_url}/api/shopping-list", json=payload
+                )
+                resp.raise_for_status()
+        except HomeAssistantError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HomeAssistantError(
+                f"Failed to add '{name}' to the Storage shopping list: {exc}"
+            ) from exc
+        await self.coordinator.async_request_refresh()
+
+    async def _async_purchase_history(self) -> list[dict]:
+        """Past year's most-purchased products, or [] if unavailable."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{self.coordinator.addon_url}/api/stats/top-purchased",
+                    params={"days": 365, "limit": 100},
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.HTTPError, OSError, ValueError) as err:
+            _LOGGER.debug("Purchase history unavailable: %s", err)
+            return []
 
     async def async_update_todo_item(self, item: TodoItem) -> None:
         done = item.status == TodoItemStatus.COMPLETED

@@ -41,3 +41,43 @@ def resolve_product_by_name(name: str | None, products: list[dict]) -> tuple[str
     if len(candidates) > 1:
         return ("ambiguous", candidates)
     return ("not_found", None)
+
+
+def describe_add_failure(
+    name: str,
+    status: str,
+    candidates: list[dict] | None,
+    history: list[dict],
+    limit: int = 60,
+) -> str:
+    """Build the error text an agent sees when a by-name add can't resolve.
+
+    `history` is /api/stats/top-purchased rows ({product_id, product_name,
+    event_count, ...}). It is re-sorted by how often each product is bought
+    (event_count) so an agent can map a generic word like "milk" to the
+    product this household usually buys, then retry with its exact name.
+    """
+    counts = {h["product_id"]: h.get("event_count", 0) for h in history}
+
+    def _bought(pid: int) -> str:
+        n = counts.get(pid, 0)
+        return f"bought {n}×" if n else "never bought"
+
+    if status == "ambiguous" and candidates:
+        listed = "; ".join(f"{c['name']} ({_bought(c['id'])})" for c in candidates[:8])
+        msg = f"'{name}' matches several Storage products: {listed}."
+    else:
+        msg = f"No Storage product name contains '{name}' (names are mostly Finnish)."
+
+    usual = sorted(history, key=lambda h: h.get("event_count", 0), reverse=True)[:limit]
+    if usual:
+        listed = "; ".join(f"{h['product_name']} ({h.get('event_count', 0)}×)" for h in usual)
+        msg += (
+            f" Products this household usually buys, most frequent first: {listed}."
+            " If one of these is clearly what was meant (prefer the most frequently"
+            " bought), add it again using its exact full name without asking, and"
+            " say which product you added. Only ask if none clearly fits."
+        )
+    else:
+        msg += " Ask which product is meant and retry with its full product name."
+    return msg
