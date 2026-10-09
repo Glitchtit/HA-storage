@@ -119,3 +119,49 @@ def test_failure_caps_history_length():
     ]
     msg = describe_add_failure("x", "not_found", None, many, limit=50)
     assert "P49 " in msg and "P50 " not in msg
+
+
+def test_single_mid_word_match_needs_confirmation():
+    # "egg" only appears inside "Reggiano": a weak hit, must not auto-add.
+    prods = [_p(9, "Pirkka Parhaat Parmigiano Reggiano juustoraaste 80g")]
+    status, result = resolve_product_by_name("Egg", prods)
+    assert status == "ambiguous"
+    assert result == [{"id": 9, "name": "Pirkka Parhaat Parmigiano Reggiano juustoraaste 80g"}]
+
+
+def test_single_word_start_match_still_added():
+    prods = [_p(9, "Pirkka vapaan kanan ruskea kananmuna 6 kpl")]
+    status, result = resolve_product_by_name("ruskea", prods)
+    assert status == "added"
+
+
+def test_not_found_suggests_finnish_retry():
+    msg = describe_add_failure("Eggs", "not_found", None, HISTORY)
+    assert "Finnish" in msg
+    assert "kananmuna" in msg  # concrete example the agent can follow
+
+
+def test_ambiguous_without_history_offers_choices_not_exact_names():
+    cands = [
+        {"id": 1, "name": "Kultamuna vapaa kananmuna S/M10 530g"},
+        {"id": 2, "name": "Pirkka vapaan kanan ruskea kananmuna 6 kpl/348g"},
+    ]
+    msg = describe_add_failure("kananmuna", "ambiguous", cands, [])
+    assert "exact" not in msg.lower()
+    assert "which" in msg.lower()
+    assert "Kultamuna" in msg and "Pirkka vapaan" in msg
+
+
+def test_ambiguous_with_one_bought_candidate_recommends_it():
+    hist = [{"product_id": 2, "product_name": "B", "total_amount": 3, "event_count": 3}]
+    cands = [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]
+    msg = describe_add_failure("x", "ambiguous", cands, hist)
+    assert "B (bought 3×)" in msg
+    assert "usually buys B" in msg
+
+
+def test_ambiguous_lists_bought_candidates_first():
+    cands = [{"id": i, "name": f"N{i}"} for i in range(12)]
+    hist = [{"product_id": 11, "product_name": "N11", "total_amount": 2, "event_count": 2}]
+    msg = describe_add_failure("x", "ambiguous", cands, hist)
+    assert msg.index("N11 (bought 2×)") < msg.index("N0 (never bought)")

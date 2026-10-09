@@ -1,3 +1,9 @@
+## 0.24.2
+
+- Integration 0.5.4: no more "Detected blocking call to load_verify_locations" warnings at Home Assistant startup. HTTP clients now reuse Home Assistant's pre-built SSL context instead of loading the certificate bundle inside the event loop
+- Voice/AI shopping adds: a single product name that only contains the spoken word mid-word ("egg" inside "Reggiano") is no longer added automatically; it is offered as a possible match instead
+- Unresolved names tell the assistant to retry with the Finnish word (eggs = kananmuna, milk = maito, ...); when several products match it offers them as choices, listing ones the household has bought first, and picks the one bought before if exactly one was
+
 ## 0.24.1
 
 - Integration 0.5.3: the Storage Shopping List todo entity supports adding items again, so the Home Assistant voice/AI assistant can add to it ("add X to the storage shopping list"). The item text is resolved to an existing Storage product (exact, then substring match); an ambiguous or unknown name now returns a readable error the assistant can relay (and an HTTP 400 with the message over the REST API) instead of a generic "Error handling HassListAddItem"

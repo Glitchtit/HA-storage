@@ -9,6 +9,7 @@ from datetime import timedelta
 import httpx
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util.ssl import get_default_context
 
 from .const import DEFAULT_EXPIRING_WITHIN_DAYS
 
@@ -31,7 +32,7 @@ class StorageCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
                 # Reconcile auto-added shopping rows against current stock
                 # before fetching the list, so the snapshot we expose to HA
                 # reflects the latest min_stock thresholds.

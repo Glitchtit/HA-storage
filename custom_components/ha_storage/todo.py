@@ -17,6 +17,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import intent
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
@@ -95,7 +96,7 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
         products = self.coordinator.data.get("products") if self.coordinator.data else None
         try:
             if products is None:
-                async with httpx.AsyncClient(timeout=15) as client:
+                async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
                     resp = await client.get(f"{self.coordinator.addon_url}/api/products")
                     resp.raise_for_status()
                     products = resp.json()
@@ -112,7 +113,7 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
             payload: dict = {"product_id": result["id"], "amount": 1}
             if item.description:
                 payload["note"] = item.description
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(verify=get_default_context(), timeout=10) as client:
                 resp = await client.post(
                     f"{self.coordinator.addon_url}/api/shopping-list", json=payload
                 )
@@ -128,7 +129,7 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
     async def _async_purchase_history(self) -> list[dict]:
         """Past year's most-purchased products, or [] if unavailable."""
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(verify=get_default_context(), timeout=10) as client:
                 resp = await client.get(
                     f"{self.coordinator.addon_url}/api/stats/top-purchased",
                     params={"days": 365, "limit": 100},
@@ -142,7 +143,7 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
     async def async_update_todo_item(self, item: TodoItem) -> None:
         done = item.status == TodoItemStatus.COMPLETED
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(verify=get_default_context(), timeout=10) as client:
                 await client.put(
                     f"{self.coordinator.addon_url}/api/shopping-list/{item.uid}",
                     json={"done": done},
@@ -153,7 +154,7 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
 
     async def async_delete_todo_items(self, uids: list[str]) -> None:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(verify=get_default_context(), timeout=10) as client:
                 for uid in uids:
                     await client.delete(
                         f"{self.coordinator.addon_url}/api/shopping-list/{uid}"

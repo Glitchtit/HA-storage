@@ -8,6 +8,7 @@ import httpx
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
@@ -58,7 +59,7 @@ def _coordinators(hass: HomeAssistant) -> list[StorageCoordinator]:
 
 
 async def _post(coordinator: StorageCoordinator, path: str, payload: dict) -> None:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
         resp = await client.post(f"{coordinator.addon_url}{path}", json=payload)
         resp.raise_for_status()
 
@@ -91,7 +92,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         products = coord.data.get("products") if coord.data else None
         if products is None:
             try:
-                async with httpx.AsyncClient(timeout=15) as client:
+                async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
                     resp = await client.get(f"{coord.addon_url}/api/products")
                     resp.raise_for_status()
                     products = resp.json()
@@ -145,7 +146,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         coords = _coordinators(hass)
         if not coords:
             return {"error": "no_coordinator"}
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
             resp = await client.get(f"{coords[0].addon_url}/api/stats/digest")
             if resp.status_code != 200:
                 return {"error": f"http_{resp.status_code}"}
