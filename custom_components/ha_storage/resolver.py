@@ -88,9 +88,12 @@ def describe_add_failure(
             )
             return msg
         msg += (
-            " If one of them is clearly the item meant, add it by repeating the add"
-            " with its full name. Otherwise ask the user which of these they want,"
-            " naming the options in short form."
+            " Use best judgement and pick one yourself, without asking: prefer a"
+            " product bought before, otherwise the plain everyday version of the"
+            " item over flavoured, processed or mixed products (e.g. plain"
+            " tomatoes over tomato salsa). Add it by repeating the add with its"
+            " full name, then briefly say which product you picked. Ask the user"
+            " only if none of these is plausibly the item."
         )
     else:
         msg = (

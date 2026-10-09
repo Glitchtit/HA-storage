@@ -141,15 +141,24 @@ def test_not_found_suggests_finnish_retry():
     assert "kananmuna" in msg  # concrete example the agent can follow
 
 
-def test_ambiguous_without_history_offers_choices_not_exact_names():
+def test_ambiguous_without_history_uses_best_judgement():
     cands = [
         {"id": 1, "name": "Kultamuna vapaa kananmuna S/M10 530g"},
         {"id": 2, "name": "Pirkka vapaan kanan ruskea kananmuna 6 kpl/348g"},
     ]
     msg = describe_add_failure("kananmuna", "ambiguous", cands, [])
-    assert "exact" not in msg.lower()
-    assert "which" in msg.lower()
+    low = msg.lower()
+    assert "exact" not in low
     assert "Kultamuna" in msg and "Pirkka vapaan" in msg
+    # The agent should choose itself, not bounce the choice back to the user.
+    assert "without asking" in low
+    assert "best judgement" in low
+    assert "ask the user which" not in low
+
+
+def test_not_found_with_history_does_not_invite_asking():
+    msg = describe_add_failure("Eggs", "not_found", None, HISTORY)
+    assert "only ask if none clearly fits" not in msg.lower()
 
 
 def test_ambiguous_with_one_bought_candidate_recommends_it():

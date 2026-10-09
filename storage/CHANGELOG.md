@@ -1,3 +1,7 @@
+## 0.24.3
+
+- Integration 0.5.5: when a spoken shopping item matches several products, the voice/AI assistant now picks the most plausible one itself (bought before, else the plain everyday version) and says which it added, instead of asking you to be more specific
+
 ## 0.24.2
 
 - Integration 0.5.4: no more "Detected blocking call to load_verify_locations" warnings at Home Assistant startup. HTTP clients now reuse Home Assistant's pre-built SSL context instead of loading the certificate bundle inside the event loop
