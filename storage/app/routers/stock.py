@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from models import (
     StockAdd,
+    StockAddResult,
     StockConsume,
     StockCorrectPurchase,
     StockEntry,
@@ -114,7 +115,7 @@ def get_product_stock(product_id: int):
     ).fetchall()
 
 
-@router.post("/stock/add", response_model=StockEntry, status_code=201)
+@router.post("/stock/add", response_model=StockAddResult, status_code=201)
 def add_stock(body: StockAdd):
     conn = _get_db()
     product = conn.execute("SELECT * FROM products WHERE id = ?", (body.product_id,)).fetchone()
@@ -192,9 +193,14 @@ def add_stock(body: StockAdd):
     import linker
     linker.maybe_link_after_purchase(conn, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
-    consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id)
+    try:
+        cleared = consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id)
+    except Exception as exc:  # noqa: BLE001 — the purchase is saved; a list side effect never fails it
+        conn.rollback()
+        log.warning("Clearing the shopping list for product %d failed: %s", body.product_id, exc)
+        cleared = []
     sync_auto_shopping(conn)
-    return entry
+    return {**entry, "cleared_rows": cleared}
 
 
 @router.post("/stock/consume", status_code=200)

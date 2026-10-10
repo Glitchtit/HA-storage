@@ -21,8 +21,11 @@ from models import (
     ReceiptParseRequest,
     ReceiptParseResponse,
 )
+from facts import Catalog
+from list_clearing import apply_purchase
 from receipt_parser import match_lines_to_products, parse_receipt
 from routers.history import log_event
+from routers.shopping import sync_auto_shopping
 
 router = APIRouter(tags=["receipts"])
 log = logging.getLogger(__name__)
@@ -75,6 +78,7 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     added = 0
     errors: list[str] = []
     purchased_product_ids: set[int] = set()
+    purchases: list[tuple[int, float, int]] = []
     for idx, line in enumerate(body.lines):
         try:
             product = conn.execute(
@@ -131,11 +135,27 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
             )
             added += 1
             purchased_product_ids.add(line.product_id)
+            purchases.append((line.product_id, line.amount, unit_id))
         except Exception as exc:
             errors.append(f"Line {idx}: {exc}")
 
     conn.commit()
     log.info("Receipt commit: added=%d, failed=%d", added, len(errors))
+
+    # A receipt is a purchase like /stock/add: clear the shopping rows it
+    # covers and bring minimum-stock rows up to date. Never fails the receipt.
+    cleared: list[dict] = []
+    if purchases:
+        try:
+            cat = Catalog(conn)
+            for product_id, amount, unit_id in purchases:
+                cleared.extend(apply_purchase(conn, cat, product_id, amount, unit_id))
+            conn.commit()
+            sync_auto_shopping(conn)
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            log.warning("Receipt commit: shopping list update failed: %s", exc)
+            cleared = []
 
     # Best-effort background linking, same trigger /stock/add uses: a
     # receipt purchase of a still-unparented, still-childless product is a
@@ -147,4 +167,4 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     except Exception as exc:
         log.warning("Receipt commit: post-commit linker trigger failed: %s", exc)
 
-    return {"added": added, "failed": len(errors), "errors": errors}
+    return {"added": added, "failed": len(errors), "errors": errors, "cleared_rows": cleared}

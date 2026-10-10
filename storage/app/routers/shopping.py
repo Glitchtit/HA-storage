@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
+from list_clearing import apply_purchase
 from buy_hints import buy_hint, purchase_stats
 from quantity import PACKAGE, VAGUE, format_qty
 from models import (
@@ -225,48 +226,22 @@ def consume_shopping_for_purchase(
     product_id: int,
     amount: float,
     unit_id: int | None,
-) -> list[int]:
-    """Decrement manual shopping rows when stock is purchased for `product_id`.
+) -> list[dict]:
+    """Apply a purchase of `product_id` to the shopping list: rows of the
+    product and of the concepts above it, converted into each row's unit
+    (list_clearing.apply_purchase). Auto-added rows are sync_auto_shopping's.
 
-    Targets the disjoint complement of `sync_auto_shopping`: matches only
-    non-done **manual** rows (`auto_added = 0`, `done = 0`) for the given
-    product. A row's `unit_id` matches when it is NULL ("no preference" —
-    the common case, since the HA-stock frontend never sends a unit_id on
-    manual add) or equals the purchase's `unit_id`. A row that does specify
-    a unit is only consumed by a purchase in that same unit.
-
-    Iterates oldest-first (`created_at ASC`, with `id ASC` as a tiebreaker
-    because `created_at` is a TEXT column with one-second resolution and two
-    rows inserted in the same second would otherwise have unspecified order),
-    subtracting `amount` from each
-    matching row. A row whose new amount is `<= 0` is hard-deleted and the
-    leftover (the negation of `new_amount`) spills into the next row. Rows
-    whose new amount stays `> 0` are updated in place.
-
-    Returns the list of affected row ids (deleted or updated). The helper
-    commits only if at least one row changed, matching `sync_auto_shopping`.
+    Returns the touched rows ({id, product_id, removed, amount}) and always
+    ends the transaction apply_purchase opened.
     """
-    rows = conn.execute(
-        """
-        SELECT id, amount FROM shopping_list
-        WHERE product_id = ?
-          AND auto_added = 0
-          AND done = 0
-          AND (unit_id IS NULL OR unit_id = ?)
-        ORDER BY created_at ASC, id ASC
-        """,
-        (product_id, unit_id),
-    ).fetchall()
-
-    affected = _decrement_rows(conn, rows, amount)
-
-    if affected:
-        conn.commit()
+    touched = apply_purchase(conn, Catalog(conn), product_id, amount, unit_id)
+    conn.commit()
+    if touched:
         log.info(
             "Shopping clear-on-purchase: product=%d, amount=%.3f, affected=%d",
-            product_id, amount, len(affected),
+            product_id, amount, len(touched),
         )
-    return affected
+    return touched
 
 
 @router.get("/shopping-list", response_model=list[ShoppingItem])

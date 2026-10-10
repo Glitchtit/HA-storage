@@ -267,6 +267,17 @@ class StockEntry(BaseModel):
     price_paid: float | None = None
     created_at: str
 
+class ClearedRow(BaseModel):
+    """A shopping row a purchase applied to: removed, or `amount` still needed."""
+    id: int
+    product_id: int
+    removed: bool
+    amount: float
+
+class StockAddResult(StockEntry):
+    """The new lot plus the shopping rows the purchase cleared."""
+    cleared_rows: list[ClearedRow] = []
+
 class StockSummary(BaseModel):
     """Aggregated stock view per product."""
     product_id: int
@@ -737,6 +748,7 @@ class ReceiptCommitResponse(BaseModel):
     added: int
     failed: int
     errors: list[str] = []
+    cleared_rows: list[ClearedRow] = []
 
 # ── Barcode Queue ──────────────────────────────────────────────────────────
 

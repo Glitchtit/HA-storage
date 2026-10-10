@@ -904,32 +904,6 @@ class TestShoppingClearOnPurchase:
         assert self._shopping_rows_for(pid) == [], \
             "manual shopping row with NULL unit_id should be cleared by a scan"
 
-    def test_unit_mismatch_skips_row(self):
-        """Shopping row in unit A, purchase in unit B → row untouched."""
-        units = {u["abbreviation"]: u["id"] for u in client.get("/api/units").json()}
-        loc_id = client.get("/api/locations").json()[0]["id"]
-        pid = client.post(
-            "/api/products",
-            json={"name": f"ClearOnBuyUnit_{id(self)}",
-                  "unit_id": units["kpl"]},
-        ).json()["id"]
-        item = client.post(
-            "/api/shopping-list",
-            json={"product_id": pid, "amount": 2, "unit_id": units["l"]},
-        ).json()
-
-        r = client.post(
-            "/api/stock/add",
-            json={"product_id": pid, "amount": 1, "unit_id": units["kpl"],
-                  "location_id": loc_id},
-        )
-        assert r.status_code == 201
-
-        rows = self._shopping_rows_for(pid)
-        assert len(rows) == 1
-        assert rows[0]["id"] == item["id"]
-        assert rows[0]["amount"] == 2
-
     def test_stock_consume_does_not_clear_shopping(self):
         """Consume is using existing stock, not buying — must not fire the
         new helper."""
