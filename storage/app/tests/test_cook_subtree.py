@@ -11,6 +11,7 @@ os.makedirs(os.path.join(os.environ["DATA_DIR"], "images", "products"), exist_ok
 os.makedirs(os.path.join(os.environ["DATA_DIR"], "images", "recipes"), exist_ok=True)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
 from fastapi.testclient import TestClient
 from main import app
 
@@ -107,3 +108,28 @@ class TestCookSubtree:
         client.post(f"/api/recipes/{rid}/cook", json={})
         rows = [i for i in client.get("/api/shopping-list").json() if i["product_id"] == cat and not i["done"]]
         assert len(rows) == 1 and rows[0]["amount"] == 2
+
+    def test_same_product_twice_lists_the_whole_shortfall(self):
+        butter = _mk("voi-c8", unit="g", kind="concept")
+        sku = _mk("Voi 250g c8", parent_id=butter)
+        client.post("/api/stock/add", json={"product_id": sku, "amount": 1})
+        rid, body = _cook([(butter, 300, "g"), (butter, 300, "g")])
+        assert [round(s["amount"], 3) for s in body["shortfall_added"]] == [50, 300]
+        rows = [i for i in client.get("/api/shopping-list").json()
+                if i["product_id"] == butter and i["recipe_id"] == rid and not i["done"]]
+        assert len(rows) == 1 and abs(rows[0]["amount"] - 350) < 1e-6
+
+    def test_unexpected_error_rolls_back_deductions(self, monkeypatch):
+        import cook_recipe
+        from main import get_connection
+        cat = _mk("kerma-c9", unit="dl", kind="concept")
+        sku = _mk("Kerma 2dl c9", parent_id=cat)
+        client.post("/api/stock/add", json={"product_id": sku, "amount": 1})
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("list write failed")
+        monkeypatch.setattr(cook_recipe, "add_recipe_need", boom)
+        with pytest.raises(RuntimeError):
+            _cook([(cat, 3, "dl")])
+        get_connection().commit()  # what the next unrelated request would do
+        assert [lot["amount"] for lot in _lots(sku)] == [1]

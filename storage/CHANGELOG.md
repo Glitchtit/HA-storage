@@ -2,13 +2,14 @@
 
 - Recipe availability converts every unit properly and counts stock anywhere under an ingredient: a 2 kg flour bag counts as ~33 dl, a 10-egg carton as 10 eggs
 - Partial stock now shows yellow with the amount you have instead of red; a small need from a big opened bag counts as available
-- "Add to shopping list" (`POST /api/recipes/{id}/to-shopping`, now with `mode` and `servings`) puts each shortfall on the ingredient itself in recipe units, never on its parent category, merges needs from several recipes and does not double rows when pressed again
+- "Add to shopping list" (`POST /api/recipes/{id}/to-shopping`, now with `mode` and `servings`) puts each shortfall on the ingredient itself in recipe units, never on its parent category, merges needs from several recipes (and a product used twice in one recipe) and does not double rows when pressed again
 - Cooking deducts from the products actually in stock under each ingredient, oldest first, and marks a partly used pack opened
 - Products have a kind (concept or product you buy) and quantity facts (content per package, pieces per package, density, piece weight), editable in the product form; existing data is migrated automatically on first start and replaced conversion rows are kept in a backup table
 - Shopping-list rows carry a display text with their unit (`display.qty_text`)
 - Minimum stock set on a concept counts every product under it
 - Deleting a product that a recipe or bundle uses is refused with a hint to merge; the new Merge action moves everything to another product
 - AI Optimize no longer rewrites parent groupings, creates parent products or deletes recipe ingredients; it assigns aisle groups, locations and best-before days, merges genuine multi-packs, then links loose products under matching concepts
+- Upgrading migrates product data once; replaced conversion rows are kept in the `unit_conversions_backup_qty1` table. To go back to 0.24.x, restore the backup taken before upgrading — downgrading the add-on alone leaves the old version without those rows
 
 ## 0.24.3
 

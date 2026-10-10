@@ -11,6 +11,7 @@ os.makedirs(os.path.join(os.environ["DATA_DIR"], "images", "products"), exist_ok
 os.makedirs(os.path.join(os.environ["DATA_DIR"], "images", "recipes"), exist_ok=True)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
 from fastapi.testclient import TestClient
 from main import app
 
@@ -159,3 +160,46 @@ class TestToShopping:
         rid = _recipe("X s14", [(cat, 1, "dl", "loose")])
         r = client.post(f"/api/recipes/{rid}/to-shopping", json={"mode": "everything"})
         assert r.status_code == 400
+
+    def test_same_product_twice_adds_both_needs(self):
+        butter = _mk("voi-s15", unit="g", kind="concept")
+        rid = _recipe("Pulla s15", [(butter, 100, "g", "loose"), (butter, 20, "g", "loose")])
+        assert _push(rid)["added"] == 2
+        rows = _rows(butter)
+        assert len(rows) == 1 and abs(rows[0]["amount"] - 120) < 1e-9
+
+    def test_same_product_twice_shares_the_stock(self):
+        butter = _mk("voi-s16", unit="g", kind="concept")
+        sku = _mk("Voi 100g s16", parent_id=butter)
+        client.post("/api/stock/add", json={"product_id": sku, "amount": 1})
+        rid = _recipe("Pulla s16", [(butter, 100, "g", "loose"), (butter, 20, "g", "loose")])
+        _push(rid)
+        rows = _rows(butter)
+        assert len(rows) == 1 and abs(rows[0]["amount"] - 20) < 1e-9
+
+    def test_same_product_twice_to_taste_adds_one_package(self):
+        salt = _mk("suola-s17", unit="g", kind="concept")
+        rid = _recipe("Keitto s17", [(salt, 0, "g", "loose"), (salt, 0, "g", "loose")])
+        _push(rid)
+        rows = _rows(salt)
+        assert len(rows) == 1 and rows[0]["amount"] == 1
+
+    def test_unexpected_error_rolls_back_rows(self, monkeypatch):
+        import routers.recipes as recipes_router
+        from main import get_connection
+        cream = _mk("kerma-s18", unit="dl", kind="concept")
+        milk = _mk("maito-s18", unit="dl", kind="concept")
+        rid = _recipe("Kastike s18", [(cream, 2, "dl", "loose"), (milk, 3, "dl", "loose")])
+        real = recipes_router.add_recipe_need
+        calls = []
+
+        def flaky(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError("list write failed")
+            return real(*args, **kwargs)
+        monkeypatch.setattr(recipes_router, "add_recipe_need", flaky)
+        with pytest.raises(RuntimeError):
+            client.post(f"/api/recipes/{rid}/to-shopping", json={"mode": "missing"})
+        get_connection().commit()  # what the next unrelated request would do
+        assert _rows(cream) == [] and _rows(milk) == []

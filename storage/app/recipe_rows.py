@@ -59,6 +59,17 @@ def recipe_already_listed(conn: sqlite3.Connection, product_id: int, recipe_id: 
     return False
 
 
+def needs_in_unit(cat: Catalog, product_id: int, unit: Unit, needs: list[tuple[float, Unit]]) -> float:
+    """Sum earlier recipe needs of the same product, converted into `unit`.
+    Needs that cannot be converted are left out."""
+    total = 0.0
+    for amount, need_unit in needs:
+        conv = convert(amount, need_unit, unit, cat.facts(product_id))
+        if conv is not None:
+            total += conv.amount
+    return total
+
+
 def add_recipe_need(
     conn: sqlite3.Connection,
     cat: Catalog,

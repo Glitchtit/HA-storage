@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from availability import EPS, need_status
 from cook_recipe import cook_recipe
 from facts import Catalog
-from recipe_rows import add_recipe_need, recipe_already_listed
+from recipe_rows import add_recipe_need, needs_in_unit, recipe_already_listed
 from models import (
     CookRecipeRequest,
     CookRecipeResponse,
@@ -174,7 +174,9 @@ def recipe_to_shopping(recipe_id: int, body: RecipeToShoppingRequest | None = No
     stock; "missing_and_opened" also adds what only opened packs cover; "all"
     adds every full need. Staples are never added; a to-taste ingredient is
     added as one package when nothing of it is in stock (or in mode "all").
-    Pressing the button again does not double rows that are already listed.
+    A product used twice in the recipe gets both needs, sharing its stock
+    between them. Pressing the button again does not double rows that are
+    already listed. Any unexpected error rolls the whole push back.
     """
     body = body or RecipeToShoppingRequest()
     if body.mode not in ("missing", "missing_and_opened", "all"):
@@ -188,40 +190,59 @@ def recipe_to_shopping(recipe_id: int, body: RecipeToShoppingRequest | None = No
         ratio = float(body.servings) / float(recipe["servings"] or 1)
 
     cat = Catalog(conn)
+    ingredients = conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall()
+    # Decided once, before anything is written: rows this push creates must
+    # not make a second ingredient of the same product look "already listed".
+    listed = {
+        pid for pid in {ing["product_id"] for ing in ingredients}
+        if recipe_already_listed(conn, pid, recipe_id, recipe["name"])
+    }
+    earlier: dict[int, list] = {}
+    taste_added: set[int] = set()
     created = merged = 0
-    for ing in conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall():
-        pid = ing["product_id"]
-        if (cat.product(pid) or {}).get("staple"):
-            continue
-        if recipe_already_listed(conn, pid, recipe_id, recipe["name"]):
-            continue
-        unit = cat.unit(ing["unit_id"])
-        need = float(ing["amount"] or 0) * ratio
-        st = need_status(cat, pid, need, unit)
-        if st["to_taste"]:
-            if body.mode == "all" or st["have"].lots == 0:
-                _, was_merged = add_recipe_need(
-                    conn, cat, product_id=pid, amount=1, unit_id=None,
-                    recipe_id=recipe_id, recipe_name=recipe["name"])
-                merged += was_merged
-                created += not was_merged
-            continue
-        h = st["have"]
-        if body.mode == "all":
-            gap = need
-        elif h.amount <= EPS and h.unknown_lots:
-            gap = 0.0  # something is in stock, amount unknown: do not guess
-        elif body.mode == "missing_and_opened":
-            gap = need - h.unopened
-        else:
-            gap = need - h.amount
-        if gap > EPS:
-            _, was_merged = add_recipe_need(
-                conn, cat, product_id=pid, amount=gap, unit_id=ing["unit_id"],
-                recipe_id=recipe_id, recipe_name=recipe["name"])
-            merged += was_merged
-            created += not was_merged
-    conn.commit()
+
+    def add(pid: int, amount: float, unit_id: int | None) -> None:
+        nonlocal created, merged
+        _, was_merged = add_recipe_need(
+            conn, cat, product_id=pid, amount=amount, unit_id=unit_id,
+            recipe_id=recipe_id, recipe_name=recipe["name"])
+        merged += was_merged
+        created += not was_merged
+
+    try:
+        for ing in ingredients:
+            pid = ing["product_id"]
+            if pid in listed or (cat.product(pid) or {}).get("staple"):
+                continue
+            unit = cat.unit(ing["unit_id"])
+            need = float(ing["amount"] or 0) * ratio
+            st = need_status(cat, pid, need, unit)
+            if st["to_taste"]:
+                if pid not in taste_added and (body.mode == "all" or st["have"].lots == 0):
+                    add(pid, 1, None)
+                    taste_added.add(pid)
+                continue
+            h = st["have"]
+            # Earlier needs of the same product in this recipe use the stock
+            # first: opened packs, then unopened ones.
+            claimed = needs_in_unit(cat, pid, unit, earlier.get(pid, []))
+            earlier.setdefault(pid, []).append((need, unit))
+            have_all = max(0.0, h.amount - claimed)
+            have_unopened = max(0.0, h.unopened - max(0.0, claimed - h.opened))
+            if body.mode == "all":
+                gap = need
+            elif h.amount <= EPS and h.unknown_lots:
+                gap = 0.0  # something is in stock, amount unknown: do not guess
+            elif body.mode == "missing_and_opened":
+                gap = need - have_unopened
+            else:
+                gap = need - have_all
+            if gap > EPS:
+                add(pid, gap, ing["unit_id"])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return {"added": created + merged, "created": created, "merged": merged}
 
 

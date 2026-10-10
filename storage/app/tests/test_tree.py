@@ -129,3 +129,29 @@ class TestParentsAreConcepts:
         r = client.post("/api/products", json={
             "name": "legacy-child-t5", "unit_id": _unit_id(), "parent_id": cat})
         assert r.status_code == 201
+
+    def test_failed_create_keeps_parent_unpromoted(self, monkeypatch):
+        from main import get_connection
+        cat = _mk("rollback-cat-t6")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("insert failed")
+        monkeypatch.setattr("routers.products._manual_facts_meta", boom)
+        with pytest.raises(RuntimeError):
+            client.post("/api/products", json={
+                "name": "child-t6", "unit_id": _unit_id(), "parent_id": cat})
+        get_connection().commit()  # what the next unrelated request would do
+        assert self._kind(cat) == "sku"
+
+    def test_failed_update_keeps_parent_unpromoted(self, monkeypatch):
+        from main import get_connection
+        cat = _mk("rollback-cat-t7")
+        other = _mk("rollback-other-t7")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("update failed")
+        monkeypatch.setattr("routers.products._manual_facts_meta", boom)
+        with pytest.raises(RuntimeError):
+            client.put(f"/api/products/{other}", json={"parent_id": cat, "density_g_ml": 1.0})
+        get_connection().commit()
+        assert self._kind(cat) == "sku"

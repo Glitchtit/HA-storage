@@ -65,10 +65,37 @@ def cook_recipe(conn, recipe_id: int, *, servings: float | None = None) -> dict[
         (recipe_id,),
     ).fetchall()
 
+    # Decided once, before anything is written: a recipe already on the list
+    # (from "add to list") is not added again, while a product used twice in
+    # this recipe still gets both shortfalls.
+    listed = {
+        pid for pid in {int(ing["product_id"]) for ing in ingredients}
+        if recipe_already_listed(conn, pid, recipe_id, recipe["name"])
+    }
+    # Deductions and list rows commit together or not at all: the connection
+    # is shared, so a half-done cook would leak into the next request's commit.
+    try:
+        deducted, shortfall_items, unmatched = _cook(conn, cat, recipe, ratio, ingredients, listed)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {
+        "recipe_id": recipe_id,
+        "recipe_name": recipe["name"],
+        "servings": target_servings,
+        "deducted": deducted,
+        "shortfall_added": shortfall_items,
+        "unmatched": unmatched,
+    }
+
+
+def _cook(conn, cat: Catalog, recipe, ratio: float, ingredients, listed: set[int]):
+    """Deduct and queue shortfall for every ingredient. Does not commit.
+    Returns (deducted, shortfall_added, unmatched)."""
     taken: dict[tuple[int, int], float] = {}
     shortfall_items: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
-
     for ing in ingredients:
         pid = int(ing["product_id"])
         unit = cat.unit(ing["unit_id"])
@@ -109,12 +136,11 @@ def cook_recipe(conn, recipe_id: int, *, servings: float | None = None) -> dict[
             })
             continue
 
-        if remaining > 1e-6:
-            if not recipe_already_listed(conn, pid, recipe_id, recipe["name"]):
-                add_recipe_need(
-                    conn, cat, product_id=pid, amount=remaining, unit_id=ing["unit_id"],
-                    recipe_id=recipe_id, recipe_name=recipe["name"],
-                )
+        if remaining > 1e-6 and pid not in listed:
+            add_recipe_need(
+                conn, cat, product_id=pid, amount=remaining, unit_id=ing["unit_id"],
+                recipe_id=recipe["id"], recipe_name=recipe["name"],
+            )
             shortfall_items.append({
                 "product_id": pid,
                 "product_name": ing["product_name"],
@@ -134,13 +160,4 @@ def cook_recipe(conn, recipe_id: int, *, servings: float | None = None) -> dict[
             "amount": round(amount, 3),
             "unit_id": unit_id,
         })
-
-    conn.commit()
-    return {
-        "recipe_id": recipe_id,
-        "recipe_name": recipe["name"],
-        "servings": target_servings,
-        "deducted": deducted,
-        "shortfall_added": shortfall_items,
-        "unmatched": unmatched,
-    }
+    return deducted, shortfall_items, unmatched

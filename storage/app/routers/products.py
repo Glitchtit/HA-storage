@@ -285,28 +285,34 @@ def create_product(body: ProductCreate):
     _validate_unit(conn, body.unit_id, "Unit")
     _validate_unit(conn, body.content_unit_id, "Content unit")
     kind = _infer_kind(conn, body.kind, body.product_group_id)
+    # The parent promotion and the INSERT commit together or not at all: the
+    # connection is shared, so a half-done write would leak into the next
+    # request's commit.
     try:
         tree.prepare_parent(conn, None, body.parent_id)
+        facts = {f: getattr(body, f) for f in _FACT_FIELDS if getattr(body, f) is not None}
+        cur = conn.execute(
+            """INSERT INTO products (name, description, parent_id, location_id,
+               product_group_id, unit_id, default_best_before_days, min_stock_amount,
+               picture_filename, active, unit_price, unit_price_currency, pack_count, staple,
+               kind, content_amount, content_unit_id, density_g_ml, piece_weight_g, facts_meta)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                body.name, body.description, body.parent_id, body.location_id,
+                body.product_group_id, body.unit_id, body.default_best_before_days,
+                body.min_stock_amount, body.picture_filename, int(body.active),
+                body.unit_price, body.unit_price_currency or "EUR", body.pack_count, int(body.staple),
+                kind, body.content_amount, body.content_unit_id, body.density_g_ml,
+                body.piece_weight_g, _manual_facts_meta(None, facts),
+            ),
+        )
+        conn.commit()
     except ValueError as exc:
         conn.rollback()
         raise HTTPException(400, str(exc))
-    facts = {f: getattr(body, f) for f in _FACT_FIELDS if getattr(body, f) is not None}
-    cur = conn.execute(
-        """INSERT INTO products (name, description, parent_id, location_id,
-           product_group_id, unit_id, default_best_before_days, min_stock_amount,
-           picture_filename, active, unit_price, unit_price_currency, pack_count, staple,
-           kind, content_amount, content_unit_id, density_g_ml, piece_weight_g, facts_meta)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            body.name, body.description, body.parent_id, body.location_id,
-            body.product_group_id, body.unit_id, body.default_best_before_days,
-            body.min_stock_amount, body.picture_filename, int(body.active),
-            body.unit_price, body.unit_price_currency or "EUR", body.pack_count, int(body.staple),
-            kind, body.content_amount, body.content_unit_id, body.density_g_ml,
-            body.piece_weight_g, _manual_facts_meta(None, facts),
-        ),
-    )
-    conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     new = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
     try:
         pack_size.ensure_pack_facts(conn, new["id"])
@@ -357,27 +363,32 @@ def update_product(product_id: int, body: ProductUpdate):
         if updates["kind"] == "sku" and has_children:
             raise HTTPException(400, "A product with sub-products must stay a concept")
 
-    if "parent_id" in updates:
-        try:
+    # The parent promotion and the UPDATE commit together or not at all (the
+    # connection is shared between requests).
+    try:
+        if "parent_id" in updates:
             tree.prepare_parent(conn, product_id, updates["parent_id"])
-        except ValueError as exc:
-            conn.rollback()
-            raise HTTPException(400, str(exc))
 
-    changed_facts = {
-        f: updates[f] for f in _FACT_FIELDS
-        if f in updates and updates[f] != existing[f]
-    }
-    if changed_facts:
-        updates["facts_meta"] = _manual_facts_meta(existing["facts_meta"], changed_facts)
+        changed_facts = {
+            f: updates[f] for f in _FACT_FIELDS
+            if f in updates and updates[f] != existing[f]
+        }
+        if changed_facts:
+            updates["facts_meta"] = _manual_facts_meta(existing["facts_meta"], changed_facts)
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    params = list(updates.values()) + [product_id]
-    conn.execute(
-        f"UPDATE products SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
-        params,
-    )
-    conn.commit()
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        params = list(updates.values()) + [product_id]
+        conn.execute(
+            f"UPDATE products SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(400, str(exc))
+    except Exception:
+        conn.rollback()
+        raise
     if "min_stock_amount" in updates or "active" in updates:
         from routers.shopping import sync_auto_shopping
         sync_auto_shopping(conn)
