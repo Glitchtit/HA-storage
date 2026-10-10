@@ -11,7 +11,9 @@ from fastapi import APIRouter, HTTPException, Query
 from availability import own_unit_have
 from facts import Catalog
 from locks import CATALOG_LOCK
-from models import AliasCreate, Product, ProductCreate, ProductDetail, ProductMerge, ProductUpdate
+from models import (
+    AliasCreate, Product, ProductCreate, ProductDetail, ProductLookup, ProductMerge, ProductUpdate,
+)
 import tree
 import pack_size
 
@@ -214,6 +216,26 @@ def _subtree_fields(cat: Catalog, product_id: int) -> dict:
     }
 
 
+@router.get("/products/lookup", response_model=ProductLookup)
+def lookup_product(name: str = Query(..., min_length=1)):
+    """The product a spoken or typed name means (voice adds, spec §5.1): a
+    concept by alias or exact name first, so "maito" is the concept and the
+    shopping list shows the usual SKU as its buy hint; else the one active
+    product with exactly this name. Names are compared normalized (case,
+    accents, punctuation). No match: product is null."""
+    from concepts import find_concept, norm
+
+    conn = _get_db()
+    pid = find_concept(conn, name)
+    if pid is None:
+        key = norm(name)
+        same = [r["id"] for r in conn.execute("SELECT id, name FROM products WHERE active = 1").fetchall()
+                if norm(r["name"]) == key]
+        pid = same[0] if len(same) == 1 else None
+    product = conn.execute("SELECT * FROM products WHERE id = ?", (pid,)).fetchone() if pid else None
+    return {"product": product}
+
+
 @router.get("/products/{product_id}", response_model=ProductDetail)
 def get_product(product_id: int):
     conn = _get_db()
@@ -376,6 +398,10 @@ def update_product(product_id: int, body: ProductUpdate):
             f"UPDATE products SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
             params,
         )
+        if "name" in updates and updates["name"] != existing["name"]:
+            # Shopping rows keep the name they were added under (HA todo, print).
+            conn.execute("UPDATE shopping_list SET ha_item_name = ? WHERE product_id = ?",
+                         (updates["name"], product_id))
         conn.commit()
     except ValueError as exc:
         conn.rollback()

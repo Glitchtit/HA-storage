@@ -153,6 +153,9 @@ class AliasCreate(BaseModel):
 class ProductMerge(BaseModel):
     target_id: int
 
+class ProductLookup(BaseModel):
+    product: Product | None = None
+
 class ProductDetail(Product):
     """Product with related data included."""
     children: list[Product] = []
