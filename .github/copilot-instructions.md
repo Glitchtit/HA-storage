@@ -85,6 +85,16 @@ Key design decisions:
 - CASCADE deletes throughout
 - Seeded data: 9 Finnish units (g, kg, ml, dl, l, tl, rkl, kpl, rs), 12 conversions, 3 locations (Fridge, Pantry, Freezer)
 
+## Quantity model (0.25.0)
+
+- `quantity.py` — pure engine: unit dimensions (mass, volume, count, package, vague), unit-text normalization (`GET /api/units/resolve?text=`), `convert()`, `format_qty()`.
+- `facts.py` — `Catalog(conn)`: per-request snapshot of units, products, tree and lots; effective facts (content and pack count per SKU; density and piece weight inherited down the tree; legacy product conversion rows folded in).
+- `availability.py` — `have()` / `need_status()` / `own_unit_have()`: the only stock-versus-need computation (recipe detail and availability, to-shopping, cook, min-stock sync, bundles, product subtree totals).
+- `recipe_rows.py` — writes recipe needs onto the shopping list (merges, idempotent per recipe).
+- `migrate_quantity.py` — idempotent startup migration (`_meta` flags `qty_*_v1`; backup table `unit_conversions_backup_qty1`).
+- `merge.py` — `POST /api/products/{id}/merge`; `DELETE /api/products/{id}` answers 409 while recipes or bundles use the product.
+- Products have `kind` (`concept` | `sku`). Parents are concepts. A `kpl` attached to a SKU (its lots, shopping rows, own unit) means retail packages; a recipe need in `kpl` means natural pieces.
+
 ## Web UI
 
 React 18 + Vite + Tailwind. English UI. Dark mode (bg-gray-900, bg-gray-800, emerald accents).
