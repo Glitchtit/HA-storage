@@ -550,6 +550,13 @@ class ShoppingItemUpdate(BaseModel):
     note: str | None = None
     pinned: bool | None = None
 
+class ShoppingDisplay(BaseModel):
+    """Render hints: "3,5 dl" and how the amount reads (mass, volume, count =
+    natural pieces, package = retail items, vague = unknown unit)."""
+    qty_text: str
+    unit_abbr: str | None = None
+    unit_dimension: str
+
 class ShoppingItem(BaseModel):
     id: int
     product_id: int
@@ -563,6 +570,7 @@ class ShoppingItem(BaseModel):
     ha_item_name: str | None = None
     pinned: bool = False
     created_at: str
+    display: ShoppingDisplay | None = None
 
 class ShoppingProposalItem(BaseModel):
     product_id: int

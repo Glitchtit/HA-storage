@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
+from quantity import COUNT, PACKAGE, VAGUE, format_qty
 from pack_size import parse_pack_size
 from models import (
     CadenceSuggestionResponse,
@@ -49,6 +50,47 @@ _SHOPPING_SELECT = """
 def _get_db():
     from main import get_connection
     return get_connection()
+
+
+def _with_display(conn, rows: list[dict]) -> list[dict]:
+    """Attach display.qty_text / display.unit_dimension to shopping rows.
+
+    NULL unit = retail items. A count unit on a SKU row also means retail
+    items (the SKU's own kpl); on a concept row it means natural pieces.
+    A unit id that no longer exists renders as a bare number, dimension vague.
+    """
+    if not rows:
+        return rows
+    units = {
+        r["id"]: r for r in conn.execute("SELECT id, abbreviation, dimension FROM units").fetchall()
+    }
+    pids = sorted({r["product_id"] for r in rows})
+    marks = ",".join("?" * len(pids))
+    kinds = {
+        r["id"]: r["kind"]
+        for r in conn.execute(f"SELECT id, kind FROM products WHERE id IN ({marks})", pids).fetchall()
+    }
+    out = []
+    for row in rows:
+        if row["unit_id"] is None:
+            abbr, dim = None, PACKAGE
+        elif row["unit_id"] not in units:
+            abbr, dim = None, VAGUE
+        else:
+            unit = units[row["unit_id"]]
+            abbr, dim = unit["abbreviation"], unit["dimension"] or VAGUE
+            if dim == COUNT and kinds.get(row["product_id"]) != "concept":
+                dim = PACKAGE
+        out.append({**row, "display": {
+            "qty_text": format_qty(float(row["amount"]), abbr),
+            "unit_abbr": abbr,
+            "unit_dimension": dim,
+        }})
+    return out
+
+
+def _one(conn, row_id: int) -> dict:
+    return _with_display(conn, [conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (row_id,)).fetchone()])[0]
 
 
 def sync_auto_shopping(conn) -> dict:
@@ -226,9 +268,10 @@ def consume_shopping_for_purchase(
 
 @router.get("/shopping-list", response_model=list[ShoppingItem])
 def list_shopping():
-    return _get_db().execute(
+    conn = _get_db()
+    return _with_display(conn, conn.execute(
         _SHOPPING_SELECT + "ORDER BY s.done, s.created_at DESC"
-    ).fetchall()
+    ).fetchall())
 
 
 @router.get("/shopping-list/proposal", response_model=ShoppingProposalResponse)
@@ -557,7 +600,7 @@ def add_shopping_item(body: ShoppingItemCreate, response: Response):
             )
             conn.commit()
             response.status_code = 200
-            return conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (existing["id"],)).fetchone()
+            return _one(conn, existing["id"])
     cur = conn.execute(
         "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added, pinned)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -565,7 +608,7 @@ def add_shopping_item(body: ShoppingItemCreate, response: Response):
          int(body.auto_added), int(body.pinned)),
     )
     conn.commit()
-    return conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (cur.lastrowid,)).fetchone()
+    return _one(conn, cur.lastrowid)
 
 
 @router.put("/shopping-list/{item_id}", response_model=ShoppingItem)
@@ -594,7 +637,7 @@ def update_shopping_item(item_id: int, body: ShoppingItemUpdate):
             list(updates.values()) + [item_id],
         )
     conn.commit()
-    return conn.execute(_SHOPPING_SELECT + "WHERE s.id = ?", (item_id,)).fetchone()
+    return _one(conn, item_id)
 
 
 @router.delete("/shopping-list/{item_id}", status_code=204)
