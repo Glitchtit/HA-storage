@@ -236,6 +236,7 @@ from routers import (
     receipts,
     stores,
     links,
+    ingredients,
 )
 
 app.include_router(products.router, prefix="/api")
@@ -256,6 +257,7 @@ app.include_router(stats.router, prefix="/api")
 app.include_router(receipts.router, prefix="/api")
 app.include_router(stores.router, prefix="/api")
 app.include_router(links.router, prefix="/api")
+app.include_router(ingredients.router, prefix="/api")
 
 
 # ── Error handler ──────────────────────────────────────────────────────────

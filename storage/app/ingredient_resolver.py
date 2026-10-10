@@ -1,0 +1,151 @@
+"""Resolve parsed recipe lines into concepts (spec §4.6).
+
+Used by POST /api/ingredients/resolve. Per line, cheapest step first:
+
+1. Units. The unit text goes through quantity.normalize_unit_text, so a
+   container word ("burk", "paketti") becomes a package unit. A number with no
+   unit text counts natural pieces (kpl). An unknown unit word also becomes
+   kpl, flagged needs_review, so a bad unit is visible instead of silently
+   turning into grams. No amount means "to taste" (amount 0).
+2. Generic name: alias, then exact normalized concept name.
+3. Specific variant, matched the same way. A variant that is the generic
+   concept (or its own name) binds loose on the generic, so no same-name
+   child is ever made.
+4. One AI call matches the names still unknown against every concept. A
+   high-confidence match binds and is remembered as an alias.
+5. Anything left becomes a new concept: a variant under its generic, a
+   generic at top level. The generic, the variant and the source-language
+   word are recorded as aliases.
+
+The resolver never creates SKUs, never changes a unit and never deletes.
+Catalog writes run under CATALOG_LOCK. The AI call runs outside it, and
+every name is looked up again under the lock before a concept is created,
+so two imports at once cannot create the same concept twice.
+"""
+from __future__ import annotations
+
+import logging
+import sqlite3
+from typing import Any, Callable
+
+from concepts import add_alias, concept_index, create_concept, norm
+from locks import CATALOG_LOCK
+from quantity import MASS, UNIT_CATALOG, VOLUME, normalize_unit_text
+
+log = logging.getLogger(__name__)
+
+AiFn = Callable[..., Any]
+
+
+def quantity_of(amount: Any, unit_text: str | None) -> tuple[float, str, bool]:
+    """(amount, catalog unit abbreviation, needs_review) for one line."""
+    try:
+        value = float(amount) if amount is not None else 0.0
+    except (TypeError, ValueError):
+        value = 0.0
+    text = (unit_text or "").strip()
+    found = normalize_unit_text(text) if text else None
+    if value <= 0:
+        return 0.0, (found[0] if found else "rs"), False
+    if not text:
+        return value, "kpl", False
+    if found is None:
+        return value, "kpl", True
+    abbr, multiplier = found
+    return round(value * multiplier, 4), abbr, False
+
+
+def _display_unit(abbr: str) -> str:
+    """Display unit for a concept created from a line in `abbr`."""
+    dimension = UNIT_CATALOG.get(abbr, ("", "", None, None))[2]
+    return {MASS: "g", VOLUME: "dl"}.get(dimension, "kpl")
+
+
+def _names(item: dict) -> tuple[str, str]:
+    """(generic, specific) as given; a line with only a variant uses it as
+    its generic. The specific is '' when absent or the same word."""
+    generic = (item.get("name") or "").strip()
+    specific = (item.get("specific") or "").strip()
+    if not norm(generic):
+        generic, specific = specific, ""
+    if norm(specific) == norm(generic):
+        specific = ""
+    return generic, specific
+
+
+def _unknown_names(items: list[dict], index: dict[str, int]) -> list[str]:
+    seen: dict[str, str] = {}
+    for item in items:
+        for name in _names(item):
+            key = norm(name)
+            if key and key not in index:
+                seen.setdefault(key, name)
+    return list(seen.values())
+
+
+def match_with_ai(conn: sqlite3.Connection, names: list[str], ai: AiFn | None) -> dict[str, int]:
+    """normalized name -> concept id for high-confidence AI matches.
+    Phase-2 Task 5 fills this in; without AI nothing is matched."""
+    return {}
+
+
+def resolve(conn: sqlite3.Connection, items: list[dict], *, ai: AiFn | None = None) -> dict:
+    """Bind every line; returns {"items": [...], "created": [concept ids]}."""
+    # Every read and write of the shared connection happens under the lock;
+    # two resolves must never use it at the same time.
+    with CATALOG_LOCK:
+        units = {r["abbreviation"]: r["id"] for r in conn.execute(
+            "SELECT id, abbreviation FROM units").fetchall()}
+        unknown = _unknown_names(items, concept_index(conn))
+    hits = match_with_ai(conn, unknown, ai) if unknown else {}
+
+    created: list[int] = []
+    out: list[dict] = []
+    with CATALOG_LOCK:
+        try:
+            index = concept_index(conn)  # again: another import may have added some
+            for i, item in enumerate(items):
+                out.append(_bind(conn, i, item, index, hits, created, units))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return {"items": out, "created": created}
+
+
+def _bind(conn, i: int, item: dict, index: dict[str, int], hits: dict[str, int],
+          created: list[int], units: dict[str, int]) -> dict:
+    amount, abbr, review = quantity_of(item.get("amount"), item.get("unit_text"))
+    if abbr not in units:
+        abbr, review = "kpl", True
+    generic, specific = _names(item)
+    result = {"index": i, "product_id": None, "product_name": None, "specificity": "loose",
+              "amount": amount, "unit_id": units.get(abbr), "unit": abbr,
+              "created": False, "needs_review": review}
+    if not norm(generic):
+        result["needs_review"] = True
+        return result
+
+    def concept_for(name: str, parent_id: int | None) -> int:
+        key = norm(name)
+        pid = index.get(key) or hits.get(key)
+        if pid is None:
+            pid = create_concept(conn, name, units[_display_unit(abbr)], parent_id)
+            index[key] = pid
+            created.append(pid)
+            result["created"] = True
+        add_alias(conn, name, pid, "recipe")
+        return pid
+
+    gen_id = concept_for(generic, None)
+    pid, specificity = gen_id, "loose"
+    if specific:
+        spec_id = concept_for(specific, gen_id)
+        gen_name = conn.execute("SELECT name FROM products WHERE id = ?", (gen_id,)).fetchone()["name"]
+        if spec_id != gen_id and norm(specific) != norm(gen_name):
+            pid, specificity = spec_id, "strict"
+    if item.get("source_name"):
+        add_alias(conn, item["source_name"], pid, "recipe")
+    row = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()
+    result.update(product_id=pid, product_name=row["name"], specificity=specificity)
+    return result

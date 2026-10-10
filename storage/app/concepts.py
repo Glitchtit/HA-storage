@@ -80,3 +80,28 @@ def find_concept(conn: sqlite3.Connection, name: str | None) -> int | None:
     SKUs never match."""
     key = norm(name)
     return concept_index(conn).get(key) if key else None
+
+
+def display_name(name: str) -> str:
+    """Catalog spelling for a new concept: trimmed, first letter upper-case
+    ("crème fraîche" -> "Crème fraîche")."""
+    name = " ".join((name or "").split())
+    return name[:1].upper() + name[1:]
+
+
+def create_concept(conn: sqlite3.Connection, name: str, unit_id: int,
+                   parent_id: int | None = None) -> int:
+    """Insert an active concept. A variant takes its parent's aisle group.
+    Does not commit; callers hold CATALOG_LOCK."""
+    group_id = None
+    if parent_id is not None:
+        row = conn.execute(
+            "SELECT product_group_id FROM products WHERE id = ?", (parent_id,)
+        ).fetchone()
+        group_id = row["product_group_id"] if row else None
+    cur = conn.execute(
+        "INSERT INTO products (name, unit_id, kind, active, parent_id, product_group_id) "
+        "VALUES (?, ?, 'concept', 1, ?, ?)",
+        (display_name(name), unit_id, parent_id, group_id),
+    )
+    return int(cur.lastrowid)
