@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from availability import need_status
+from availability import EPS, need_status
 from cook_recipe import cook_recipe
 from facts import Catalog
+from recipe_rows import add_recipe_need, recipe_already_listed
 from models import (
     CookRecipeRequest,
     CookRecipeResponse,
@@ -17,6 +18,7 @@ from models import (
     Recipe,
     RecipeCreate,
     RecipeDetail,
+    RecipeToShoppingRequest,
     RecipeUpdate,
 )
 
@@ -165,41 +167,62 @@ def cook(recipe_id: int, body: CookRecipeRequest | None = None):
 
 
 @router.post("/recipes/{recipe_id}/to-shopping", status_code=201)
-def recipe_to_shopping(recipe_id: int):
-    """Add missing recipe ingredients to shopping list."""
+def recipe_to_shopping(recipe_id: int, body: RecipeToShoppingRequest | None = None):
+    """Put a recipe's needs on the shopping list.
+
+    mode "missing" adds each ingredient's shortfall against whole-subtree
+    stock; "missing_and_opened" also adds what only opened packs cover; "all"
+    adds every full need. Staples are never added; a to-taste ingredient is
+    added as one package when nothing of it is in stock (or in mode "all").
+    Pressing the button again does not double rows that are already listed.
+    """
+    body = body or RecipeToShoppingRequest()
+    if body.mode not in ("missing", "missing_and_opened", "all"):
+        raise HTTPException(400, "mode must be missing, missing_and_opened or all")
     conn = _get_db()
-    recipe = conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+    recipe = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
     if not recipe:
         raise HTTPException(404, f"Recipe {recipe_id} not found")
+    ratio = 1.0
+    if body.servings:
+        ratio = float(body.servings) / float(recipe["servings"] or 1)
 
-    ingredients = conn.execute(
-        """SELECT ri.*, p.name AS product_name
-           FROM recipe_ingredients ri
-           JOIN products p ON p.id = ri.product_id
-           WHERE ri.recipe_id = ?""",
-        (recipe_id,),
-    ).fetchall()
-
-    added = 0
-    for ing in ingredients:
-        stock = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) as total FROM stock WHERE product_id = ?",
-            (ing["product_id"],),
-        ).fetchone()
-
-        needed = ing["amount"] - stock["total"]
-        if needed > 0:
-            conn.execute(
-                # Cache ha_item_name so active-only shopping-list consumers can
-                # render rows bound to inactive stub products (see cook_recipe).
-                """INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (ing["product_id"], needed, ing["unit_id"], ing["note"], recipe_id, ing["product_name"]),
-            )
-            added += 1
-
+    cat = Catalog(conn)
+    created = merged = 0
+    for ing in conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall():
+        pid = ing["product_id"]
+        if (cat.product(pid) or {}).get("staple"):
+            continue
+        if recipe_already_listed(conn, pid, recipe_id, recipe["name"]):
+            continue
+        unit = cat.unit(ing["unit_id"])
+        need = float(ing["amount"] or 0) * ratio
+        st = need_status(cat, pid, need, unit)
+        if st["to_taste"]:
+            if body.mode == "all" or st["have"].lots == 0:
+                _, was_merged = add_recipe_need(
+                    conn, cat, product_id=pid, amount=1, unit_id=None,
+                    recipe_id=recipe_id, recipe_name=recipe["name"])
+                merged += was_merged
+                created += not was_merged
+            continue
+        h = st["have"]
+        if body.mode == "all":
+            gap = need
+        elif h.amount <= EPS and h.unknown_lots:
+            gap = 0.0  # something is in stock, amount unknown: do not guess
+        elif body.mode == "missing_and_opened":
+            gap = need - h.unopened
+        else:
+            gap = need - h.amount
+        if gap > EPS:
+            _, was_merged = add_recipe_need(
+                conn, cat, product_id=pid, amount=gap, unit_id=ing["unit_id"],
+                recipe_id=recipe_id, recipe_name=recipe["name"])
+            merged += was_merged
+            created += not was_merged
     conn.commit()
-    return {"added": added}
+    return {"added": created + merged, "created": created, "merged": merged}
 
 
 # ── Individual ingredient management ───────────────────────────────────────

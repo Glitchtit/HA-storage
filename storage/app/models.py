@@ -496,6 +496,10 @@ class IngredientDetail(Ingredient):
     status: str = "red"
     approx: bool = False
 
+class RecipeToShoppingRequest(BaseModel):
+    mode: str = "missing"  # missing | missing_and_opened | all
+    servings: float | None = None
+
 class CookRecipeRequest(BaseModel):
     servings: float | None = Field(
         None,
