@@ -467,6 +467,14 @@ def add_alias_route(product_id: int, body: AliasCreate):
     key = norm(body.alias)
     if not key:
         raise HTTPException(400, "Alias is empty")
+    other = next((r for r in conn.execute(
+        "SELECT id, name FROM products WHERE kind = 'concept' AND id != ?", (product_id,)
+    ).fetchall() if norm(r["name"]) == key), None)
+    if other is not None:
+        # Such an alias would make the next reconcile merge the two concepts.
+        raise HTTPException(
+            409, f"'{body.alias.strip()}' is the name of the concept '{other['name']}'. "
+                 "Merge the two concepts instead.")
     with CATALOG_LOCK:
         conn.execute(
             "INSERT OR REPLACE INTO product_aliases (alias_norm, product_id, source) "

@@ -81,3 +81,13 @@ class TestAliasApi:
         assert client.post(f"/api/products/{concept}/aliases", json={"alias": " ,. "}).status_code == 400
         assert client.post("/api/products/99999999/aliases", json={"alias": "x a5"}).status_code == 404
         assert client.delete(f"/api/products/{concept}/aliases/nope a5").status_code == 404
+
+
+def test_a_word_that_names_another_concept_is_refused():
+    """Review finding: such an alias would make the next reconcile merge the
+    two concepts. The editor answers 409 and points at merging instead."""
+    kerma = _mk("Kerma a6", unit="dl", kind="concept")
+    kuohu = _mk("Kuohukerma a6", unit="dl", kind="concept")
+    r = client.post(f"/api/products/{kuohu}/aliases", json={"alias": "KERMA a6"})
+    assert r.status_code == 409 and "Kerma a6" in r.json()["detail"]
+    assert concepts.find_concept(get_connection(), "kerma a6") == kerma

@@ -104,6 +104,18 @@ class TestAdopt:
         assert {c["id"] for c in batch["candidates"]} == {sibling, named}
 
 
+    def test_short_names_match_whole_words(self):
+        """Review finding: 'Voi'-like names (3 letters) got no candidates."""
+        tea = _mk("Tee j11", unit="kpl", kind="concept")
+        bags = _mk("Lipton tee j11 20pss")
+        cup = _mk("Teekuppi j11")
+        ai = _Ai(adopt=[])
+        concept_jobs.adopt(get_connection(), [tea], ai)
+        [batch] = _payload(ai.prompts[0])
+        ids = {c["id"] for c in batch["candidates"]}
+        assert bags in ids and cup not in ids
+
+
 class TestPlace:
     def test_same_merges_kind_of_reparents_medium_proposes(self):
         spag = _mk("Spagetti j3", unit="g", kind="concept")
@@ -129,6 +141,27 @@ class TestPlace:
         assert concepts.find_concept(get_connection(), "spaghetti j3") == spag
         assert _get(cherry)["parent_id"] == tomato
         assert _get(lime)["parent_id"] is None
+
+    def test_targets_must_be_existing_concepts_it_offered(self):
+        """Review finding: a target the prompt never listed as an existing
+        concept (here: another concept being placed) is ignored."""
+        juice = _mk("Sitruunamehu j9", unit="dl", kind="concept")
+        lemon = _mk("Sitruuna j9", unit="kpl", kind="concept")
+        ai = _Ai(place=[{"id": juice, "relation": "same", "target_id": lemon, "confidence": "high"}])
+        res = concept_jobs.place(get_connection(), [juice, lemon], ai)
+        assert res["merged"] == 0
+        assert client.get(f"/api/products/{juice}").status_code == 200
+
+    def test_same_needs_similar_names(self):
+        """Review finding: an off-by-one id must not merge unrelated concepts;
+        a 'same' merge needs names that look alike."""
+        cheese = _mk("Juusto j10", unit="g", kind="concept")
+        mince = _mk("Jauheliha j10", unit="g", kind="concept")
+        _mk("Snellman jauheliha j10 400g", parent_id=mince)
+        ai = _Ai(place=[{"id": cheese, "relation": "same", "target_id": mince, "confidence": "high"}])
+        res = concept_jobs.place(get_connection(), [cheese], ai)
+        assert res["merged"] == 0
+        assert client.get(f"/api/products/{cheese}").status_code == 200
 
     def test_only_concepts_without_descendants_are_asked(self):
         busy = _mk("Kahvi j4", unit="g", kind="concept")

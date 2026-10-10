@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 from collections import Counter
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any, Callable
 
 import tree
@@ -90,18 +92,28 @@ Return ONLY a JSON array of matches:
 
 
 def _words(name: str) -> set[str]:
-    return {w for w in norm(name).split() if len(w) >= 4}
+    """The concept's words worth matching: letters only, three or more."""
+    return {w for w in norm(name).split() if len(w) >= 3 and w.isalpha()}
+
+
+def _mentions(sku_name: str, words: set[str]) -> bool:
+    """A word of four or more letters may sit inside a compound ("hillosokeri"
+    in "Dansukker hillosokeri"); a three-letter word must stand alone ("voi"
+    in "Valio voi 500g", not in "Voileipäkeksi")."""
+    name = norm(sku_name)
+    return any(w in name if len(w) >= 4 else re.search(rf"(?<!\w){w}(?!\w)", name)
+               for w in words)
 
 
 def _candidates(concept, skus: list) -> list[dict]:
-    """SKUs whose name contains one of the concept's words, then SKUs that
+    """SKUs whose name mentions one of the concept's words, then SKUs that
     sit under the concept's own parent."""
     words = _words(concept["name"])
     named, siblings = [], []
     for s in skus:
         if s["parent_id"] == concept["id"]:
             continue
-        if words and any(w in norm(s["name"]) for w in words):
+        if words and _mentions(s["name"], words):
             named.append(s)
         elif concept["parent_id"] is not None and s["parent_id"] == concept["parent_id"]:
             siblings.append(s)
@@ -178,8 +190,17 @@ Return ONLY a JSON array:
 """
 
 
+def _alike(a: str, b: str) -> bool:
+    """Names close enough for a 'same' merge: another spelling, not another
+    ingredient. Guards the merge against a slipped or hallucinated id."""
+    na, nb = norm(a), norm(b)
+    return bool(na and nb) and (na in nb or nb in na or SequenceMatcher(None, na, nb).ratio() >= 0.6)
+
+
 def place(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> dict:
-    """Merge or re-parent concepts that have nothing under them."""
+    """Merge or re-parent concepts that have nothing under them. A target
+    must be one of the existing concepts the prompt listed, and a 'same'
+    merge also needs alike names; every merge is logged at WARNING."""
     from linker import apply_link
     from merge import merge_products
 
@@ -205,11 +226,12 @@ def place(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> 
             todo_json=json.dumps(chunk, ensure_ascii=False),
             existing_json=json.dumps(existing, ensure_ascii=False)), conn)
         asked = {t["id"] for t in chunk}
+        offered = {e["id"] for e in existing}
         for row in rows:
             cid, target = _int(row.get("id")), _int(row.get("target_id"))
             relation = str(row.get("relation", "")).lower()
             conf = str(row.get("confidence", "")).lower()
-            if cid not in asked or target is None or target == cid:
+            if cid not in asked or target not in offered or target == cid:
                 continue
             with CATALOG_LOCK:
                 concept, tgt = _concept(conn, cid), _concept(conn, target)
@@ -217,7 +239,13 @@ def place(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> 
                     continue
                 try:
                     if relation == "same" and conf == "high":
+                        if not _alike(concept["name"], tgt["name"]):
+                            log.warning("Concept placement: left %r apart from %r (names differ)",
+                                        concept["name"], tgt["name"])
+                            continue
                         merge_products(conn, cid, target)
+                        log.warning("Concept placement merged %r (#%s) into %r (#%s)",
+                                    concept["name"], cid, tgt["name"], target)
                         stats["merged"] += 1
                     elif relation == "kind_of" and conf == "high":
                         if concept["parent_id"] is None or concept["parent_id"] in tree.ancestor_ids(conn, target):
@@ -456,6 +484,9 @@ def run_sweep(conn: sqlite3.Connection, ai: AiFn | None) -> dict:
 
     out = {"place": place(conn, _isolated(conn), ai)}
     out["adopt"] = adopt(conn, _isolated(conn), ai)
+    # Twins that were both childless could not target each other above; once
+    # one of them has adopted products it is an existing concept to merge into.
+    out["place_again"] = place(conn, _isolated(conn), ai)
     out["grouped"] = assign_groups(conn, [r["id"] for r in conn.execute(
         "SELECT id FROM products WHERE kind = 'concept' ORDER BY id").fetchall()], ai)
     needs = [(r["product_id"], r["dimension"]) for r in conn.execute(

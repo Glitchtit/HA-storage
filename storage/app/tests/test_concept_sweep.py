@@ -124,3 +124,25 @@ def test_repair_units_endpoint_follows_recipe_usage():
     r = client.post("/api/concepts/repair-units")
     assert r.status_code == 200 and r.json()["changed"] >= 1
     assert _get(cream).json()["unit_id"] == _u("dl")
+
+
+def test_isolated_twins_merge_once_one_has_adopted_its_products():
+    """Two childless twins cannot target each other in the first placement
+    pass; the sweep places again after adoption, when one of them has products."""
+    kept = _mk("Spagetti s7", unit="g", kind="concept")
+    twin = _mk("Spaghetti s7", unit="g", kind="concept")
+    sku = _mk("Pirkka spagetti s7 1kg")
+    rid = client.post("/api/recipes", json={"name": "Pasta s7", "ingredients": [
+        {"product_id": twin, "amount": 400, "unit_id": _u("g")}]}).json()["id"]
+
+    def fake(prompt, conn, **kw):
+        if "have no products under them" in prompt:
+            return [{"id": twin, "relation": "same", "target_id": kept, "confidence": "high"}]
+        if "ARE the concept" in prompt:
+            return [{"concept_id": kept, "product_id": sku, "confidence": "high"}]
+        return []
+
+    concept_jobs.run_sweep(get_connection(), fake)
+    assert _get(twin).status_code == 404
+    assert _get(sku).json()["parent_id"] == kept
+    assert client.get(f"/api/recipes/{rid}").json()["ingredients"][0]["product_id"] == kept

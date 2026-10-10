@@ -73,10 +73,12 @@ def test_survivor_inherits_the_parent_of_its_twin():
 
 
 def test_alias_collision_merges():
+    """A former concept's name (a 'merge' alias) that reappears as a new
+    concept is the same twin again."""
     cream = _mk("Kerma d4", unit="dl", kind="concept")
     _recipe_using(cream)
     conn = get_connection()
-    concepts.add_alias(conn, "grädde d4", cream, "recipe")
+    concepts.add_alias(conn, "grädde d4", cream, "merge")
     conn.commit()
     swedish = _mk("Grädde d4", unit="dl", kind="concept")
     concepts.dedup_concepts(conn)
@@ -116,3 +118,19 @@ def test_reconcile_runs_the_dedup(monkeypatch):
     r = client.post("/api/products/reconcile")
     assert r.status_code == 200 and r.json()["merged"] >= 1
     assert _exists(a) and not _exists(b)
+
+
+def test_recipe_ai_and_manual_aliases_never_merge_concepts():
+    """Review finding: an alias learned from a recipe line, the AI or a manual
+    edit binds a word; it is no proof that two concepts are the same."""
+    kerma = _mk("Kerma d9", unit="dl", kind="concept")
+    kuohu = _mk("Kuohukerma d9", unit="dl", kind="concept")
+    _recipe_using(kerma)
+    conn = get_connection()
+    for source in ("manual", "recipe", "ai"):
+        conn.execute(
+            "INSERT OR REPLACE INTO product_aliases (alias_norm, product_id, source) VALUES (?, ?, ?)",
+            ("kerma d9", kuohu, source))
+        conn.commit()
+        concepts.dedup_concepts(conn)
+        assert _exists(kerma) and _exists(kuohu), source

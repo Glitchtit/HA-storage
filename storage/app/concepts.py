@@ -128,7 +128,9 @@ def _references(conn: sqlite3.Connection, pid: int) -> int:
 
 def _twin_groups(conn: sqlite3.Connection) -> list[list[int]]:
     """Concepts whose normalized names collide, or whose name is another
-    concept's alias. Each group is sorted by id."""
+    concept's name or former name (aliases from 'name' or 'merge'). Aliases
+    learned from recipes, the AI or a manual edit only bind words; they never
+    make two concepts twins. Each group is sorted by id."""
     names = {r["id"]: norm(r["name"]) for r in conn.execute(
         "SELECT id, name FROM products WHERE kind = 'concept'").fetchall()}
     parent = {pid: pid for pid in names}
@@ -148,7 +150,9 @@ def _twin_groups(conn: sqlite3.Connection) -> list[list[int]]:
             union(pid, by_name[key])
         elif key:
             by_name[key] = pid
-    for r in conn.execute("SELECT alias_norm, product_id FROM product_aliases").fetchall():
+    for r in conn.execute(
+        "SELECT alias_norm, product_id FROM product_aliases WHERE source IN ('name', 'merge')"
+    ).fetchall():
         other = by_name.get(r["alias_norm"])
         if other is not None and r["product_id"] in names and r["product_id"] != other:
             union(r["product_id"], other)
