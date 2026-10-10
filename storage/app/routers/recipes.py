@@ -14,6 +14,7 @@ from models import (
     Ingredient,
     IngredientCreate,
     IngredientDetail,
+    IngredientsReplace,
     IngredientUpdate,
     Recipe,
     RecipeCreate,
@@ -91,6 +92,9 @@ def recipe_availability(recipe_id: int):
             "unit_id": ri["unit_id"],
             "unit_abbrev": ri["unit_abbreviation"],
             "specificity": ri["specificity"] or "loose",
+            "note": ri["note"] or "",
+            "raw_text": ri["raw_text"],
+            "needs_review": bool(ri["needs_review"]),
             "status": st["status"],
             "available": st["available"],
             "available_unopened": st["available_unopened"],
@@ -111,15 +115,57 @@ def create_recipe(body: RecipeCreate):
     recipe_id = cur.lastrowid
 
     for idx, ing in enumerate(body.ingredients):
-        conn.execute(
-            """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note, sort_order, specificity)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (recipe_id, ing.product_id, ing.amount, ing.unit_id, ing.note,
-             ing.sort_order if ing.sort_order else idx,
-             ing.specificity if ing.specificity in ("strict", "loose") else "loose"),
-        )
+        _insert_ingredient(conn, recipe_id, ing, idx)
 
     conn.commit()
+    return get_recipe(recipe_id)
+
+
+def _insert_ingredient(conn, recipe_id: int, ing: IngredientCreate, idx: int) -> int:
+    cur = conn.execute(
+        """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note,
+           sort_order, specificity, raw_text, needs_review)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (recipe_id, ing.product_id, ing.amount, ing.unit_id, ing.note,
+         ing.sort_order if ing.sort_order else idx,
+         ing.specificity if ing.specificity in ("strict", "loose") else "loose",
+         ing.raw_text, int(ing.needs_review)),
+    )
+    return cur.lastrowid
+
+
+@router.put("/recipes/{recipe_id}/ingredients", response_model=RecipeDetail)
+def replace_ingredients(recipe_id: int, body: IngredientsReplace):
+    """Replace every ingredient of a recipe in one transaction (re-import).
+    The recipe row, its picture and shopping rows that point at it are kept.
+    The old rows are copied to recipe_ingredients_backup first."""
+    conn = _get_db()
+    if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
+        raise HTTPException(404, f"Recipe {recipe_id} not found")
+    for ing in body.ingredients:
+        if not conn.execute("SELECT 1 FROM products WHERE id = ?", (ing.product_id,)).fetchone():
+            raise HTTPException(400, f"Product {ing.product_id} not found")
+        if not conn.execute("SELECT 1 FROM units WHERE id = ?", (ing.unit_id,)).fetchone():
+            raise HTTPException(400, f"Unit {ing.unit_id} not found")
+    batch = conn.execute("SELECT 'recipe-' || ? || '-' || strftime('%Y%m%dT%H%M%f', 'now') AS b",
+                         (recipe_id,)).fetchone()["b"]
+    try:
+        conn.execute(
+            """INSERT INTO recipe_ingredients_backup (batch, id, recipe_id, product_id, product_name,
+               amount, unit_id, note, sort_order, specificity, raw_text, needs_review)
+               SELECT ?, ri.id, ri.recipe_id, ri.product_id, p.name, ri.amount, ri.unit_id, ri.note,
+                      ri.sort_order, ri.specificity, ri.raw_text, ri.needs_review
+               FROM recipe_ingredients ri LEFT JOIN products p ON p.id = ri.product_id
+               WHERE ri.recipe_id = ?""",
+            (batch, recipe_id),
+        )
+        conn.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))
+        for idx, ing in enumerate(body.ingredients):
+            _insert_ingredient(conn, recipe_id, ing, idx)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return get_recipe(recipe_id)
 
 
@@ -253,14 +299,9 @@ def add_ingredient(recipe_id: int, body: IngredientCreate):
     conn = _get_db()
     if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
         raise HTTPException(404, f"Recipe {recipe_id} not found")
-    cur = conn.execute(
-        """INSERT INTO recipe_ingredients (recipe_id, product_id, amount, unit_id, note, sort_order, specificity)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (recipe_id, body.product_id, body.amount, body.unit_id, body.note, body.sort_order,
-         body.specificity if body.specificity in ("strict", "loose") else "loose"),
-    )
+    new_id = _insert_ingredient(conn, recipe_id, body, body.sort_order)
     conn.commit()
-    return conn.execute("SELECT * FROM recipe_ingredients WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return conn.execute("SELECT * FROM recipe_ingredients WHERE id = ?", (new_id,)).fetchone()
 
 
 @router.put("/recipes/{recipe_id}/ingredients/{ingredient_id}", response_model=Ingredient)

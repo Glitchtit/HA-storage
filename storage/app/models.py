@@ -449,6 +449,8 @@ class IngredientCreate(BaseModel):
     note: str = ""
     sort_order: int = 0
     specificity: str = "loose"
+    raw_text: str | None = None      # the source line, e.g. "2 dl vispgrädde"
+    needs_review: bool = False       # the importer could not read the unit
 
 class IngredientUpdate(BaseModel):
     product_id: int | None = None
@@ -457,6 +459,11 @@ class IngredientUpdate(BaseModel):
     note: str | None = None
     sort_order: int | None = None
     specificity: str | None = None
+    raw_text: str | None = None
+    needs_review: bool | None = None
+
+class IngredientsReplace(BaseModel):
+    ingredients: list[IngredientCreate]
 
 class Ingredient(BaseModel):
     id: int
@@ -467,6 +474,8 @@ class Ingredient(BaseModel):
     note: str | None = None
     sort_order: int
     specificity: str = "loose"
+    raw_text: str | None = None
+    needs_review: bool = False
 
 class RecipeCreate(BaseModel):
     name: str
