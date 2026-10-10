@@ -262,7 +262,7 @@ def create_product(body: ProductCreate):
     _validate_unit(conn, body.content_unit_id, "Content unit")
     kind = _infer_kind(conn, body.kind, body.product_group_id)
     try:
-        tree.assert_valid_parent(conn, None, body.parent_id)
+        tree.prepare_parent(conn, None, body.parent_id)
     except ValueError as exc:
         conn.rollback()
         raise HTTPException(400, str(exc))
@@ -335,7 +335,7 @@ def update_product(product_id: int, body: ProductUpdate):
 
     if "parent_id" in updates:
         try:
-            tree.assert_valid_parent(conn, product_id, updates["parent_id"])
+            tree.prepare_parent(conn, product_id, updates["parent_id"])
         except ValueError as exc:
             conn.rollback()
             raise HTTPException(400, str(exc))

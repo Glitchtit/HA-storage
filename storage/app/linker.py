@@ -56,7 +56,7 @@ def _norm(name: str) -> str:
 
 def apply_link(conn: sqlite3.Connection, product_id: int, parent_id: int, *, note: str = "") -> None:
     """Set parent_id after cycle validation and record a 'link' history event."""
-    tree.assert_valid_parent(conn, product_id, parent_id)
+    tree.prepare_parent(conn, product_id, parent_id)
     conn.execute(
         "UPDATE products SET parent_id = ?, updated_at = datetime('now') WHERE id = ?",
         (parent_id, product_id),

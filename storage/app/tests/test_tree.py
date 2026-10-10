@@ -89,3 +89,43 @@ class TestRecursiveAggregation:
         self._stock_add(sku, 2)
         detail = client.get(f"/api/products/{cat}").json()
         assert detail["children_stock_amount"] == 2
+
+
+class TestParentsAreConcepts:
+    """Parents are concepts: a plain product becomes one when it gets its
+    first child; a product holding stock or barcodes is a real SKU and can
+    never become a parent."""
+
+    def _kind(self, pid):
+        return client.get(f"/api/products/{pid}").json()["kind"]
+
+    def test_plain_product_promoted_on_first_child(self):
+        cat = _mk("promote-cat-t2")
+        assert self._kind(cat) == "sku"
+        _mk("promote-sku-t2", parent_id=cat)
+        assert self._kind(cat) == "concept"
+
+    def test_stocked_product_rejected_as_parent(self):
+        sku = _mk("stocked-sku-t3")
+        client.post("/api/stock/add", json={"product_id": sku, "amount": 1})
+        r = client.post("/api/products", json={
+            "name": "child-t3", "unit_id": _unit_id(), "parent_id": sku})
+        assert r.status_code == 400
+        assert self._kind(sku) == "sku"
+
+    def test_barcoded_product_rejected_as_parent_on_update(self):
+        sku = _mk("barcoded-sku-t4")
+        client.post("/api/barcodes", json={"product_id": sku, "barcode": f"64{sku:011d}"})
+        other = _mk("other-t4")
+        r = client.put(f"/api/products/{other}", json={"parent_id": sku})
+        assert r.status_code == 400
+        assert self._kind(sku) == "sku"
+
+    def test_concept_parent_with_stock_still_allowed(self):
+        # Legacy concepts that hold old lots keep accepting children.
+        cat = client.post("/api/products", json={
+            "name": "legacy-cat-t5", "unit_id": _unit_id(), "kind": "concept"}).json()["id"]
+        client.post("/api/stock/add", json={"product_id": cat, "amount": 2})
+        r = client.post("/api/products", json={
+            "name": "legacy-child-t5", "unit_id": _unit_id(), "parent_id": cat})
+        assert r.status_code == 201
