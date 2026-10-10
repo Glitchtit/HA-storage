@@ -6,7 +6,9 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 import uvicorn
@@ -48,19 +50,73 @@ DB_PATH = DATA_DIR / "storage.db"
 
 # ── Database lifecycle ─────────────────────────────────────────────────────
 
-_db = None
+_init_lock = threading.Lock()
+_initialized = False
+_thread_local = threading.local()
+# The open connection of the HTTP request being served (a one-item list),
+# set by RequestConnectionMiddleware; None outside requests.
+_request_conn: ContextVar[list | None] = ContextVar("_request_conn", default=None)
+
+
+def _ensure_initialized() -> None:
+    """Run the schema migrations and config seeding once per process."""
+    global _initialized
+    if _initialized:
+        return
+    with _init_lock:
+        if not _initialized:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            conn = get_db(DB_PATH)
+            try:
+                init_db(conn)
+                sync_from_options(conn)
+                _seed_config(conn)
+            finally:
+                conn.close()
+            _initialized = True
 
 
 def get_connection():
-    """Return the shared database connection."""
-    global _db
-    if _db is None:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        _db = get_db(DB_PATH)
-        init_db(_db)
-        sync_from_options(_db)
-        _seed_config(_db)
-    return _db
+    """Return the database connection for the current request.
+
+    Every HTTP request gets its own connection, opened on first use and
+    closed when the response is done, so uncommitted writes of a failed
+    request are rolled back instead of being committed by (or blocking) the
+    next one. One connection shared by FastAPI's worker threads raised
+    "bad parameter or other API misuse" under concurrent requests. Outside a
+    request (startup, the periodic sync, background threads, tests) each
+    thread keeps one connection of its own.
+    """
+    _ensure_initialized()
+    slot = _request_conn.get()
+    if slot is None:
+        conn = getattr(_thread_local, "conn", None)
+        if conn is None:
+            conn = _thread_local.conn = get_db(DB_PATH)
+        return conn
+    if not slot:
+        slot.append(get_db(DB_PATH))
+    return slot[0]
+
+
+class RequestConnectionMiddleware:
+    """Give each HTTP request its own database connection (see get_connection)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        slot: list = []
+        token = _request_conn.set(slot)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _request_conn.reset(token)
+            for conn in slot:
+                conn.close()  # discards anything the request did not commit
 
 
 def _seed_config(conn):
@@ -166,10 +222,6 @@ async def lifespan(app: FastAPI):
         await sync_task
     except asyncio.CancelledError:
         pass
-    global _db
-    if _db:
-        _db.close()
-        _db = None
 
 
 async def _periodic_shopping_sync() -> None:
@@ -180,7 +232,7 @@ async def _periodic_shopping_sync() -> None:
     await asyncio.sleep(15)
     while True:
         try:
-            await asyncio.to_thread(sync_auto_shopping, get_connection())
+            await asyncio.to_thread(lambda: sync_auto_shopping(get_connection()))
         except Exception as exc:  # noqa: BLE001 — never let the loop die
             log.warning("Periodic shopping sync failed: %s", exc)
         await asyncio.sleep(300)
@@ -200,6 +252,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestConnectionMiddleware)
 
 # ── Ingress path rewrite middleware ────────────────────────────────────────
 
