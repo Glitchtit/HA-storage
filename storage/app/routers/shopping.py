@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
-from quantity import COUNT, PACKAGE, VAGUE, format_qty
+from buy_hints import buy_hint, purchase_stats
+from quantity import PACKAGE, VAGUE, format_qty
 from models import (
     CadenceSuggestionResponse,
     ReconcileApplyRequest,
@@ -40,7 +41,7 @@ _AMOUNT_EPSILON = 1e-9
 _SHOPPING_SELECT = """
     SELECT s.id, s.product_id, s.amount, s.unit_id, s.note, s.done,
            s.recipe_id, s.bundle_id, s.auto_added, s.ha_item_name, s.created_at,
-           COALESCE(p.pin_brand, 0) AS pinned
+           s.preferred_product_id, COALESCE(p.pin_brand, 0) AS pinned
       FROM shopping_list s
       LEFT JOIN products p ON p.id = s.product_id
 """
@@ -52,7 +53,8 @@ def _get_db():
 
 
 def _with_display(conn, rows: list[dict]) -> list[dict]:
-    """Attach display.qty_text / display.unit_dimension to shopping rows.
+    """Attach the display block to shopping rows: qty_text / unit_dimension
+    and the buy hint (see buy_hints.py).
 
     NULL unit = retail items. A count unit on a SKU row also means retail
     items (the SKU's own kpl); on a concept row it means natural pieces.
@@ -60,30 +62,22 @@ def _with_display(conn, rows: list[dict]) -> list[dict]:
     """
     if not rows:
         return rows
-    units = {
-        r["id"]: r for r in conn.execute("SELECT id, abbreviation, dimension FROM units").fetchall()
-    }
-    pids = sorted({r["product_id"] for r in rows})
-    marks = ",".join("?" * len(pids))
-    kinds = {
-        r["id"]: r["kind"]
-        for r in conn.execute(f"SELECT id, kind FROM products WHERE id IN ({marks})", pids).fetchall()
-    }
+    cat = Catalog(conn)
+    stats = purchase_stats(conn) if any(not cat.is_sku(r["product_id"]) for r in rows) else {}
     out = []
     for row in rows:
+        unit = cat.unit(row["unit_id"])
         if row["unit_id"] is None:
             abbr, dim = None, PACKAGE
-        elif row["unit_id"] not in units:
+        elif unit is None:
             abbr, dim = None, VAGUE
         else:
-            unit = units[row["unit_id"]]
-            abbr, dim = unit["abbreviation"], unit["dimension"] or VAGUE
-            if dim == COUNT and kinds.get(row["product_id"]) != "concept":
-                dim = PACKAGE
+            abbr, dim = unit.abbreviation, cat.stock_dim(row["product_id"], unit)
         out.append({**row, "display": {
             "qty_text": format_qty(float(row["amount"]), abbr),
             "unit_abbr": abbr,
             "unit_dimension": dim,
+            **buy_hint(cat, row, stats),
         }})
     return out
 

@@ -91,6 +91,7 @@ def _merge(conn: sqlite3.Connection, source_id: int, target_id: int) -> dict:
             (target_id, tgt["name"], source_id),
         )
         moved["shopping_list"] = cur.rowcount
+        repoint("shopping_list", "preferred_product_id")
         repoint("stock")
         repoint("barcodes")
         repoint("stock_history")

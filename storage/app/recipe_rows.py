@@ -20,7 +20,7 @@ from quantity import COUNT, PACKAGE, Unit, convert
 NOTE_PREFIX = "Reseptistä: "
 
 
-def _row_unit(cat: Catalog, product_id: int, unit_id: int | None) -> tuple[Unit, str] | None:
+def row_unit(cat: Catalog, product_id: int, unit_id: int | None) -> tuple[Unit, str] | None:
     """(unit, dimension) of a shopping quantity; NULL means retail packages."""
     if unit_id is None:
         kpl = cat.unit_by_abbr("kpl")
@@ -89,14 +89,14 @@ def add_recipe_need(
         amount = float(math.ceil((conv.amount if conv else amount) - 1e-9))
         unit_id = None
 
-    new_side = _row_unit(cat, product_id, unit_id)
+    new_side = row_unit(cat, product_id, unit_id)
     for row in conn.execute(
         "SELECT id, amount, unit_id, note FROM shopping_list "
         "WHERE product_id = ? AND done = 0 AND recipe_id IS NOT NULL AND auto_added = 0 "
         "ORDER BY created_at, id",
         (product_id,),
     ).fetchall():
-        row_side = _row_unit(cat, product_id, row["unit_id"])
+        row_side = row_unit(cat, product_id, row["unit_id"])
         if new_side is None or row_side is None:
             continue
         conv = convert(

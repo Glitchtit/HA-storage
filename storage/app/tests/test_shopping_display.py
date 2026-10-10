@@ -29,17 +29,22 @@ def _row(row_id):
     return next(i for i in client.get("/api/shopping-list").json() if i["id"] == row_id)
 
 
+def _qty(display):
+    """The quantity part of a display block (buy hints are tested elsewhere)."""
+    return {k: display[k] for k in ("qty_text", "unit_abbr", "unit_dimension")}
+
+
 class TestDisplay:
     def test_plain_row_is_package_count(self):
         sku = _mk("Sprite zero 330ml d1")
         r = client.post("/api/shopping-list", json={"product_id": sku, "amount": 2})
-        assert r.json()["display"] == {"qty_text": "2", "unit_abbr": None, "unit_dimension": "package"}
+        assert _qty(r.json()["display"]) == {"qty_text": "2", "unit_abbr": None, "unit_dimension": "package"}
 
     def test_recipe_volume_row(self):
         cat = _mk("vehnäjauho-d2", unit="dl", kind="concept")
         r = client.post("/api/shopping-list", json={
             "product_id": cat, "amount": 3.5, "unit_id": _u("dl"), "note": "Reseptistä: X"})
-        assert _row(r.json()["id"])["display"] == {
+        assert _qty(_row(r.json()["id"])["display"]) == {
             "qty_text": "3,5 dl", "unit_abbr": "dl", "unit_dimension": "volume"}
 
     def test_kpl_on_sku_reads_as_packages_on_concept_as_pieces(self):
@@ -48,7 +53,7 @@ class TestDisplay:
         a = client.post("/api/shopping-list", json={"product_id": sku, "amount": 1, "unit_id": _u("kpl")}).json()
         b = client.post("/api/shopping-list", json={"product_id": cat, "amount": 2, "unit_id": _u("kpl")}).json()
         assert a["display"]["unit_dimension"] == "package"
-        assert b["display"] == {"qty_text": "2 kpl", "unit_abbr": "kpl", "unit_dimension": "count"}
+        assert _qty(b["display"]) == {"qty_text": "2 kpl", "unit_abbr": "kpl", "unit_dimension": "count"}
 
     def test_missing_unit_renders_bare_number(self):
         sku = _mk("Orpo yksikkö d4")
@@ -59,7 +64,7 @@ class TestDisplay:
         conn.execute("UPDATE shopping_list SET unit_id = 999999 WHERE id = ?", (row["id"],))
         conn.commit()
         conn.execute("PRAGMA foreign_keys = ON")
-        assert _row(row["id"])["display"] == {"qty_text": "2", "unit_abbr": None, "unit_dimension": "vague"}
+        assert _qty(_row(row["id"])["display"]) == {"qty_text": "2", "unit_abbr": None, "unit_dimension": "vague"}
 
     def test_update_returns_display(self):
         sku = _mk("Päivitettävä d5")

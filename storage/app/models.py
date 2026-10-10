@@ -568,10 +568,15 @@ class ShoppingItemUpdate(BaseModel):
 
 class ShoppingDisplay(BaseModel):
     """Render hints: "3,5 dl" and how the amount reads (mass, volume, count =
-    natural pieces, package = retail items, vague = unknown unit)."""
+    natural pieces, package = retail items, vague = unknown unit), plus the
+    buy hint: the SKU to pick up and how many packages (approx = estimated)."""
     qty_text: str
     unit_abbr: str | None = None
     unit_dimension: str
+    buy_product_id: int | None = None
+    buy_product_name: str | None = None
+    buy_count: int | None = None
+    approx: bool = False
 
 class ShoppingItem(BaseModel):
     id: int
@@ -585,6 +590,7 @@ class ShoppingItem(BaseModel):
     auto_added: bool = False
     ha_item_name: str | None = None
     pinned: bool = False
+    preferred_product_id: int | None = None
     created_at: str
     display: ShoppingDisplay | None = None
 

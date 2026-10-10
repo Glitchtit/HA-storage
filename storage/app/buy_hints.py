@@ -1,0 +1,82 @@
+"""Buy hints: which retail product to pick up for a shopping row, and how
+many packages of it (spec §4.8).
+
+A concept row ("3 dl kerma") says what is needed; the hint names the SKU the
+household actually buys. That is the row's preferred product (set by a swap)
+while it is still a SKU under the row's product, else the row's own product
+when it is a SKU, else the active descendant SKU bought most often in the
+last 180 days, then the one bought most recently. The count converts the
+row's quantity into whole packages of that SKU; when the facts for that are
+missing it is 1, marked approximate.
+"""
+from __future__ import annotations
+
+import math
+import sqlite3
+
+from facts import Catalog
+from quantity import PACKAGE, convert
+from recipe_rows import row_unit
+
+LOOKBACK_DAYS = 180
+
+
+def purchase_stats(conn: sqlite3.Connection) -> dict[int, tuple[int, str]]:
+    """product id -> (purchases in the last 180 days, time of the last one).
+    Counts purchase events, not amounts: a scan logs a pack size, a recount a
+    difference, so summed amounts mix units."""
+    rows = conn.execute(
+        "SELECT product_id, SUM(created_at >= datetime('now', ?)) AS recent, "
+        "       MAX(created_at) AS last "
+        "  FROM stock_history WHERE event_type = 'purchase' GROUP BY product_id",
+        (f"-{LOOKBACK_DAYS} days",),
+    ).fetchall()
+    return {r["product_id"]: (int(r["recent"] or 0), r["last"] or "") for r in rows}
+
+
+def usual_sku(cat: Catalog, product_id: int, stats: dict[int, tuple[int, str]]) -> int | None:
+    """The active descendant SKU bought most often lately, then most recently."""
+    best, best_key = None, None
+    for pid in cat.descendants(product_id):
+        if pid not in stats or not cat.is_sku(pid) or not (cat.product(pid) or {}).get("active"):
+            continue
+        recent, last = stats[pid]
+        key = (recent, last, -pid)
+        if best_key is None or key > best_key:
+            best, best_key = pid, key
+    return best
+
+
+def buy_product(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]]) -> int | None:
+    pid = row["product_id"]
+    preferred = row.get("preferred_product_id")
+    if preferred is not None and cat.is_sku(preferred) and preferred in cat.descendants(pid):
+        return preferred
+    if cat.is_sku(pid):
+        return pid
+    return usual_sku(cat, pid, stats)
+
+
+def buy_count(cat: Catalog, row: dict, sku: int) -> tuple[int, bool]:
+    """Whole packages of `sku` that cover the row, and whether that is an estimate."""
+    amount = float(row["amount"])
+    side = row_unit(cat, row["product_id"], row["unit_id"])
+    if side is not None and side[1] == PACKAGE:
+        return max(1, math.ceil(amount - 1e-9)), False
+    kpl = cat.unit_by_abbr("kpl")
+    conv = None
+    if side is not None and kpl is not None:
+        conv = convert(amount, side[0], kpl, cat.facts(sku), from_dim=side[1], to_dim=PACKAGE)
+    if conv is None:
+        return 1, True
+    return max(1, math.ceil(conv.amount - 1e-9)), conv.approx
+
+
+def buy_hint(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]]) -> dict:
+    """The buy-hint fields of a row's display block."""
+    sku = buy_product(cat, row, stats)
+    if sku is None:
+        return {"buy_product_id": None, "buy_product_name": None, "buy_count": None, "approx": False}
+    count, approx = buy_count(cat, row, sku)
+    return {"buy_product_id": sku, "buy_product_name": cat.product(sku)["name"],
+            "buy_count": count, "approx": approx}

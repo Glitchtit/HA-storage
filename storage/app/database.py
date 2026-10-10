@@ -622,6 +622,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         if col not in ri_cols:
             conn.execute(f"ALTER TABLE recipe_ingredients ADD COLUMN {col} {ddl}")
             log.info("Added %s column to recipe_ingredients.", col)
+
+    # ── Shopping and UX (2026-10, phase 3): the SKU a concept row is bought as
+    sl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(shopping_list)").fetchall()}
+    if "preferred_product_id" not in sl_cols:
+        conn.execute(
+            "ALTER TABLE shopping_list ADD COLUMN preferred_product_id "
+            "INTEGER REFERENCES products(id) ON DELETE SET NULL"
+        )
+        log.info("Added preferred_product_id column to shopping_list.")
     conn.commit()
 
 
