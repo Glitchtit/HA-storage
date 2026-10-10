@@ -117,7 +117,35 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
     unit_id     INTEGER NOT NULL REFERENCES units(id),
     note        TEXT DEFAULT '',
     sort_order  INTEGER DEFAULT 0,
-    specificity TEXT NOT NULL DEFAULT 'loose'
+    specificity TEXT NOT NULL DEFAULT 'loose',
+    raw_text    TEXT,
+    needs_review INTEGER NOT NULL DEFAULT 0
+);
+
+-- Every spelling that binds to a concept (spec §4.6). The first mapping wins.
+CREATE TABLE IF NOT EXISTS product_aliases (
+    alias_norm TEXT PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    source     TEXT NOT NULL DEFAULT 'name',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Ingredient rows replaced by a recipe re-import, kept for rollback.
+CREATE TABLE IF NOT EXISTS recipe_ingredients_backup (
+    backup_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch        TEXT NOT NULL,
+    id           INTEGER,
+    recipe_id    INTEGER,
+    product_id   INTEGER,
+    product_name TEXT,
+    amount       REAL,
+    unit_id      INTEGER,
+    note         TEXT,
+    sort_order   INTEGER,
+    specificity  TEXT,
+    raw_text     TEXT,
+    needs_review INTEGER,
+    backed_up_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS shopping_list (
@@ -207,6 +235,7 @@ CREATE TABLE IF NOT EXISTS bundle_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_id);
+CREATE INDEX IF NOT EXISTS idx_aliases_product ON product_aliases(product_id);
 CREATE INDEX IF NOT EXISTS idx_products_group ON products(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_products_location ON products(location_id);
 CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(product_id);
@@ -586,6 +615,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         if col not in product_cols:
             conn.execute(f"ALTER TABLE products ADD COLUMN {col} {ddl}")
             log.info("Added %s column to products.", col)
+
+    # ── Concept identity (2026-10, phase 2): ingredient raw text + review ─
+    ri_cols = {r["name"] for r in conn.execute("PRAGMA table_info(recipe_ingredients)").fetchall()}
+    for col, ddl in (("raw_text", "TEXT"), ("needs_review", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in ri_cols:
+            conn.execute(f"ALTER TABLE recipe_ingredients ADD COLUMN {col} {ddl}")
+            log.info("Added %s column to recipe_ingredients.", col)
     conn.commit()
 
 
