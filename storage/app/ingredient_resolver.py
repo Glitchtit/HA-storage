@@ -6,11 +6,13 @@ Used by POST /api/ingredients/resolve. Per line, cheapest step first:
    container word ("burk", "paketti") becomes a package unit. A number with no
    unit text counts natural pieces (kpl). An unknown unit word also becomes
    kpl, flagged needs_review, so a bad unit is visible instead of silently
-   turning into grams. No amount means "to taste" (amount 0).
+   turning into grams. No amount means "to taste" (amount 0); an unknown
+   unit word there is flagged too.
 2. Generic name: alias, then exact normalized concept name.
 3. Specific variant, matched the same way. A variant that is the generic
    concept (or its own name) binds loose on the generic, so no same-name
-   child is ever made.
+   child is ever made. A known variant whose generic is unknown binds
+   strict on the variant without creating the generic.
 4. One AI call matches the names still unknown against every concept. A
    high-confidence match binds and is remembered as an alias.
 5. Anything left becomes a new concept: a variant under its generic, a
@@ -47,7 +49,7 @@ def quantity_of(amount: Any, unit_text: str | None) -> tuple[float, str, bool]:
     text = (unit_text or "").strip()
     found = normalize_unit_text(text) if text else None
     if value <= 0:
-        return 0.0, (found[0] if found else "rs"), False
+        return 0.0, (found[0] if found else "rs"), bool(text) and found is None
     if not text:
         return value, "kpl", False
     if found is None:
@@ -213,13 +215,21 @@ def _bind(conn, i: int, item: dict, index: dict[str, int], hits: dict[str, int],
         add_alias(conn, name, pid, source)
         return pid
 
-    gen_id = concept_for(generic, None)
-    pid, specificity = gen_id, "loose"
-    if specific:
-        spec_id = concept_for(specific, gen_id)
-        gen_name = conn.execute("SELECT name FROM products WHERE id = ?", (gen_id,)).fetchone()["name"]
-        if spec_id != gen_id and norm(specific) != norm(gen_name):
-            pid, specificity = spec_id, "strict"
+    def known(name: str) -> bool:
+        return norm(name) in index or norm(name) in hits
+
+    if specific and known(specific) and not known(generic):
+        # A known variant needs no generic; making one here left orphans
+        # such as "Liemi" beside an existing "Kanaliemi".
+        pid, specificity = concept_for(specific, None), "strict"
+    else:
+        gen_id = concept_for(generic, None)
+        pid, specificity = gen_id, "loose"
+        if specific:
+            spec_id = concept_for(specific, gen_id)
+            gen_name = conn.execute("SELECT name FROM products WHERE id = ?", (gen_id,)).fetchone()["name"]
+            if spec_id != gen_id and norm(specific) != norm(gen_name):
+                pid, specificity = spec_id, "strict"
     if item.get("source_name"):
         add_alias(conn, item["source_name"], pid, "recipe")
     row = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()

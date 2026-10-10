@@ -101,6 +101,12 @@ class TestBinding:
         [second] = _resolve({"name": "rabarber i7", "amount": 300, "unit_text": "g"})
         assert second["product_id"] == first["product_id"] and second["created"] is False
 
+    def test_a_known_variant_binds_without_inventing_its_generic(self):
+        stock = _mk("Kanaliemi i9", unit="dl", kind="concept")
+        [hit] = _resolve({"name": "liemi i9", "specific": "kanaliemi i9", "amount": 2, "unit_text": "dl"})
+        assert (hit["product_id"], hit["specificity"], hit["created"]) == (stock, "strict", False)
+        assert concepts.find_concept(get_connection(), "liemi i9") is None
+
     def test_line_without_a_name_is_flagged(self):
         [hit] = _resolve({"raw": "1 st", "name": "", "specific": None, "amount": 1, "unit_text": "st"})
         assert hit["product_id"] is None and hit["needs_review"] is True
@@ -124,6 +130,9 @@ class TestUnits:
 
     def test_unknown_unit_word_is_kpl_and_flagged(self):
         assert self._one(2, "näve") == (2, "kpl", True)
+
+    def test_unknown_unit_word_without_an_amount_is_flagged(self):
+        assert self._one(None, "näve") == (0, "rs", True)
 
     def test_no_amount_means_to_taste(self):
         assert self._one(None, None) == (0, "rs", False)
