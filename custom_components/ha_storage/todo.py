@@ -21,7 +21,9 @@ from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
+from .lookup import async_lookup_product
 from .resolver import describe_add_failure, resolve_product_by_name
+from .summary import todo_summary
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,8 +50,8 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
 
     Read + check/uncheck + delete + create are supported. Shopping items must
     tie to a Storage product, so create resolves the free-text summary to an
-    existing product with the same resolver as the
-    `ha_storage.add_to_shopping_list_by_name` service. Ambiguous or unknown
+    existing product the same way as the `ha_storage.add_to_shopping_list_by_name`
+    service: Storage's alias lookup first, then the name resolver. Ambiguous or unknown
     names raise ShoppingListAddError with a readable message instead of adding
     a product-less row. Callers that need a structured result should still use
     the by-name service.
@@ -73,14 +75,11 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
         items: list[TodoItem] = []
         product_names = {p["id"]: p["name"] for p in self.coordinator.data.get("products", [])}
         for it in self.coordinator.data.get("shopping", []):
-            name = product_names.get(it["product_id"], it.get("ha_item_name") or "Unknown")
-            amount = it.get("amount", 1)
-            summary = f"{name} ×{amount:g}" if amount and amount != 1 else name
             status = TodoItemStatus.COMPLETED if it.get("done") else TodoItemStatus.NEEDS_ACTION
             items.append(
                 TodoItem(
                     uid=str(it["id"]),
-                    summary=summary,
+                    summary=todo_summary(it, product_names),
                     status=status,
                     description=it.get("note") or None,
                 )
@@ -95,20 +94,22 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
 
         products = self.coordinator.data.get("products") if self.coordinator.data else None
         try:
-            if products is None:
-                async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
-                    resp = await client.get(f"{self.coordinator.addon_url}/api/products")
-                    resp.raise_for_status()
-                    products = resp.json()
+            result = await async_lookup_product(self.coordinator.addon_url, name)
+            if result is None:
+                if products is None:
+                    async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
+                        resp = await client.get(f"{self.coordinator.addon_url}/api/products")
+                        resp.raise_for_status()
+                        products = resp.json()
 
-            status, result = resolve_product_by_name(name, products)
-            if status != "added":
-                history = await self._async_purchase_history()
-                raise ShoppingListAddError(
-                    describe_add_failure(
-                        name, status, result if status == "ambiguous" else None, history
+                status, result = resolve_product_by_name(name, products)
+                if status != "added":
+                    history = await self._async_purchase_history()
+                    raise ShoppingListAddError(
+                        describe_add_failure(
+                            name, status, result if status == "ambiguous" else None, history
+                        )
                     )
-                )
 
             payload: dict = {"product_id": result["id"], "amount": 1}
             if item.description:

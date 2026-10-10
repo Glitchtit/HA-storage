@@ -174,3 +174,19 @@ def test_ambiguous_lists_bought_candidates_first():
     hist = [{"product_id": 11, "product_name": "N11", "total_amount": 2, "event_count": 2}]
     msg = describe_add_failure("x", "ambiguous", cands, hist)
     assert msg.index("N11 (bought 2×)") < msg.index("N0 (never bought)")
+
+
+def test_an_exact_name_prefers_the_concept_over_a_sku():
+    products = [{"id": 1, "name": "Maito", "kind": "sku"}, {"id": 2, "name": "Maito", "kind": "concept"}]
+    assert resolve_product_by_name("maito", products) == ("added", {"id": 2, "name": "Maito"})
+
+
+def test_ambiguous_candidates_list_concepts_first():
+    products = [
+        {"id": 1, "name": "Kermaviili", "kind": "sku"},
+        {"id": 2, "name": "Vispikerma", "kind": "concept"},
+        {"id": 3, "name": "Ruokakerma", "kind": "concept"},
+    ]
+    status, candidates = resolve_product_by_name("kerma", products)
+    assert status == "ambiguous"
+    assert [c["id"] for c in candidates] == [2, 3, 1]

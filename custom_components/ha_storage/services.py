@@ -12,6 +12,7 @@ from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
+from .lookup import async_lookup_product
 from .resolver import resolve_product_by_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,36 +79,41 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def handle_add_by_name(call: ServiceCall) -> dict:
         """Resolve a product name to an existing Storage product and add it.
 
-        Fetches products from the coordinator cache when available (else
-        GET /api/products), resolves the name with the pure resolver, and on a
-        single match reuses the standard /api/shopping-list add path. Never
-        auto-creates products: returns "ambiguous" or "not_found" so the caller
-        can chain scraper.search_products + scraper.add_product and retry.
+        Asks Storage's name lookup first (aliases, then concept names, so
+        "maito" adds the concept and the list shows the usual SKU as its buy
+        hint). Otherwise fetches products from the coordinator cache when
+        available (else GET /api/products), resolves the name with the pure
+        resolver, and on a single match reuses the standard /api/shopping-list
+        add path. Never auto-creates products: returns "ambiguous" or
+        "not_found" so the caller can chain scraper.search_products +
+        scraper.add_product and retry.
         """
         coords = _coordinators(hass)
         if not coords:
             return {"status": "not_found", "candidates": []}
         coord = coords[0]
 
-        products = coord.data.get("products") if coord.data else None
-        if products is None:
-            try:
-                async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
-                    resp = await client.get(f"{coord.addon_url}/api/products")
-                    resp.raise_for_status()
-                    products = resp.json()
-            except (httpx.HTTPError, OSError) as err:
-                _LOGGER.warning(
-                    "add_to_shopping_list_by_name: product fetch failed: %s", err
-                )
-                return {"status": "error", "message": "Storage products could not be fetched"}
+        result = await async_lookup_product(coord.addon_url, call.data["name"])
+        if result is None:
+            products = coord.data.get("products") if coord.data else None
+            if products is None:
+                try:
+                    async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
+                        resp = await client.get(f"{coord.addon_url}/api/products")
+                        resp.raise_for_status()
+                        products = resp.json()
+                except (httpx.HTTPError, OSError) as err:
+                    _LOGGER.warning(
+                        "add_to_shopping_list_by_name: product fetch failed: %s", err
+                    )
+                    return {"status": "error", "message": "Storage products could not be fetched"}
 
-        status, result = resolve_product_by_name(call.data["name"], products)
+            status, result = resolve_product_by_name(call.data["name"], products)
 
-        if status == "ambiguous":
-            return {"status": "ambiguous", "candidates": result}
-        if status == "not_found":
-            return {"status": "not_found", "candidates": []}
+            if status == "ambiguous":
+                return {"status": "ambiguous", "candidates": result}
+            if status == "not_found":
+                return {"status": "not_found", "candidates": []}
 
         payload = {
             "product_id": result["id"],

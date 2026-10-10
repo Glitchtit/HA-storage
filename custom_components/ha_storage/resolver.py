@@ -18,40 +18,48 @@ def resolve_product_by_name(name: str | None, products: list[dict]) -> tuple[str
     """Resolve a free-text product name against existing Storage products.
 
     Strategy (deterministic, casefold for Finnish names):
-      1. Case-insensitive EXACT match on `name` -> ("added", {id, name}).
+      1. Case-insensitive EXACT match on `name` -> ("added", {id, name}); a
+         concept wins over a SKU of the same name, so "maito" adds the
+         generic and the shopping list shows the usual SKU as its buy hint.
       2. Else collect substring candidates (the query appears anywhere in the
          product name, casefolded). Exactly one that starts at a word
          boundary -> ("added", {id, name}). A single hit buried mid-word
          ("egg" in "Reggiano") is too weak to act on -> ("ambiguous", [it]).
-      3. Multiple candidates -> ("ambiguous", [{id, name}, ...]).
+      3. Multiple candidates -> ("ambiguous", [{id, name}, ...]), concepts first.
       4. Zero candidates -> ("not_found", None).
 
     `products` is the list of Storage product dicts (each has at least `id` and
-    `name`). The returned match/candidate dicts are trimmed to `{id, name}`.
+    `name`, and `kind` from Storage 0.25.0). The returned match/candidate dicts
+    are trimmed to `{id, name}`. Callers ask Storage's alias lookup first.
     """
     query = (name or "").strip()
     if not query:
         return ("not_found", None)
     needle = query.casefold()
 
-    candidates = []
+    exact: list[tuple[dict, dict]] = []
+    candidates: list[tuple[dict, dict]] = []
     for product in products:
         pname = product.get("name") or ""
         folded = pname.casefold()
         slim = {"id": product["id"], "name": pname}
         if folded == needle:
-            # First exact match wins; exact short-circuits any substring logic.
-            return ("added", slim)
-        if needle in folded:
-            candidates.append(slim)
+            exact.append((product, slim))
+        elif needle in folded:
+            candidates.append((product, slim))
 
-    if len(candidates) == 1:
-        only = candidates[0]
+    if exact:
+        # Exact short-circuits any substring logic; a concept beats a SKU.
+        return ("added", next((slim for p, slim in exact if p.get("kind") == "concept"), exact[0][1]))
+    candidates.sort(key=lambda c: c[0].get("kind") != "concept")  # stable: concepts first
+    slims = [slim for _, slim in candidates]
+    if len(slims) == 1:
+        only = slims[0]
         if _starts_a_word(needle, only["name"].casefold()):
             return ("added", only)
-        return ("ambiguous", candidates)
-    if len(candidates) > 1:
-        return ("ambiguous", candidates)
+        return ("ambiguous", slims)
+    if len(slims) > 1:
+        return ("ambiguous", slims)
     return ("not_found", None)
 
 

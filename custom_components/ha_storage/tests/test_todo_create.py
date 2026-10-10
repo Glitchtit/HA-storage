@@ -36,6 +36,8 @@ PRODUCTS = [
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, payload=None):
         self._payload = payload
 
@@ -55,6 +57,7 @@ class _FakeClient:
     posts: list[tuple[str, dict]] = []
     gets: list[str] = []
     history_fails = False
+    lookup: dict | None = None  # what Storage's /api/products/lookup answers
 
     def __init__(self, *args, **kwargs):
         pass
@@ -67,6 +70,8 @@ class _FakeClient:
 
     async def get(self, url, params=None):
         _FakeClient.gets.append(url)
+        if url.endswith("/api/products/lookup"):
+            return _FakeResponse({"product": _FakeClient.lookup})
         if _FakeClient.history_fails:
             raise todo_mod.httpx.ConnectError("down")
         return _FakeResponse(HISTORY)
@@ -81,6 +86,7 @@ def entity(monkeypatch):
     _FakeClient.posts = []
     _FakeClient.gets = []
     _FakeClient.history_fails = False
+    _FakeClient.lookup = None
     monkeypatch.setattr(todo_mod.httpx, "AsyncClient", _FakeClient)
     refreshed = []
 
@@ -139,7 +145,8 @@ async def test_unknown_name_offers_usual_purchases(entity):
         await entity.async_create_todo_item(
             TodoItem(summary="Dragon fruit", status=TodoItemStatus.NEEDS_ACTION)
         )
-    assert _FakeClient.gets == ["http://storage:8100/api/stats/top-purchased"]
+    assert _FakeClient.gets == ["http://storage:8100/api/products/lookup",
+                                "http://storage:8100/api/stats/top-purchased"]
     assert "Valio Eila laktoositon kevytmaitojuoma 1l (15×)" in str(err.value)
 
 
@@ -150,3 +157,19 @@ async def test_history_fetch_failure_still_gives_readable_error(entity):
             TodoItem(summary="Dragon fruit", status=TodoItemStatus.NEEDS_ACTION)
         )
     assert "Dragon fruit" in str(err.value)
+
+
+async def test_create_takes_storage_lookup_first(entity):
+    _FakeClient.lookup = {"id": 77, "name": "Maito", "kind": "concept"}
+    await entity.async_create_todo_item(TodoItem(summary="maito", status=TodoItemStatus.NEEDS_ACTION))
+    assert _FakeClient.posts == [
+        ("http://storage:8100/api/shopping-list", {"product_id": 77, "amount": 1})
+    ]
+
+
+def test_items_show_their_quantity(entity):
+    entity.coordinator.data["shopping"] = [
+        {"id": 5, "product_id": 4, "amount": 3.5, "done": False, "note": "",
+         "display": {"qty_text": "3,5 dl", "unit_abbr": "dl", "unit_dimension": "volume"}},
+    ]
+    assert [i.summary for i in entity.todo_items] == ["Kaurajuoma 3,5 dl"]
