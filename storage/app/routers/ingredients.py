@@ -1,5 +1,9 @@
-"""Ingredient resolver endpoint (spec §4.6): HA-recipes sends parsed recipe
-lines, Storage answers with the concept, amount and unit for each."""
+"""Ingredient resolver (spec §4.6) and concept maintenance endpoints.
+
+HA-recipes sends parsed recipe lines to /ingredients/resolve and gets back
+the concept, amount and unit for each. /concepts/sweep runs the AI concept
+steps over the whole catalog in the background; /concepts/repair-units
+re-derives concept display units from how recipes use them."""
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -46,3 +50,26 @@ def resolve_ingredients(body: ResolveRequest):
         ]
         schedule_followups(result["created"], needs)
     return result
+
+
+@router.post("/concepts/sweep")
+def start_concept_sweep():
+    from concept_jobs import start_sweep
+
+    return {"started": start_sweep()}
+
+
+@router.get("/concepts/sweep")
+def concept_sweep_status():
+    from concept_jobs import sweep_status
+
+    return sweep_status()
+
+
+@router.post("/concepts/repair-units")
+def repair_concept_units():
+    from locks import CATALOG_LOCK
+    from migrate_quantity import fix_concept_units
+
+    with CATALOG_LOCK:
+        return {"changed": fix_concept_units(_get_db())}

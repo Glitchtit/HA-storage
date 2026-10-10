@@ -149,6 +149,15 @@ async def lifespan(app: FastAPI):
     # tooling, restored backups, raised min_stock_amount, etc.).
     sync_task = asyncio.create_task(_periodic_shopping_sync())
 
+    # After an upgrade, run the AI concept steps (placement, adoption, aisle
+    # groups, facts) once in the background; retried on every start until an
+    # AI provider has been available for one complete run.
+    try:
+        import concept_jobs
+        concept_jobs.start_sweep_if_due()
+    except Exception as exc:  # noqa: BLE001 — never block startup
+        log.warning("Concept sweep did not start: %s", exc)
+
     yield
 
     # Shutdown

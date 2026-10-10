@@ -12,7 +12,9 @@ Each step makes one AI call per batch. High confidence acts; medium only
 proposes (link_proposals) or does nothing; an AI failure changes nothing.
 Writes run under CATALOG_LOCK, AI calls never do. run_followups chains the
 steps for one import, and schedule_followups runs that on a daemon thread
-with its own connection.
+with its own connection. run_sweep does the same for the whole catalog
+(spec §6 steps 9-10); it runs once in the background after an upgrade and
+on demand from POST /api/concepts/sweep.
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ import logging
 import sqlite3
 import threading
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 import tree
@@ -429,3 +432,91 @@ def schedule_followups(created: list[int], needs: list[tuple[int, str]]) -> None
     if created or needs:
         threading.Thread(target=_followup_job, args=(list(created), list(needs)),
                          daemon=True).start()
+
+
+# ── whole-catalog sweep ──────────────────────────────────────────────────
+
+SWEEP_FLAG = "concepts_sweep_v1"
+_sweep_state: dict = {"running": False, "result": None, "error": None, "finished_at": None}
+_sweep_guard = threading.Lock()
+
+
+def _isolated(conn: sqlite3.Connection) -> list[int]:
+    return [r["id"] for r in conn.execute(
+        "SELECT p.id FROM products p WHERE p.kind = 'concept' "
+        "AND NOT EXISTS (SELECT 1 FROM products c WHERE c.parent_id = p.id) ORDER BY p.id"
+    ).fetchall()]
+
+
+def run_sweep(conn: sqlite3.Connection, ai: AiFn | None) -> dict:
+    """Place, then adopt, every concept with nothing under it; group every
+    ungrouped concept; estimate the facts recipe needs lack; finally merge
+    any twins the placement revealed."""
+    from concepts import dedup_concepts
+
+    out = {"place": place(conn, _isolated(conn), ai)}
+    out["adopt"] = adopt(conn, _isolated(conn), ai)
+    out["grouped"] = assign_groups(conn, [r["id"] for r in conn.execute(
+        "SELECT id FROM products WHERE kind = 'concept' ORDER BY id").fetchall()], ai)
+    needs = [(r["product_id"], r["dimension"]) for r in conn.execute(
+        "SELECT DISTINCT ri.product_id, u.dimension FROM recipe_ingredients ri "
+        "JOIN units u ON u.id = ri.unit_id JOIN products p ON p.id = ri.product_id "
+        "WHERE p.kind = 'concept' AND ri.amount > 0"
+    ).fetchall()]
+    out["facts"] = estimate_facts(conn, needs, ai)
+    out["merged"] = len(dedup_concepts(conn))
+    return out
+
+
+def _sweep_job() -> None:
+    from ai_client import call_ai_json
+    from database import get_db
+    from main import DB_PATH
+    from routers.products import _ai_configured
+
+    result, error = None, None
+    try:
+        conn = get_db(DB_PATH)
+        try:
+            if not _ai_configured(conn):
+                result = {"skipped": "no AI provider"}
+            else:
+                result = run_sweep(conn, call_ai_json)
+                conn.execute("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)",
+                             (SWEEP_FLAG, json.dumps(result)))
+                conn.commit()
+                log.info("Concept sweep: %s", result)
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("Concept sweep failed: %s", exc)
+        error = str(exc)
+    with _sweep_guard:
+        _sweep_state.update(running=False, result=result, error=error,
+                            finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+
+def start_sweep() -> bool:
+    """Start the whole-catalog sweep on a background thread unless one is
+    already running. Returns True when started."""
+    with _sweep_guard:
+        if _sweep_state["running"]:
+            return False
+        _sweep_state.update(running=True, result=None, error=None)
+    threading.Thread(target=_sweep_job, daemon=True, name="concept-sweep").start()
+    return True
+
+
+def start_sweep_if_due() -> bool:
+    """Start the sweep once per upgrade: until it has completed with an AI
+    provider configured, every start tries again."""
+    from main import get_connection
+
+    if get_connection().execute("SELECT 1 FROM _meta WHERE key = ?", (SWEEP_FLAG,)).fetchone():
+        return False
+    return start_sweep()
+
+
+def sweep_status() -> dict:
+    with _sweep_guard:
+        return dict(_sweep_state)
