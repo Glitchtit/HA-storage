@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-import tree
+from availability import need_status
 from cook_recipe import cook_recipe
+from facts import Catalog
 from models import (
     CookRecipeRequest,
     CookRecipeResponse,
@@ -32,6 +33,17 @@ def list_recipes():
     return _get_db().execute("SELECT * FROM recipes ORDER BY name").fetchall()
 
 
+_INGREDIENT_ROWS_SQL = """
+    SELECT ri.*, p.name AS product_name, p.parent_id,
+           u.abbreviation AS unit_abbreviation
+    FROM recipe_ingredients ri
+    JOIN products p ON p.id = ri.product_id
+    JOIN units u ON u.id = ri.unit_id
+    WHERE ri.recipe_id = ?
+    ORDER BY ri.sort_order, ri.id
+"""
+
+
 @router.get("/recipes/{recipe_id}", response_model=RecipeDetail)
 def get_recipe(recipe_id: int):
     conn = _get_db()
@@ -39,171 +51,50 @@ def get_recipe(recipe_id: int):
     if not recipe:
         raise HTTPException(404, f"Recipe {recipe_id} not found")
 
-    rows = conn.execute("""
-        SELECT ri.*,
-               p.name as product_name,
-               u.abbreviation as unit_abbreviation,
-               COALESCE((
-                   SELECT SUM(s.amount) FROM stock s
-                   WHERE s.product_id = ri.product_id
-                      OR (
-                          ri.specificity = 'loose'
-                          AND s.product_id IN (
-                              WITH RECURSIVE d(id) AS (
-                                  SELECT id FROM products WHERE parent_id = ri.product_id
-                                  UNION
-                                  SELECT p.id FROM products p JOIN d ON p.parent_id = d.id
-                              )
-                              SELECT id FROM d
-                          )
-                      )
-               ), 0) as stock_amount,
-               p.unit_id as stock_unit_id
-        FROM recipe_ingredients ri
-        JOIN products p ON p.id = ri.product_id
-        JOIN units u ON u.id = ri.unit_id
-        WHERE ri.recipe_id = ?
-        ORDER BY ri.sort_order, ri.id
-    """, (recipe_id,)).fetchall()
-
-    ingredients = [IngredientDetail(**r) for r in rows]
+    cat = Catalog(conn)
+    ingredients = []
+    for row in conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall():
+        st = need_status(cat, row["product_id"], row["amount"] or 0, cat.unit(row["unit_id"]))
+        ingredients.append(IngredientDetail(
+            **row,
+            stock_amount=st["available"] or 0,
+            stock_unit_id=row["unit_id"],
+            status=st["status"],
+            approx=st["approx"],
+        ))
     return RecipeDetail(**recipe, ingredients=ingredients)
-
-
-def _convert_amount(
-    amount: float, from_unit: int, to_unit: int, product_id: int, conversions: list[dict]
-) -> float | None:
-    """BFS over global + product-specific conversions (port of HA-recipes logic)."""
-    if from_unit == to_unit:
-        return amount
-    graph: dict[int, dict[int, float]] = {}
-    for c in conversions:
-        cpid = c["product_id"]
-        if cpid is not None and int(cpid) != product_id:
-            continue
-        f, t, factor = int(c["from_unit_id"]), int(c["to_unit_id"]), float(c["factor"])
-        graph.setdefault(f, {})[t] = factor
-        if factor != 0:
-            graph.setdefault(t, {})[f] = 1.0 / factor
-    visited = {from_unit}
-    queue = [(from_unit, amount)]
-    while queue:
-        unit, amt = queue.pop(0)
-        if unit == to_unit:
-            return amt
-        for nxt, factor in graph.get(unit, {}).items():
-            if nxt not in visited:
-                visited.add(nxt)
-                queue.append((nxt, amt * factor))
-    return None
 
 
 @router.get("/recipes/{recipe_id}/availability")
 def recipe_availability(recipe_id: int):
-    """Per-ingredient stock status with recursive subtree aggregation.
+    """Per-ingredient stock status over the bound product's whole subtree.
 
-    Status semantics (port of HA-recipes `_get_recipe_detail`):
-    - staple product -> always green, available null.
-    - amount_needed == 0 ("to taste") -> green if any subtree stock > 0 else yellow.
-    - otherwise sum subtree stock converted into recipe units (same-unit in
-      kpl uses pack_count; any other same-unit match uses 1:1; cross-unit
-      uses per-product conversion BFS; unconvertible stock counts 0 toward
-      available but marks the row).
-    - available >= needed -> green, except yellow when total unopened pieces
-      <= 1 and something is opened.
-    - available < needed but subtree has unconvertible stock >= 1 piece ->
-      yellow (have some, cannot verify amount).
-    - else red.
+    `available` is expressed in the ingredient's own unit (None for staples).
+    See availability.need_status for the green/yellow/red rules.
     """
     conn = _get_db()
     if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
         raise HTTPException(404, f"Recipe {recipe_id} not found")
 
-    kpl_row = conn.execute(
-        "SELECT id FROM units WHERE abbreviation = 'kpl'"
-    ).fetchone()
-    kpl_unit_id = kpl_row["id"] if kpl_row else None
-
-    conversions = [dict(r) for r in conn.execute("SELECT * FROM unit_conversions").fetchall()]
-    rows = conn.execute(
-        """
-        SELECT ri.id AS ingredient_id, ri.product_id, ri.amount, ri.unit_id,
-               ri.specificity, p.name AS product_name, p.parent_id,
-               COALESCE(p.staple, 0) AS staple, u.abbreviation AS unit_abbrev
-        FROM recipe_ingredients ri
-        JOIN products p ON p.id = ri.product_id
-        JOIN units u ON u.id = ri.unit_id
-        WHERE ri.recipe_id = ?
-        ORDER BY ri.sort_order, ri.id
-        """,
-        (recipe_id,),
-    ).fetchall()
-
+    cat = Catalog(conn)
     out = []
-    for ri in rows:
-        pid = ri["product_id"]
-        needed = ri["amount"] or 0
-        subtree = [pid] + tree.descendant_ids(conn, pid)
-        qmarks = ",".join("?" * len(subtree))
-        stock_rows = conn.execute(
-            f"""
-            SELECT s.product_id, s.amount, s.amount_opened, p.unit_id, p.pack_count
-            FROM stock s JOIN products p ON p.id = s.product_id
-            WHERE s.product_id IN ({qmarks})
-            """,
-            subtree,
-        ).fetchall()
-
-        available: float | None = 0.0
-        pieces = 0.0
-        opened = 0.0
-        unconvertible_pieces = 0.0
-        for s in stock_rows:
-            amt = s["amount"] or 0
-            if amt <= 0:
-                continue
-            pieces += amt
-            opened += s["amount_opened"] or 0
-            if s["unit_id"] == ri["unit_id"]:
-                # pack_count multiplies discrete piece counts (e.g. a 10-pack
-                # of eggs) into the recipe's kpl need. Applying it to any
-                # same-unit match (e.g. grams) would inflate stock that
-                # merely shares a unit with the recipe by the pack size.
-                multiplier = s["pack_count"] or 1 if ri["unit_id"] == kpl_unit_id else 1
-                available += amt * multiplier
-            else:
-                conv = _convert_amount(
-                    amt, s["unit_id"], ri["unit_id"], s["product_id"], conversions
-                )
-                if conv is not None:
-                    available += conv
-                else:
-                    unconvertible_pieces += amt
-
-        if ri["staple"]:
-            status, available = "green", None
-        elif needed == 0:
-            status = "green" if pieces > 0 else "yellow"
-        elif available >= needed:
-            status = "yellow" if pieces <= 1 and opened >= 1 else "green"
-        elif unconvertible_pieces >= 1:
-            status = "yellow"
-        else:
-            status = "red"
-
+    for ri in conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall():
+        st = need_status(cat, ri["product_id"], ri["amount"] or 0, cat.unit(ri["unit_id"]))
         out.append({
-            "ingredient_id": ri["ingredient_id"],
-            "product_id": pid,
+            "ingredient_id": ri["id"],
+            "product_id": ri["product_id"],
             "product_name": ri["product_name"],
             "parent_id": ri["parent_id"],
-            "amount_needed": needed,
+            "amount_needed": ri["amount"] or 0,
             "unit_id": ri["unit_id"],
-            "unit_abbrev": ri["unit_abbrev"],
+            "unit_abbrev": ri["unit_abbreviation"],
             "specificity": ri["specificity"] or "loose",
-            "status": status,
-            "available": available,
+            "status": st["status"],
+            "available": st["available"],
+            "available_unopened": st["available_unopened"],
+            "approx": st["approx"],
+            "unknown_lots": st["unknown_lots"],
         })
-
     return {"recipe_id": recipe_id, "ingredients": out}
 
 

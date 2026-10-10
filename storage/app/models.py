@@ -484,11 +484,17 @@ class RecipeDetail(Recipe):
     ingredients: list["IngredientDetail"] = []
 
 class IngredientDetail(Ingredient):
-    """Ingredient with product and stock info."""
+    """Ingredient with product and stock info.
+
+    stock_amount is the bound product's whole-subtree stock converted into the
+    ingredient's own unit (stock_unit_id), via availability.need_status.
+    """
     product_name: str = ""
     unit_abbreviation: str = ""
     stock_amount: float = 0
     stock_unit_id: int | None = None
+    status: str = "red"
+    approx: bool = False
 
 class CookRecipeRequest(BaseModel):
     servings: float | None = Field(
