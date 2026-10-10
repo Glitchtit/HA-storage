@@ -11,6 +11,7 @@
 - Renaming a product renames its shopping rows
 - Recipe import flags a line with an unknown unit word and no amount, and a known variant no longer creates its generic as a stray new concept
 - Each request gets its own database connection: bursts of requests (HA-stock opening) no longer fail with "bad parameter or other API misuse", and a failed request cannot leave half of its writes behind
+- A scan or receipt is never reported as failed because updating the shopping list afterwards failed (the purchase is saved; a retry would have bought it twice), and a failed 5-minute shopping sync no longer keeps other writes locked out until the next run
 - HA integration 0.6.0: shopping-list items show their quantity ("Kerma 3,5 dl"), and adding by name asks Storage first, so "maito" adds the generic item
 
 ## 0.26.2
