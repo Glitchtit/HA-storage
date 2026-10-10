@@ -8,6 +8,8 @@ import threading
 
 from fastapi import APIRouter, HTTPException, Query
 
+from availability import own_unit_have
+from facts import Catalog
 from models import Product, ProductCreate, ProductDetail, ProductUpdate
 import tree
 import pack_size
@@ -199,7 +201,23 @@ def list_products(
         params,
     ).fetchall()
     stores_map = _stores_by_product(conn)
-    return [{**row, "stores": stores_map.get(row["id"], [])} for row in rows]
+    cat = Catalog(conn)
+    return [
+        {**row, **_subtree_fields(cat, row["id"]), "stores": stores_map.get(row["id"], [])}
+        for row in rows
+    ]
+
+
+def _subtree_fields(cat: Catalog, product_id: int) -> dict:
+    """Converted whole-subtree stock for products that have descendants."""
+    if not cat.children(product_id):
+        return {}
+    h = own_unit_have(cat, product_id)
+    return {
+        "subtree_amount": round(h.amount, 3),
+        "subtree_unit_id": (cat.product(product_id) or {}).get("unit_id"),
+        "subtree_approx": h.approx or h.unknown_lots > 0,
+    }
 
 
 @router.get("/products/{product_id}", response_model=ProductDetail)
@@ -239,6 +257,7 @@ def get_product(product_id: int):
         "stock_opened": stock_row["opened"],
         "children_stock_amount": child_stock_row["total"],
         "children_stock_opened": child_stock_row["opened"],
+        **_subtree_fields(Catalog(conn), product_id),
         "stores": _stores_by_product(conn, [product_id]).get(product_id, []),
     }
 

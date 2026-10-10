@@ -12,6 +12,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from availability import own_unit_have
+from facts import Catalog
 from models import (
     Bundle,
     BundleCreate,
@@ -51,8 +53,6 @@ def _bundle_detail(conn, bundle_id: int) -> dict:
         """
         SELECT bi.id, bi.product_id, bi.sort_order,
                COALESCE(p.name, '') AS product_name,
-               COALESCE((SELECT SUM(s.amount) FROM stock s
-                          WHERE s.product_id = bi.product_id), 0) AS stock_amount,
                EXISTS(SELECT 1 FROM shopping_list sl
                        WHERE sl.product_id = bi.product_id AND sl.done = 0) AS on_list
           FROM bundle_items bi
@@ -62,8 +62,14 @@ def _bundle_detail(conn, bundle_id: int) -> dict:
         """,
         (bundle_id,),
     ).fetchall()
+    cat = Catalog(conn)
     for item in bundle["items"]:
         item["on_list"] = bool(item["on_list"])
+        # Whole-subtree stock in the product's own unit, so a concept item
+        # ("Maito") counts the milk SKUs under it. Stock that cannot be
+        # converted still reports a positive amount: it is in stock.
+        h = own_unit_have(cat, item["product_id"])
+        item["stock_amount"] = round(h.amount, 3) if h.amount > 0 else float(h.unknown_lots)
     return bundle
 
 

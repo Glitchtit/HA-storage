@@ -123,6 +123,12 @@ class Product(BaseModel):
     # totals (the Products list) add this in for display.
     children_stock_amount: float = 0
     children_stock_opened: float = 0
+    # Whole-subtree stock converted into this product's own unit (see
+    # availability.own_unit_have). Set for products that have descendants;
+    # children_stock_amount above stays the raw, unit-blind sum.
+    subtree_amount: float | None = None
+    subtree_unit_id: int | None = None
+    subtree_approx: bool = False
     # Per-store assortment availability (see routers/stores.py). Populated by
     # the products read endpoints from product_availability ⋈ stores.
     stores: list["ProductStoreInfo"] = []

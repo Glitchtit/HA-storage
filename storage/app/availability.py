@@ -93,3 +93,13 @@ def need_status(cat: Catalog, product_id: int, need: float, unit: Unit | None) -
         "to_taste": to_taste,
         "have": h,
     }
+
+
+def own_unit_have(cat: Catalog, product_id: int) -> Have:
+    """Subtree stock in the product's own unit: retail packages for a SKU
+    counted in kpl, natural pieces / grams / dl for a concept."""
+    product = cat.product(product_id) or {}
+    unit = cat.unit(product.get("unit_id"))
+    if unit is None:
+        return Have()
+    return have(cat, product_id, unit, target_dim=cat.stock_dim(product_id, unit))

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 
 from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
+from facts import Catalog
 from pack_size import parse_pack_size
 from models import (
     CadenceSuggestionResponse,
@@ -75,16 +76,13 @@ def sync_auto_shopping(conn) -> dict:
     Returns a dict with ``added``, ``removed`` and ``updated`` counts for
     callers/logging.
     """
+    from availability import own_unit_have
+
     rows = conn.execute(
-        """
-        SELECT p.id, p.name, p.unit_id, p.min_stock_amount,
-               COALESCE(SUM(s.amount), 0) AS total_amount
-        FROM products p
-        LEFT JOIN stock s ON s.product_id = p.id
-        WHERE p.active = 1 AND p.min_stock_amount > 0
-        GROUP BY p.id
-        """
+        "SELECT id, name, unit_id, min_stock_amount FROM products "
+        "WHERE active = 1 AND min_stock_amount > 0"
     ).fetchall()
+    cat = Catalog(conn) if rows else None
 
     added = 0
     removed = 0
@@ -92,7 +90,9 @@ def sync_auto_shopping(conn) -> dict:
     for r in rows:
         pid = r["id"]
         min_amt = float(r["min_stock_amount"] or 0)
-        have = float(r["total_amount"] or 0)
+        h = own_unit_have(cat, pid)
+        # Stock we cannot measure still counts as "have": never nag about it.
+        have = min_amt if (h.unknown_lots and h.amount < min_amt) else h.amount
         if have < min_amt:
             need = max(1.0, min_amt - have)
             auto_row = conn.execute(
