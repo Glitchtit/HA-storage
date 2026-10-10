@@ -24,6 +24,7 @@ so two imports at once cannot create the same concept twice.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from typing import Any, Callable
@@ -83,10 +84,79 @@ def _unknown_names(items: list[dict], index: dict[str, int]) -> list[str]:
     return list(seen.values())
 
 
-def match_with_ai(conn: sqlite3.Connection, names: list[str], ai: AiFn | None) -> dict[str, int]:
-    """normalized name -> concept id for high-confidence AI matches.
-    Phase-2 Task 5 fills this in; without AI nothing is matched."""
-    return {}
+_MATCH_PROMPT = """You match recipe ingredient names to a household grocery catalog.
+Catalog entries are generic ingredient CONCEPTS with Finnish names. An entry
+may have a parent (it is a variant of that parent) and known aliases.
+
+A name matches a concept only if it is the SAME ingredient. Another spelling,
+another language (Swedish, English) or another grammatical form is the same
+ingredient. A broader or narrower ingredient is NOT: "kerma" is not
+"vispikerma", "juusto" is not "parmesaani", "pasta" is not "spagetti".
+When unsure, answer null or a lower confidence.
+
+Names to match (JSON list):
+{names_json}
+
+Catalog concepts (JSON):
+{concepts_json}
+
+Return ONLY a JSON array with one entry per name:
+[{{"name": "<name exactly as given>", "id": <concept id or null>, "confidence": "high"|"medium"|"low"}}]
+"""
+
+
+def _catalog_for_prompt(conn: sqlite3.Connection) -> list[dict]:
+    names = {r["id"]: r["name"] for r in conn.execute(
+        "SELECT id, name FROM products WHERE kind = 'concept'").fetchall()}
+    aliases: dict[int, list[str]] = {}
+    for r in conn.execute("SELECT alias_norm, product_id FROM product_aliases ORDER BY alias_norm"):
+        if r["product_id"] in names and len(aliases.setdefault(r["product_id"], [])) < 5:
+            aliases[r["product_id"]].append(r["alias_norm"])
+    parents = {r["id"]: r["parent_id"] for r in conn.execute(
+        "SELECT id, parent_id FROM products WHERE kind = 'concept'").fetchall()}
+    out = []
+    for cid, name in sorted(names.items()):
+        entry: dict = {"id": cid, "name": name}
+        if parents.get(cid) in names:
+            entry["parent"] = names[parents[cid]]
+        if aliases.get(cid):
+            entry["aliases"] = aliases[cid]
+        out.append(entry)
+    return out
+
+
+def match_with_ai(conn: sqlite3.Connection, names: list[str], ai: AiFn | None,
+                  catalog: list[dict]) -> dict[str, int]:
+    """normalized name -> concept id for every high-confidence AI match
+    against `catalog` (a _catalog_for_prompt snapshot taken under the lock).
+    Any failure or malformed answer simply matches nothing."""
+    if not names or ai is None or not catalog:
+        return {}
+    prompt = _MATCH_PROMPT.format(
+        names_json=json.dumps(names, ensure_ascii=False),
+        concepts_json=json.dumps(catalog[:1500], ensure_ascii=False),
+    )
+    try:
+        answer = ai(prompt, conn)
+    except Exception as exc:
+        log.warning("Ingredient AI match failed: %s", exc)
+        return {}
+    if not isinstance(answer, list):
+        return {}
+    asked = {norm(n) for n in names}
+    valid = {c["id"] for c in catalog}
+    hits: dict[str, int] = {}
+    for entry in answer:
+        if not isinstance(entry, dict) or str(entry.get("confidence", "")).lower() != "high":
+            continue
+        key = norm(str(entry.get("name") or ""))
+        try:
+            cid = int(entry.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if key in asked and cid in valid:
+            hits[key] = cid
+    return hits
 
 
 def resolve(conn: sqlite3.Connection, items: list[dict], *, ai: AiFn | None = None) -> dict:
@@ -97,13 +167,17 @@ def resolve(conn: sqlite3.Connection, items: list[dict], *, ai: AiFn | None = No
         units = {r["abbreviation"]: r["id"] for r in conn.execute(
             "SELECT id, abbreviation FROM units").fetchall()}
         unknown = _unknown_names(items, concept_index(conn))
-    hits = match_with_ai(conn, unknown, ai) if unknown else {}
+        catalog = _catalog_for_prompt(conn) if unknown and ai is not None else []
+    hits = match_with_ai(conn, unknown, ai, catalog) if unknown else {}
 
     created: list[int] = []
     out: list[dict] = []
     with CATALOG_LOCK:
         try:
             index = concept_index(conn)  # again: another import may have added some
+            alive = set(index.values()) | {r["id"] for r in conn.execute(
+                "SELECT id FROM products WHERE kind = 'concept'").fetchall()}
+            hits = {k: v for k, v in hits.items() if v in alive}
             for i, item in enumerate(items):
                 out.append(_bind(conn, i, item, index, hits, created, units))
             conn.commit()
@@ -128,13 +202,15 @@ def _bind(conn, i: int, item: dict, index: dict[str, int], hits: dict[str, int],
 
     def concept_for(name: str, parent_id: int | None) -> int:
         key = norm(name)
-        pid = index.get(key) or hits.get(key)
+        pid, source = index.get(key), "recipe"
+        if pid is None and key in hits:
+            pid, source = hits[key], "ai"
         if pid is None:
             pid = create_concept(conn, name, units[_display_unit(abbr)], parent_id)
-            index[key] = pid
             created.append(pid)
             result["created"] = True
-        add_alias(conn, name, pid, "recipe")
+        index[key] = pid
+        add_alias(conn, name, pid, source)
         return pid
 
     gen_id = concept_for(generic, None)
