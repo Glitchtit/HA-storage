@@ -7,9 +7,14 @@ binds without AI. The first mapping of a normalized alias wins.
 """
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import unicodedata
+
+from locks import CATALOG_LOCK
+
+log = logging.getLogger(__name__)
 
 _KEEP = frozenset("åäö")
 
@@ -105,3 +110,94 @@ def create_concept(conn: sqlite3.Connection, name: str, unit_id: int,
         (display_name(name), unit_id, parent_id, group_id),
     )
     return int(cur.lastrowid)
+
+
+_REFERENCE_SQL = """
+    SELECT (SELECT COUNT(*) FROM recipe_ingredients WHERE product_id = :id)
+         + (SELECT COUNT(*) FROM shopping_list WHERE product_id = :id)
+         + (SELECT COUNT(*) FROM bundle_items WHERE product_id = :id)
+         + (SELECT COUNT(*) FROM products WHERE parent_id = :id)
+         + (SELECT COUNT(*) FROM stock WHERE product_id = :id)
+         + (SELECT COUNT(*) FROM barcodes WHERE product_id = :id) AS n
+"""
+
+
+def _references(conn: sqlite3.Connection, pid: int) -> int:
+    return int(conn.execute(_REFERENCE_SQL, {"id": pid}).fetchone()["n"])
+
+
+def _twin_groups(conn: sqlite3.Connection) -> list[list[int]]:
+    """Concepts whose normalized names collide, or whose name is another
+    concept's alias. Each group is sorted by id."""
+    names = {r["id"]: norm(r["name"]) for r in conn.execute(
+        "SELECT id, name FROM products WHERE kind = 'concept'").fetchall()}
+    parent = {pid: pid for pid in names}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        parent[find(a)] = find(b)
+
+    by_name: dict[str, int] = {}
+    for pid, key in sorted(names.items()):
+        if key in by_name:
+            union(pid, by_name[key])
+        elif key:
+            by_name[key] = pid
+    for r in conn.execute("SELECT alias_norm, product_id FROM product_aliases").fetchall():
+        other = by_name.get(r["alias_norm"])
+        if other is not None and r["product_id"] in names and r["product_id"] != other:
+            union(r["product_id"], other)
+    groups: dict[int, list[int]] = {}
+    for pid in names:
+        groups.setdefault(find(pid), []).append(pid)
+    return [sorted(g) for g in groups.values() if len(g) > 1]
+
+
+def dedup_concepts(conn: sqlite3.Connection) -> list[tuple[int, int]]:
+    """Merge each group of twin concepts into one survivor (spec §4.7).
+
+    The survivor is the topmost member when one twin sits under another (a
+    same-name child stub folds into its parent), otherwise the twin with the
+    most references (ingredients, shopping rows, bundles, children, lots,
+    barcodes), the lowest id on a tie. A survivor without a parent takes over
+    the parent of a twin it absorbs. A twin that holds stock or barcodes is
+    left alone (merge refuses it). Returns the (source, target) pairs merged.
+    """
+    import tree
+    from merge import merge_products
+
+    merged: list[tuple[int, int]] = []
+    with CATALOG_LOCK:
+        for group in _twin_groups(conn):
+            members = set(group)
+            top = [m for m in group if not members & set(tree.ancestor_ids(conn, m))]
+            survivor = max(top, key=lambda m: (_references(conn, m), -m))
+            for source in sorted(members - {survivor},
+                                 key=lambda m: -len(tree.ancestor_ids(conn, m))):
+                src = conn.execute(
+                    "SELECT parent_id FROM products WHERE id = ?", (source,)).fetchone()
+                if src is None:
+                    continue
+                try:
+                    merge_products(conn, source, survivor)
+                except (ValueError, LookupError) as exc:
+                    log.info("Dedup: left %s apart from %s: %s", source, survivor, exc)
+                    continue
+                merged.append((source, survivor))
+                inherited = src["parent_id"]
+                row = conn.execute(
+                    "SELECT parent_id FROM products WHERE id = ?", (survivor,)).fetchone()
+                if row["parent_id"] is None and inherited is not None and inherited != survivor:
+                    try:
+                        tree.prepare_parent(conn, survivor, inherited)
+                        conn.execute("UPDATE products SET parent_id = ? WHERE id = ?",
+                                     (inherited, survivor))
+                        conn.commit()
+                    except ValueError:
+                        conn.rollback()
+    return merged

@@ -231,9 +231,11 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
 
 
 def run_reconcile(conn: sqlite3.Connection) -> dict:
-    """Idempotent sweep: backfill pack facts on every SKU, then try to link
-    every unparented, childless, non-staple product that is not itself a
-    category node."""
+    """Idempotent sweep: merge twin concepts, backfill pack facts on every
+    SKU, then try to link every unparented, non-staple SKU."""
+    from concepts import dedup_concepts
+
+    merged = dedup_concepts(conn)
     backfilled = 0
     all_ids = [r["id"] for r in conn.execute("SELECT id FROM products").fetchall()]
     for pid in all_ids:
@@ -262,6 +264,7 @@ def run_reconcile(conn: sqlite3.Connection) -> dict:
         "linked": len(res["linked"]),
         "proposed": len(res["proposed"]),
         "facts_backfilled": backfilled,
+        "merged": len(merged),
     }
 
 
