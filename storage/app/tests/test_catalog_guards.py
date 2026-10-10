@@ -92,3 +92,33 @@ def test_shopping_sync_leaves_no_open_transaction():
     conn.commit()
     assert sync_auto_shopping(conn) == {"added": 0, "removed": 0, "updated": 0}
     assert conn.in_transaction is False
+
+
+def test_client_auto_adds_for_concepts_are_refused():
+    """Live finding (0.26.0 deploy): an HA-stock tab still running 2.12.0 adds
+    a minimum-stock row for every now-visible concept from the concept's own
+    (empty) lots. Storage's own sync judges concepts by their products' stock;
+    a client's auto-add for a concept is refused, a SKU's still works."""
+    concept = _mk("Kasvisliemi g5", unit="kpl", kind="concept", min_stock_amount=1)
+    sku = _mk("Knorr kasvisliemi g5 6kpl", min_stock_amount=1)
+    r = client.post("/api/shopping-list", json={"product_id": concept, "amount": 1, "auto_added": True})
+    assert r.status_code == 409
+    assert client.post("/api/shopping-list",
+                       json={"product_id": sku, "amount": 1, "auto_added": True}).status_code == 201
+
+
+def test_shopping_sync_removes_duplicate_auto_rows():
+    """Two clients adding the same auto row at once left two rows; the sync
+    keeps one and sets it to the live deficit."""
+    from routers.shopping import sync_auto_shopping
+
+    sku = _mk("Kalaliemikuutio g6", min_stock_amount=2)
+    conn = get_connection()
+    for _ in range(2):
+        conn.execute("INSERT INTO shopping_list (product_id, amount, ha_item_name, auto_added) "
+                     "VALUES (?, 1, 'Kalaliemikuutio g6', 1)", (sku,))
+    conn.commit()
+    sync_auto_shopping(conn)
+    rows = conn.execute("SELECT amount FROM shopping_list WHERE product_id = ? AND auto_added = 1 "
+                        "AND done = 0", (sku,)).fetchall()
+    assert [r["amount"] for r in rows] == [2.0]

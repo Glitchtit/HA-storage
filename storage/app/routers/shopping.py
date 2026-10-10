@@ -149,6 +149,13 @@ def sync_auto_shopping(conn) -> dict:
                         (need, auto_row["id"]),
                     )
                     updated += 1
+                # Two clients adding the same row at once leave a duplicate.
+                cur = conn.execute(
+                    "DELETE FROM shopping_list WHERE product_id = ? AND auto_added = 1"
+                    " AND done = 0 AND id != ?",
+                    (pid, auto_row["id"]),
+                )
+                removed += cur.rowcount
                 continue
             existing = conn.execute(
                 "SELECT 1 FROM shopping_list WHERE product_id = ? LIMIT 1",
@@ -554,9 +561,14 @@ def clear_done():
 @router.post("/shopping-list", response_model=ShoppingItem, status_code=201)
 def add_shopping_item(body: ShoppingItemCreate, response: Response):
     conn = _get_db()
-    product = conn.execute("SELECT id, name FROM products WHERE id = ?", (body.product_id,)).fetchone()
+    product = conn.execute("SELECT id, name, kind FROM products WHERE id = ?", (body.product_id,)).fetchone()
     if not product:
         raise HTTPException(400, f"Product {body.product_id} not found")
+    if body.auto_added and product["kind"] == "concept":
+        # A concept's minimum stock counts the stock of every product under it,
+        # which only sync_auto_shopping judges. An HA-stock older than 2.12.1
+        # would add these rows from the concept's own, empty lots.
+        raise HTTPException(409, "Storage keeps minimum-stock rows for concepts itself")
     # An explicit pinned=True on add is a persistent product preference, not a
     # one-off: promote it to the product so every future row inherits it.
     if body.pinned:

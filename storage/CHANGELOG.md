@@ -1,3 +1,8 @@
+## 0.26.2
+
+- Minimum-stock rows for concepts come only from Storage's own sync, which counts the stock of every product under the concept; an HA-stock tab that has not reloaded since 2.12.1 can no longer add them from the concept's own, empty stock
+- The sync removes a duplicate automatic row left when two devices added the same item at once
+
 ## 0.26.1
 
 - The 5-minute shopping-list sync no longer keeps the database's write lock after a run that changed nothing. Because of it, background jobs that write through their own connection (the concept sweep after upgrading, the follow-ups after a recipe import, linking a newly bought product) could fail with "database is locked"
