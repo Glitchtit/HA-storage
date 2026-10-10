@@ -512,6 +512,16 @@ class Recipe(BaseModel):
     picture_filename: str | None
     created_at: str
 
+class RecipeSummary(Recipe):
+    """A recipe with its ingredient statuses counted, for list badges."""
+    ingredient_count: int = 0
+    missing_count: int = 0   # red: none in stock
+    yellow_count: int = 0    # some, an unknown amount, or mostly opened packs
+
+class RecipeSuggestion(RecipeSummary):
+    uses_expiring: bool = False
+    expiring_products: list[str] = []   # ingredients whose stock expires soon
+
 class RecipeDetail(Recipe):
     """Recipe with ingredients and stock status."""
     ingredients: list["IngredientDetail"] = []

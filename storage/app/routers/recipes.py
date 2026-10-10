@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from availability import EPS, need_status
 from cook_recipe import cook_recipe
@@ -19,6 +19,8 @@ from models import (
     Recipe,
     RecipeCreate,
     RecipeDetail,
+    RecipeSuggestion,
+    RecipeSummary,
     RecipeToShoppingRequest,
     RecipeUpdate,
 )
@@ -31,9 +33,66 @@ def _get_db():
     return get_connection()
 
 
-@router.get("/recipes", response_model=list[Recipe])
+def _status_counts(conn, cat: Catalog) -> dict[int, dict]:
+    """recipe id -> ingredient count and how many are red / yellow."""
+    counts: dict[int, dict] = {}
+    for ri in conn.execute(
+        "SELECT ri.recipe_id, ri.product_id, ri.amount, ri.unit_id FROM recipe_ingredients ri "
+        "JOIN products p ON p.id = ri.product_id JOIN units u ON u.id = ri.unit_id"
+    ).fetchall():
+        status = need_status(cat, ri["product_id"], ri["amount"] or 0, cat.unit(ri["unit_id"]))["status"]
+        c = counts.setdefault(ri["recipe_id"], {"ingredient_count": 0, "missing_count": 0, "yellow_count": 0})
+        c["ingredient_count"] += 1
+        if status == "red":
+            c["missing_count"] += 1
+        elif status == "yellow":
+            c["yellow_count"] += 1
+    return counts
+
+
+@router.get("/recipes", response_model=list[RecipeSummary])
 def list_recipes():
-    return _get_db().execute("SELECT * FROM recipes ORDER BY name").fetchall()
+    """Recipes by name, with ingredient statuses counted for list badges."""
+    conn = _get_db()
+    counts = _status_counts(conn, Catalog(conn))
+    return [{**r, **counts.get(r["id"], {})}
+            for r in conn.execute("SELECT * FROM recipes ORDER BY name").fetchall()]
+
+
+@router.get("/recipes/suggest", response_model=list[RecipeSuggestion])
+def suggest_recipes(expiring_within_days: int | None = Query(None, ge=0, le=365)):
+    """Recipes that can be cooked from stock: at least one ingredient and none
+    red (spec §4.10), fewest yellow first. With expiring_within_days, recipes
+    using stock that expires by then (or already has) come first and name
+    those ingredients; an ingredient uses the lots of every product under it."""
+    conn = _get_db()
+    cat = Catalog(conn)
+    counts = _status_counts(conn, cat)
+    expiring: set[int] = set()
+    if expiring_within_days is not None:
+        expiring = {r["product_id"] for r in conn.execute(
+            "SELECT DISTINCT product_id FROM stock WHERE amount > 0 AND best_before_date IS NOT NULL "
+            "AND best_before_date <= date('now', ?)", (f"+{expiring_within_days} days",),
+        ).fetchall()}
+    uses: dict[int, list[str]] = {}
+    if expiring:
+        for ri in conn.execute(
+            "SELECT ri.recipe_id, ri.product_id, p.name FROM recipe_ingredients ri "
+            "JOIN products p ON p.id = ri.product_id ORDER BY ri.sort_order, ri.id"
+        ).fetchall():
+            if expiring & {ri["product_id"], *cat.descendants(ri["product_id"])}:
+                names = uses.setdefault(ri["recipe_id"], [])
+                if ri["name"] not in names:
+                    names.append(ri["name"])
+    out = []
+    for r in conn.execute("SELECT * FROM recipes ORDER BY name").fetchall():
+        c = counts.get(r["id"])
+        if not c or c["missing_count"]:
+            continue
+        names = uses.get(r["id"], [])
+        out.append({**r, **c, "uses_expiring": bool(names), "expiring_products": names})
+    out.sort(key=lambda s: (not s["uses_expiring"], s["yellow_count"]))  # stable: by name within
+    return out
 
 
 _INGREDIENT_ROWS_SQL = """
@@ -317,6 +376,18 @@ def update_ingredient(recipe_id: int, ingredient_id: int, body: IngredientUpdate
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return existing
+    if "product_id" in updates and not conn.execute(
+        "SELECT 1 FROM products WHERE id = ?", (updates["product_id"],)
+    ).fetchone():
+        raise HTTPException(400, f"Product {updates['product_id']} not found")
+    if "unit_id" in updates and not conn.execute(
+        "SELECT 1 FROM units WHERE id = ?", (updates["unit_id"],)
+    ).fetchone():
+        raise HTTPException(400, f"Unit {updates['unit_id']} not found")
+    if "specificity" in updates and updates["specificity"] not in ("strict", "loose"):
+        raise HTTPException(400, "specificity must be 'strict' or 'loose'")
+    if "needs_review" in updates:
+        updates["needs_review"] = int(bool(updates["needs_review"]))
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     conn.execute(
         f"UPDATE recipe_ingredients SET {set_clause} WHERE id = ?",
