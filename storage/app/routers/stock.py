@@ -199,7 +199,11 @@ def add_stock(body: StockAdd):
         conn.rollback()
         log.warning("Clearing the shopping list for product %d failed: %s", body.product_id, exc)
         cleared = []
-    sync_auto_shopping(conn)
+    try:
+        sync_auto_shopping(conn)
+    except Exception as exc:  # noqa: BLE001 — same rule for the minimum-stock rows
+        conn.rollback()
+        log.warning("Minimum-stock sync after buying product %d failed: %s", body.product_id, exc)
     return {**entry, "cleared_rows": cleared}
 
 

@@ -151,11 +151,15 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
             for product_id, amount, unit_id in purchases:
                 cleared.extend(apply_purchase(conn, cat, product_id, amount, unit_id))
             conn.commit()
-            sync_auto_shopping(conn)
         except Exception as exc:  # noqa: BLE001
             conn.rollback()
             log.warning("Receipt commit: shopping list update failed: %s", exc)
             cleared = []
+        try:
+            sync_auto_shopping(conn)
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            log.warning("Receipt commit: minimum-stock sync failed: %s", exc)
 
     # Best-effort background linking, same trigger /stock/add uses: a
     # receipt purchase of a still-unparented, still-childless product is a

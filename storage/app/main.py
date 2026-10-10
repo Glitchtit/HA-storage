@@ -224,15 +224,31 @@ async def lifespan(app: FastAPI):
         pass
 
 
-async def _periodic_shopping_sync() -> None:
-    """Background loop that reconciles auto-added shopping rows every 5 min."""
+def periodic_sync_once() -> dict:
+    """One run of the periodic shopping sync on this thread's connection.
+
+    The loop reuses a worker thread, so the connection outlives the run. A run
+    that fails is rolled back: Python's sqlite3 leaves the transaction open,
+    and after a first write that transaction would keep the write lock and
+    lock every other writer out.
+    """
     from routers.shopping import sync_auto_shopping
 
+    conn = get_connection()
+    try:
+        return sync_auto_shopping(conn)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+async def _periodic_shopping_sync() -> None:
+    """Background loop that reconciles auto-added shopping rows every 5 min."""
     # First run shortly after startup so a stale list is cleaned up quickly.
     await asyncio.sleep(15)
     while True:
         try:
-            await asyncio.to_thread(lambda: sync_auto_shopping(get_connection()))
+            await asyncio.to_thread(periodic_sync_once)
         except Exception as exc:  # noqa: BLE001 — never let the loop die
             log.warning("Periodic shopping sync failed: %s", exc)
         await asyncio.sleep(300)

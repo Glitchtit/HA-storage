@@ -3,6 +3,7 @@ above it, converting the purchase into each row's unit (spec §4.8)."""
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -177,3 +178,28 @@ class TestReceiptClearing:
         assert any(i["product_id"] == sku and i["auto_added"] for i in client.get("/api/shopping-list").json())
         client.post("/api/receipts/commit", json={"lines": [{"product_id": sku, "amount": 2}]})
         assert not any(i["product_id"] == sku for i in client.get("/api/shopping-list").json())
+
+
+def _broken_sync(conn):
+    raise sqlite3.OperationalError("database is locked")
+
+
+class TestSideEffectsNeverFailAPurchase:
+    # Spec §7: a purchase never fails because of a list side effect.
+    def test_a_failing_minimum_stock_sync_never_fails_the_purchase(self, monkeypatch):
+        concept = _mk("Kaurahiutale c15", kind="concept")
+        sku = _mk("Kaurahiutaleet 1 kg c15", parent_id=concept)
+        row = _add(concept)
+        monkeypatch.setattr("routers.stock.sync_auto_shopping", _broken_sync)
+        assert [c["id"] for c in _buy(sku)["cleared_rows"]] == [row]
+        assert _amount(row) is None
+
+    def test_a_failing_sync_never_hides_what_a_receipt_cleared(self, monkeypatch):
+        concept = _mk("Rusina c16", kind="concept")
+        sku = _mk("Rusinat 250 g c16", parent_id=concept)
+        row = _add(concept)
+        monkeypatch.setattr("routers.receipts.sync_auto_shopping", _broken_sync)
+        r = client.post("/api/receipts/commit", json={"lines": [{"product_id": sku, "amount": 1}]})
+        assert r.status_code == 200
+        assert [c["id"] for c in r.json()["cleared_rows"]] == [row]
+        assert _amount(row) is None

@@ -15,6 +15,7 @@ os.makedirs(os.path.join(os.environ["DATA_DIR"], "images", "products"), exist_ok
 os.makedirs(os.path.join(os.environ["DATA_DIR"], "images", "recipes"), exist_ok=True)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from main import app, get_connection
@@ -65,3 +66,28 @@ def test_a_request_that_fails_after_writing_leaves_nothing_behind():
     assert r.status_code == 201
     assert time.monotonic() - started < 2  # no wait on a lock the failed request kept
     assert get_connection().execute("SELECT 1 FROM config WHERE key = 'half-k1'").fetchone() is None
+
+
+def test_a_failed_periodic_sync_never_keeps_the_write_lock(monkeypatch):
+    # The 5-minute sync runs on a reused worker thread with a long-lived
+    # connection. A run that fails after its first write must roll back:
+    # otherwise its open transaction keeps the write lock, and every other
+    # writer waits out busy_timeout and fails with "database is locked".
+    import main
+    from database import get_db
+
+    def half_sync(conn):
+        conn.execute("INSERT INTO config (key, value) VALUES ('half-sync-k1', '1')")
+        raise RuntimeError("sync failed half-way")
+
+    monkeypatch.setattr("routers.shopping.sync_auto_shopping", half_sync)
+    with pytest.raises(RuntimeError):
+        main.periodic_sync_once()
+    other = get_db(main.DB_PATH)
+    try:
+        other.execute("PRAGMA busy_timeout = 100")
+        other.execute("INSERT INTO config (key, value) VALUES ('after-half-sync-k1', '1')")
+        other.commit()
+        assert other.execute("SELECT 1 FROM config WHERE key = 'half-sync-k1'").fetchone() is None
+    finally:
+        other.close()
