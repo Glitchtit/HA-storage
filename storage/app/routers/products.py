@@ -146,7 +146,7 @@ def _autoplace_product(product_id: int) -> None:
         try:
             res = linker.link_products(conn, [product_id])
             if not res["linked"] and not res["proposed"]:
-                run_optimize(conn, product_ids=[product_id])
+                run_optimize(conn, product_ids=[product_id], link=False)
         finally:
             conn.close()
     except Exception as exc:

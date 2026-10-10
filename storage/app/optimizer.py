@@ -1,12 +1,13 @@
-"""Full AI Optimize pipeline for the Storage app.
+"""AI Optimize: non-destructive enrichment for the Storage catalog.
 
-Two-phase approach:
-  Phase 1 — establish categories (product_group) and parent products in
-             batches of 100, with progressive context chaining.
-  Phase 2 — assign locations, best-before days, and pack normalisation
-             in batches of 100, using Phase 1 structure.
+  Phase 1 — assign aisle categories (product_group) in batches, with
+            progressive context chaining so names stay consistent.
+  Phase 2 — assign locations and best-before days, and normalise genuine
+            multi-packs (merged into their base product via merge.py).
 
-Reads and writes directly to SQLite — no HTTP round-trips.
+Optimize never creates or strips parent products and never deletes recipe
+ingredients: the product tree belongs to the linker (linker.py), which runs
+as the last step. Reads and writes SQLite directly — no HTTP round-trips.
 """
 
 from __future__ import annotations
@@ -17,27 +18,9 @@ import time
 from typing import Any, Callable
 
 from ai_client import call_ai_json, _get_ai_config, get_batch_size
+from merge import merge_products
 
 logger = logging.getLogger(__name__)
-
-_UNIT_ALIASES: dict[str, str] = {
-    "g": "g", "gr": "g", "gram": "g", "gramma": "g", "grammaa": "g",
-    "kg": "kg", "kilo": "kg", "kilogramma": "kg", "kilogrammaa": "kg",
-    "ml": "ml", "millilitra": "ml", "millilitraa": "ml",
-    "dl": "dl", "desilitra": "dl", "desilitraa": "dl",
-    "l": "l", "litra": "l", "litraa": "l",
-    "tl": "tl", "teelusikka": "tl", "teelusikkaa": "tl",
-    "rkl": "rkl", "ruokalusikka": "rkl", "ruokalusikkaa": "rkl",
-    "rs": "rs", "ripaus": "rs", "ripausta": "rs",
-    "kpl": "kpl", "kappale": "kpl", "kappaletta": "kpl",
-    "pcs": "kpl", "piece": "kpl", "pieces": "kpl", "st": "kpl",
-    "stück": "kpl", "pack": "kpl",
-}
-
-
-def _canonical_unit(name: str) -> str | None:
-    return _UNIT_ALIASES.get(name.lower().strip())
-
 
 # Shared best-before guidance for every AI pass that estimates shelf life.
 # 0 is a first-class value meaning "does not meaningfully expire" — the stock
@@ -133,14 +116,14 @@ def _load_products(conn: sqlite3.Connection, product_ids: list[int] | None = Non
         placeholders = ",".join("?" * len(product_ids))
         rows = conn.execute(
             f"SELECT id, name, description, parent_id, location_id, product_group_id, unit_id, "
-            f"default_best_before_days, min_stock_amount, active FROM products "
+            f"default_best_before_days, min_stock_amount, active, kind FROM products "
             f"WHERE id IN ({placeholders})",
             product_ids,
         ).fetchall()
     else:
         rows = conn.execute(
             "SELECT id, name, description, parent_id, location_id, product_group_id, unit_id, "
-            "default_best_before_days, min_stock_amount, active FROM products"
+            "default_best_before_days, min_stock_amount, active, kind FROM products"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -155,20 +138,6 @@ def _load_product_groups(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _load_units(conn: sqlite3.Connection) -> dict[str, int]:
-    """Return {abbreviation: id} for all units."""
-    unit_abbrev_to_id: dict[str, int] = {}
-    rows = conn.execute("SELECT id, name, description FROM units").fetchall()
-    for r in rows:
-        desc = (r["description"] or "").lower().strip()
-        if desc:
-            unit_abbrev_to_id[desc] = r["id"]
-        canonical = _canonical_unit((r["name"] or "").lower().strip())
-        if canonical and canonical not in unit_abbrev_to_id:
-            unit_abbrev_to_id[canonical] = r["id"]
-    return unit_abbrev_to_id
-
-
 def _ensure_product_group(conn: sqlite3.Connection, name: str) -> int:
     row = conn.execute("SELECT id FROM product_groups WHERE name = ?", (name,)).fetchone()
     if row:
@@ -178,199 +147,36 @@ def _ensure_product_group(conn: sqlite3.Connection, name: str) -> int:
     return cur.lastrowid  # type: ignore[return-value]
 
 
-def _ensure_parent_product(
-    conn: sqlite3.Connection,
-    name: str,
-    name_to_product: dict[str, dict],
-    unit_id: int,
-    group_master_id: int | None,
-) -> int:
-    """Return the ID of a parent product with *name*, creating it if needed.
-
-    Uses case-insensitive fallback so "sitruuna" matches "Sitruuna".
-    """
-    existing = name_to_product.get(name)
-    if not existing:
-        # Case-insensitive fallback
-        name_lower = name.lower()
-        for key, val in name_to_product.items():
-            if key.lower() == name_lower:
-                existing = val
-                break
-    if existing:
-        pid = int(existing["id"])
-        # Ensure it's inactive (parent placeholder) if it has no min_stock_amount
-        if existing.get("active") and float(existing.get("min_stock_amount") or 0) == 0:
-            conn.execute("UPDATE products SET active = 0 WHERE id = ?", (pid,))
-            conn.commit()
-        return pid
-
-    # Create new parent placeholder
-    now = int(time.time())
-    pg_id = group_master_id
-    cur = conn.execute(
-        "INSERT INTO products (name, active, unit_id, product_group_id, "
-        "default_best_before_days, min_stock_amount, created_at, updated_at) "
-        "VALUES (?, 0, ?, ?, 60, 0, datetime('now'), datetime('now'))",
-        (name, unit_id, pg_id),
-    )
-    conn.commit()
-    new_id = cur.lastrowid
-    new_product = {"id": new_id, "name": name, "active": False, "min_stock_amount": 0}
-    name_to_product[name] = new_product
-    return new_id  # type: ignore[return-value]
-
-
-def _strip_parents(
-    conn: sqlite3.Connection,
-    products: list[dict],
-    log: Callable[..., None],
-    group_master_id: int | None = None,
-) -> tuple[set[int], set[int]]:
-    """Remove all parent_id links, deactivate parent placeholders, and delete
-    group-master products before the AI runs.
-
-    Detection uses two criteria (neither requires active=False):
-    1. Any product referenced as parent_id by another product (has children).
-    2. Any product whose product_group_id equals group_master_id (optimizer-created).
-
-    Group-master products are deleted UNLESS they are referenced by a recipe
-    ingredient — those are kept (but deactivated) so recipe links are preserved.
-    All identified parents are marked active=0 to exclude them from the AI feed.
-
-    Returns a tuple of (all_parent_ids, recipe_linked_ids) so the caller can
-    preserve recipe-linked parents in name_to_product for reuse.
-    """
-    # 1. Products referenced as a parent by any other product.
-    # Only TOP-LEVEL parents (parent_id IS NULL) are strippable placeholders.
-    # A variant node (a parent that is itself someone's child) is an atomic
-    # subtree root: phase 2 may re-parent it, but we never strip or
-    # deactivate it, so its SKU children follow it wherever it lands.
-    top_level_ids = {int(p["id"]) for p in products if not p.get("parent_id")}
-    has_children: set[int] = set()
-    for p in products:
-        pid = p.get("parent_id")
-        if pid and int(pid) in top_level_ids:
-            has_children.add(int(pid))
-
-    # 2. Optimizer-created group-master products (safe to delete unless in a recipe)
-    group_master_prods: set[int] = set()
-    if group_master_id is not None:
-        for p in products:
-            if p.get("product_group_id") == group_master_id:
-                group_master_prods.add(int(p["id"]))
-
-    # Never delete group-master products that are referenced by a recipe ingredient
-    recipe_linked: set[int] = set()
-    if group_master_prods:
-        placeholders_gm = ",".join("?" * len(group_master_prods))
-        rows = conn.execute(
-            f"SELECT DISTINCT product_id FROM recipe_ingredients WHERE product_id IN ({placeholders_gm})",
-            list(group_master_prods),
-        ).fetchall()
-        recipe_linked = {int(r["product_id"]) for r in rows}
-        if recipe_linked:
-            log(
-                "Keeping %d group-master product(s) that are referenced by recipes.",
-                len(recipe_linked),
-            )
-
-    deletable_group_masters = group_master_prods - recipe_linked
-
-    all_parent_ids = has_children | group_master_prods
-
-    # Deactivate all identified parents (catches ones still marked active)
-    if all_parent_ids:
-        placeholders = ",".join("?" * len(all_parent_ids))
-        conn.execute(
-            f"UPDATE products SET active = 0 WHERE id IN ({placeholders})",
-            list(all_parent_ids),
-        )
-
-    # Strip parent_id links from direct children of stripped parents only —
-    # NOT a blanket strip of every parent_id in the tree. A variant's own
-    # SKU children keep pointing at it; only links to a stripped top-level
-    # parent are cut (so the orphaned variant is free for phase 2 to
-    # re-parent, subtree intact).
-    stripped = 0
-    for p in products:
-        pid = p.get("parent_id")
-        if pid and int(pid) in all_parent_ids:
-            conn.execute("UPDATE products SET parent_id = NULL WHERE id = ?", (p["id"],))
-            p["parent_id"] = None
-            stripped += 1
-
-    # Delete group-master products that are not referenced by any recipe
-    deleted = 0
-    for pid in deletable_group_masters:
-        conn.execute("DELETE FROM products WHERE id = ?", (pid,))
-        deleted += 1
-
-    conn.commit()
-
-    log(
-        "Clean-slate: stripped parents from %d product(s), "
-        "deactivated %d parent placeholder(s), deleted %d group-master product(s) "
-        "(%d preserved — referenced by recipes).",
-        stripped, len(all_parent_ids), deleted, len(recipe_linked),
-    )
-    return all_parent_ids, recipe_linked
-
-
 # ---------------------------------------------------------------------------
-# Phase 1: structure (categories + parent products)
+# Phase 1: categories (aisle product groups)
 # ---------------------------------------------------------------------------
 
-def _phase1_structure(
+def _phase1_categories(
     conn: sqlite3.Connection,
     products: list[dict],
     cfg: dict[str, str],
     log: Callable[..., None],
     *,
-    product_ids: list[int] | None,
-    name_to_product: dict[str, dict],
-    group_master_id: int | None,
-    initial_parent_names: list[str] | None = None,
     initial_category_names: list[str] | None = None,
     batch_size: int = 100,
 ) -> dict[str, Any]:
-    """Determine categories and parent products for all *products*.
+    """Assign an aisle category to every product in *products*.
 
     Returns:
         product_category:           product_id (int) -> category name
-        product_group_name:         product_id (int) -> parent product name
         category_name_to_group_id:  category name -> product_group id
-        parent_name_to_id:          parent name -> product id
     """
     product_category: dict[int, str] = {}
-    product_group_name: dict[int, str] = {}
     category_name_to_group_id: dict[str, int] = {}
-    parent_name_to_id: dict[str, int] = {}
-    established_parent_names = list(initial_parent_names or [])
     established_category_names = list(initial_category_names or [])
 
-    # Pre-populate category map from existing product groups
     for g in _load_product_groups(conn):
         if g["name"] and g["name"] != "Group master":
             category_name_to_group_id[g["name"]] = g["id"]
 
-    # Default unit fallback (kpl)
-    kpl_row = conn.execute("SELECT id FROM units WHERE name = 'kpl'").fetchone()
-    default_unit_id = kpl_row["id"] if kpl_row else 1
-
     for batch_idx, i in enumerate(range(0, len(products), batch_size)):
         batch = products[i: i + batch_size]
         product_lines = "\n".join(f"  {p['id']}: {p.get('name', p['id'])}" for p in batch)
-
-        parents_section = ""
-        if established_parent_names:
-            parents_str = ", ".join(f'"{n}"' for n in established_parent_names)
-            parents_section = (
-                "Established parent products (use these EXACT names when a "
-                "product fits -- do NOT invent synonyms):\n"
-                f"  {parents_str}\n\n"
-            )
-
         cats_section = ""
         if established_category_names:
             cats_str = ", ".join(f'"{n}"' for n in established_category_names)
@@ -379,19 +185,11 @@ def _phase1_structure(
                 "product fits):\n"
                 f"  {cats_str}\n\n"
             )
-
         prompt = (
             "You are a grocery database expert organising a Finnish home pantry.\n\n"
-            f"{parents_section}"
             f"{cats_section}"
             "For each product below, return a JSON object mapping the product "
             "ID (as a string) to an object with:\n"
-            '  "group_name": (string) a SPECIFIC Finnish parent product name '
-            "that closely matches the product type. Be detailed: use separate "
-            'parents for each distinct product (e.g. "Mustapippuri" for black '
-            'pepper, "Maito" for milk, "Olut" for beer). If an established '
-            "parent name fits, you MUST use that exact name. Null if the "
-            "product is truly unique.\n"
             '  "category": (string) a product category in Finnish at a practical '
             "kitchen-shelf level. If an established category fits, you MUST use "
             "that exact name. Good examples: "
@@ -400,80 +198,47 @@ def _phase1_structure(
             "Hygienia for personal care/bathroom items. Null if truly "
             "one-of-a-kind.\n\n"
             "Return ONLY valid JSON, e.g.:\n"
-            '{\"1\": {\"group_name\": \"Maito\", \"category\": \"Maitotuotteet\"}, '
-            '  \"2\": {\"group_name\": null, \"category\": \"Siivous\"}}\n\n'
+            '{"1": {"category": "Maitotuotteet"}, "2": {"category": "Siivous"}}\n\n'
             "Products:\n"
             f"{product_lines}"
         )
-
         try:
             mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
         except Exception as exc:
-            log("AI structure batch %d failed: %s", batch_idx + 1, exc)
+            log("AI category batch %d failed: %s", batch_idx + 1, exc)
             continue
-
         if isinstance(mapping, list):
-            # Recover: AI returned a list of objects — try to reshape into id→obj dict
-            recovered: dict[str, Any] = {}
-            for item in mapping:
-                if isinstance(item, dict) and "id" in item:
-                    item_id = str(item.pop("id"))
-                    recovered[item_id] = item
-            if recovered:
-                log("AI structure batch %d: recovered list→dict (%d entries).", batch_idx + 1, len(recovered))
-                mapping = recovered
-            else:
-                log("AI structure batch %d: expected dict, got list — cannot recover, skipping.", batch_idx + 1)
-                continue
-        elif not isinstance(mapping, dict):
-            log("AI structure batch %d: expected dict, got %s -- skipping.", batch_idx + 1, type(mapping).__name__)
+            mapping = {
+                str(item.pop("id")): item
+                for item in mapping if isinstance(item, dict) and "id" in item
+            }
+        if not isinstance(mapping, dict):
+            log("AI category batch %d: expected dict, got %s -- skipping.",
+                batch_idx + 1, type(mapping).__name__)
             continue
 
-        batch_parent_names: set[str] = set()
         batch_category_names: set[str] = set()
-
         for product in batch:
-            pid = str(product["id"])
-            info = mapping.get(pid)
+            info = mapping.get(str(product["id"]))
             if not isinstance(info, dict):
                 continue
-
-            gn = info.get("group_name")
-            if gn and isinstance(gn, str) and gn.strip():
-                product_group_name[int(product["id"])] = gn.strip()
-                batch_parent_names.add(gn.strip())
-
             cat = info.get("category")
             if cat and isinstance(cat, str) and cat.strip():
                 product_category[int(product["id"])] = cat.strip()
                 batch_category_names.add(cat.strip())
 
-        # Resolve parent IDs + ensure product group rows exist
-        for pname in batch_parent_names:
-            if pname not in parent_name_to_id:
-                pid_val = _ensure_parent_product(conn, pname, name_to_product, default_unit_id, group_master_id)
-                parent_name_to_id[pname] = pid_val
-
         for cname in batch_category_names:
             if cname not in category_name_to_group_id:
                 category_name_to_group_id[cname] = _ensure_product_group(conn, cname)
-
-        new_parents = [n for n in batch_parent_names if n not in established_parent_names]
-        new_cats = [n for n in batch_category_names if n not in established_category_names]
-        established_parent_names.extend(new_parents)
-        established_category_names.extend(new_cats)
-
-        log(
-            "Structure batch %d/%d: %d parent(s), %d categorie(s) assigned.",
-            batch_idx + 1, -(-len(products) // batch_size),
-            len(batch_parent_names), len(batch_category_names),
+        established_category_names.extend(
+            n for n in batch_category_names if n not in established_category_names
         )
+        log("Category batch %d/%d: %d categorie(s) assigned.",
+            batch_idx + 1, -(-len(products) // batch_size), len(batch_category_names))
 
     return {
         "product_category": product_category,
-        "product_group_name": product_group_name,
         "category_name_to_group_id": category_name_to_group_id,
-        "parent_name_to_id": parent_name_to_id,
     }
 
 
@@ -493,9 +258,7 @@ def _phase2_details(
     batch_size: int = 100,
 ) -> int:
     product_category = p1["product_category"]
-    product_group_name = p1["product_group_name"]
     category_name_to_group_id = p1["category_name_to_group_id"]
-    parent_name_to_id = p1["parent_name_to_id"]
 
     location_names: dict[int, str] = {}
     location_lines = ""
@@ -503,15 +266,6 @@ def _phase2_details(
         location_names = {int(loc["id"]): loc.get("name", str(loc["id"])) for loc in locations}
         location_lines = "\n".join(
             f"  {loc['id']}: {loc.get('name', loc['id'])}" for loc in locations
-        )
-
-    parent_context = ""
-    if parent_name_to_id:
-        parents_str = ", ".join(f'"{n}"' for n in sorted(parent_name_to_id))
-        parent_context = (
-            "Established parent products (for context only -- do not return "
-            "these in your response):\n"
-            f"  {parents_str}\n\n"
         )
 
     updated = 0
@@ -534,7 +288,6 @@ def _phase2_details(
         prompt = (
             "You are a grocery database expert organising a Finnish home pantry.\n\n"
             f"{location_section}"
-            f"{parent_context}"
             "For each product below, return a JSON object mapping the product "
             "ID (as a string) to an object with:\n"
             '  "location_id": (integer) the most appropriate storage location ID, or null.\n'
@@ -625,76 +378,30 @@ def _phase2_details(
                     if base_product and int(base_product["id"]) != product_id:
                         base_pid = int(base_product["id"])
                         try:
-                            conn.execute("SAVEPOINT pack_merge")
-                            # Move barcodes
-                            bc_rows = conn.execute(
-                                "SELECT id, barcode, pack_size FROM barcodes WHERE product_id = ?",
-                                (product_id,),
-                            ).fetchall()
-                            for bc in bc_rows:
-                                conn.execute(
-                                    "UPDATE barcodes SET product_id = ?, pack_size = ? WHERE id = ?",
-                                    (base_pid, pack_size, bc["id"]),
-                                )
-                                log("  -> Moved barcode '%s' from '%s' to '%s' (pack=%d).",
-                                    bc["barcode"], product.get("name"), base_name, pack_size)
-                            # Transfer stock to base product (amount × pack_size)
+                            # A scan of this barcode now adds pack_size base
+                            # units, and a held multi-pack becomes pack_size
+                            # base units; merge.py then moves everything else
+                            # (ingredients, rows, history) without losing it.
+                            conn.execute(
+                                "UPDATE barcodes SET pack_size = ? WHERE product_id = ?",
+                                (pack_size, product_id),
+                            )
                             if pack_size > 1:
-                                stock_rows = conn.execute(
-                                    "SELECT * FROM stock WHERE product_id = ?", (product_id,)
-                                ).fetchall()
-                                for se in stock_rows:
-                                    transferred = float(se["amount"]) * pack_size
-                                    conn.execute(
-                                        """INSERT INTO stock
-                                           (product_id, location_id, amount, unit_id, best_before_date)
-                                           VALUES (?, ?, ?, ?, ?)""",
-                                        (
-                                            base_pid,
-                                            se["location_id"],
-                                            transferred,
-                                            se["unit_id"],
-                                            se["best_before_date"],
-                                        ),
-                                    )
-                                    log("  -> Transferred %.0f (%.0f×%d) stock to '%s'.",
-                                        transferred, float(se["amount"]), pack_size, base_name)
-                            # Move recipe_ingredients to base product before cascade delete
-                            ri_rows = conn.execute(
-                                "SELECT id, recipe_id, product_id FROM recipe_ingredients WHERE product_id = ?",
-                                (product_id,),
-                            ).fetchall()
-                            for ri in ri_rows:
-                                dup = conn.execute(
-                                    "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
-                                    (ri["recipe_id"], base_pid),
-                                ).fetchone()
-                                if dup:
-                                    conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],))
-                                else:
-                                    conn.execute(
-                                        "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
-                                        (base_pid, ri["id"]),
-                                    )
-                            if ri_rows:
-                                log("  -> Moved %d recipe ingredient(s) from '%s' to '%s'.",
-                                    len(ri_rows), product.get("name"), base_name)
-                            # Delete multi-pack product (cascades stock deletion)
-                            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
-                            conn.execute("RELEASE pack_merge")
-                            conn.commit()
-                            log("  -> Deleted multi-pack '%s' (merged into '%s').",
-                                product.get("name"), base_name)
+                                conn.execute(
+                                    "UPDATE stock SET amount = amount * ?, "
+                                    "amount_opened = COALESCE(amount_opened, 0) * ? "
+                                    "WHERE product_id = ?",
+                                    (pack_size, pack_size, product_id),
+                                )
+                            merge_products(conn, product_id, base_pid)
+                            log("  -> Merged multi-pack '%s' into '%s' (pack=%d).",
+                                product.get("name"), base_name, pack_size)
                             updated += 1
                             continue
                         except Exception as exc:
+                            conn.rollback()
                             log("  ! Could not merge '%s' into '%s': %s",
                                 product.get("name"), base_name, exc)
-                            try:
-                                conn.execute("ROLLBACK TO pack_merge")
-                                conn.execute("RELEASE pack_merge")
-                            except Exception:
-                                conn.rollback()
                     elif not base_product or int(base_product["id"]) == product_id:
                         # Rename in place and multiply stock × pack_size
                         if base_name and base_name != product.get("name"):
@@ -765,13 +472,7 @@ def _phase2_details(
                 except Exception as exc:
                     log("  ! Could not set best-before for '%s': %s", product.get("name"), exc)
 
-            # --- Parent + category (from Phase 1) ---
-            # Persist product_group_id from the assigned category INDEPENDENTLY of
-            # parent linkage. Previously this was nested inside the "has parent"
-            # branch, so a product whose AI response had no group_name (truly
-            # unique product) or whose group_name resolved to the product itself
-            # (self-parent skip — common for a freshly added single product) ended
-            # up ungrouped even when a valid category had been assigned.
+            # --- Category (from Phase 1) ---
             cat_name = product_category.get(product_id)
             cg_id = category_name_to_group_id.get(cat_name) if cat_name else None
             if cg_id is not None:
@@ -784,27 +485,6 @@ def _phase2_details(
                 except Exception as exc:
                     log("  ! Could not set product_group for '%s': %s", product.get("name"), exc)
 
-            group_name = product_group_name.get(product_id)
-            if not group_name:
-                log("  ~ No group assigned for '%s' (AI returned null).", product.get("name"))
-            else:
-                parent_id = parent_name_to_id.get(group_name)
-                if parent_id is None:
-                    log("  ~ No parent product found for group '%s' (product: '%s').",
-                        group_name, product.get("name"))
-                elif parent_id == product_id:
-                    log("  ~ Skipped self-parenting for '%s'.", product.get("name"))
-                else:
-                    try:
-                        conn.execute(
-                            "UPDATE products SET parent_id = ? WHERE id = ?",
-                            (parent_id, product_id),
-                        )
-                        log("  -> Grouped '%s' under '%s'.", product.get("name"), group_name)
-                        updated += 1
-                    except Exception as exc:
-                        log("  ! Could not group '%s': %s", product.get("name"), exc)
-
         conn.commit()
         log(
             "Details batch %d/%d done.",
@@ -812,250 +492,6 @@ def _phase2_details(
         )
 
     return updated
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: recipe repair (stub→parent migration, orphan fix, dedup)
-# ---------------------------------------------------------------------------
-
-_RECIPE_STUB_DESCRIPTION = "Auto-created by recipe scraper"
-
-
-def _phase3_recipe_repair(
-    conn: sqlite3.Connection,
-    log: Callable[..., None],
-) -> int:
-    """Repair recipe integrity after optimizer restructuring.
-
-    1. Stub→parent migration: find recipe stubs whose name matches an
-       optimizer-created parent (case-insensitive). Migrate recipe_ingredients
-       from the stub to the parent, then delete the stub.
-    2. Orphan repair: detect recipe_ingredients pointing to deleted products,
-       attempt name-based replacement via the products table.
-    3. Duplicate cleanup: remove duplicate recipe_ingredients
-       (same recipe_id + product_id), keeping the row with the highest amount.
-
-    Returns the number of recipe ingredients repaired.
-    """
-    repaired = 0
-
-    # --- 1. Stub → parent migration ---
-    all_products = conn.execute(
-        "SELECT id, name, description, parent_id, product_group_id, active FROM products"
-    ).fetchall()
-    all_products = [dict(r) for r in all_products]
-
-    stubs: list[dict] = []
-    non_stubs: list[dict] = []
-    for p in all_products:
-        desc = (p.get("description") or "").strip()
-        if _RECIPE_STUB_DESCRIPTION in desc:
-            stubs.append(p)
-        else:
-            non_stubs.append(p)
-
-    if stubs:
-        # Build case-insensitive name → non-stub product map (prefer parents)
-        parent_ids = {int(p["parent_id"]) for p in all_products if p.get("parent_id")}
-        name_to_target: dict[str, dict] = {}
-        for p in non_stubs:
-            key = p["name"].lower().strip()
-            existing = name_to_target.get(key)
-            if existing is None:
-                name_to_target[key] = p
-            elif int(p["id"]) in parent_ids and int(existing["id"]) not in parent_ids:
-                name_to_target[key] = p
-
-        merged = 0
-        for stub in stubs:
-            stub_key = stub["name"].lower().strip()
-            target = name_to_target.get(stub_key)
-            if not target:
-                continue
-
-            stub_id = int(stub["id"])
-            target_id = int(target["id"])
-
-            try:
-                conn.execute("SAVEPOINT stub_merge")
-                # Move recipe_ingredients from stub to target
-                ri_rows = conn.execute(
-                    "SELECT id, recipe_id FROM recipe_ingredients WHERE product_id = ?",
-                    (stub_id,),
-                ).fetchall()
-                moved = 0
-                for ri in ri_rows:
-                    dup = conn.execute(
-                        "SELECT id FROM recipe_ingredients WHERE recipe_id = ? AND product_id = ?",
-                        (ri["recipe_id"], target_id),
-                    ).fetchone()
-                    if dup:
-                        conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],))
-                    else:
-                        conn.execute(
-                            "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
-                            (target_id, ri["id"]),
-                        )
-                    moved += 1
-
-                # Delete the stub product
-                conn.execute("DELETE FROM products WHERE id = ?", (stub_id,))
-                conn.execute("RELEASE stub_merge")
-                log("  -> Merged recipe stub '%s' (ID %d) → '%s' (ID %d): %d ingredient(s) moved.",
-                    stub["name"], stub_id, target["name"], target_id, moved)
-                merged += 1
-                repaired += moved
-            except Exception as exc:
-                log("  ! Could not merge stub '%s': %s", stub["name"], exc)
-                try:
-                    conn.execute("ROLLBACK TO stub_merge")
-                    conn.execute("RELEASE stub_merge")
-                except Exception:
-                    conn.rollback()
-
-        conn.commit()
-        if merged:
-            log("Recipe repair: merged %d stub product(s).", merged)
-
-    # --- 2. Orphan repair ---
-    orphans = conn.execute(
-        "SELECT ri.id, ri.recipe_id, ri.product_id "
-        "FROM recipe_ingredients ri "
-        "LEFT JOIN products p ON ri.product_id = p.id "
-        "WHERE p.id IS NULL"
-    ).fetchall()
-    if orphans:
-        log("Recipe repair: found %d orphaned recipe ingredient(s).", len(orphans))
-        conn.execute("SAVEPOINT orphan_repair")
-        try:
-            for orph in orphans:
-                conn.execute("DELETE FROM recipe_ingredients WHERE id = ?", (orph["id"],))
-                repaired += 1
-            conn.execute("RELEASE orphan_repair")
-            conn.commit()
-            log("Recipe repair: removed %d orphaned ingredient(s).", len(orphans))
-        except Exception as exc:
-            log("  ! Orphan repair failed: %s", exc)
-            try:
-                conn.execute("ROLLBACK TO orphan_repair")
-                conn.execute("RELEASE orphan_repair")
-            except Exception:
-                conn.rollback()
-
-    # --- 3. Duplicate cleanup ---
-    duplicates = conn.execute(
-        "SELECT recipe_id, product_id, COUNT(*) AS cnt, MAX(amount) AS max_amount "
-        "FROM recipe_ingredients "
-        "GROUP BY recipe_id, product_id "
-        "HAVING cnt > 1"
-    ).fetchall()
-    if duplicates:
-        deduped = 0
-        conn.execute("SAVEPOINT dedup_repair")
-        try:
-            for dup in duplicates:
-                keeper = conn.execute(
-                    "SELECT id FROM recipe_ingredients "
-                    "WHERE recipe_id = ? AND product_id = ? "
-                    "ORDER BY amount DESC LIMIT 1",
-                    (dup["recipe_id"], dup["product_id"]),
-                ).fetchone()
-                if keeper:
-                    conn.execute(
-                        "DELETE FROM recipe_ingredients "
-                        "WHERE recipe_id = ? AND product_id = ? AND id != ?",
-                        (dup["recipe_id"], dup["product_id"], keeper["id"]),
-                    )
-                    deduped += 1
-            conn.execute("RELEASE dedup_repair")
-            conn.commit()
-        except Exception as exc:
-            log("  ! Dedup repair failed: %s", exc)
-            try:
-                conn.execute("ROLLBACK TO dedup_repair")
-                conn.execute("RELEASE dedup_repair")
-            except Exception:
-                conn.rollback()
-        if deduped:
-            log("Recipe repair: deduplicated %d recipe-product pair(s).", deduped)
-            repaired += deduped
-
-    # --- 4. Re-link stale recipe ingredient product_ids ---
-    # After optimize, recipe ingredients may point to old parent IDs while the
-    # current parent with the same name has a different ID (children point to
-    # the new one).  Find mismatches and update recipe_ingredients.
-    all_products_now = conn.execute(
-        "SELECT id, name, parent_id, product_group_id, active FROM products"
-    ).fetchall()
-    all_products_now = [dict(r) for r in all_products_now]
-
-    # Build current parent→children map
-    current_parents: set[int] = set()
-    for p in all_products_now:
-        if p.get("parent_id"):
-            current_parents.add(int(p["parent_id"]))
-
-    # Map name (lowercase) → current parent product (prefer products that
-    # actually have children pointing to them)
-    name_to_current_parent: dict[str, dict] = {}
-    products_by_id_now = {p["id"]: p for p in all_products_now}
-    for pid in current_parents:
-        pp = products_by_id_now.get(pid)
-        if pp:
-            name_to_current_parent[pp["name"].lower().strip()] = pp
-
-    # Also include group-master products that may not have children yet
-    for p in all_products_now:
-        key = p["name"].lower().strip()
-        if key not in name_to_current_parent and not p.get("active"):
-            if p.get("product_group_id") is not None:
-                name_to_current_parent[key] = p
-
-    ri_all = conn.execute(
-        "SELECT id, recipe_id, product_id FROM recipe_ingredients"
-    ).fetchall()
-
-    relinked = 0
-    conn.execute("SAVEPOINT relink_repair")
-    try:
-        for ri in ri_all:
-            ri_pid = int(ri["product_id"])
-            product = products_by_id_now.get(ri_pid)
-            if product is None:
-                continue  # handled by orphan repair above
-            pname_key = product["name"].lower().strip()
-            current = name_to_current_parent.get(pname_key)
-            if current and int(current["id"]) != ri_pid:
-                # Recipe points to an old product; update to the current parent
-                dup_check = conn.execute(
-                    "SELECT id FROM recipe_ingredients "
-                    "WHERE recipe_id = ? AND product_id = ?",
-                    (ri["recipe_id"], current["id"]),
-                ).fetchone()
-                if dup_check:
-                    conn.execute(
-                        "DELETE FROM recipe_ingredients WHERE id = ?", (ri["id"],)
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE recipe_ingredients SET product_id = ? WHERE id = ?",
-                        (current["id"], ri["id"]),
-                    )
-                relinked += 1
-        conn.execute("RELEASE relink_repair")
-        conn.commit()
-    except Exception as exc:
-        log("  ! Re-link repair failed: %s", exc)
-        try:
-            conn.execute("ROLLBACK TO relink_repair")
-            conn.execute("RELEASE relink_repair")
-        except Exception:
-            conn.rollback()
-    if relinked:
-        log("Recipe repair: re-linked %d ingredient(s) to current parent product(s).", relinked)
-        repaired += relinked
-
-    return repaired
 
 
 # ---------------------------------------------------------------------------
@@ -1069,14 +505,18 @@ def run_optimize(
     emit: Callable[[str], None] | None = None,
     enforced_categories: list[str] | None = None,
     fresh_seed: bool = False,
+    link: bool = True,
 ) -> dict[str, int]:
-    """Run the full AI optimize pipeline.
+    """Run the AI enrichment pipeline.
 
-    *product_ids* = None  → full mode (all products, clean-slate parent strip)
-    *product_ids* = [...]  → incremental mode (only those products)
-    *emit*  → optional callable for streaming log messages to the frontend
-    *enforced_categories* → category names the AI must prefer and that will
-                            always be created as product_group rows
+    *product_ids* = None  → every SKU in the catalog
+    *product_ids* = [...] → only those products
+    *emit*                → optional callable streaming log lines to the UI
+    *enforced_categories* → category names the AI must prefer; always created
+    *fresh_seed*          → accepted for API compatibility, ignored (there is
+                            no parent naming to seed any more)
+    *link*                → finish with the linker: the reconcile sweep for a
+                            full run, link_products for an explicit list
 
     Returns ``{"updated": int}``.
     """
@@ -1089,41 +529,14 @@ def run_optimize(
     cfg = _get_ai_config(conn)
     batch_size = get_batch_size(conn)
     log("Batch size: %d product(s) per AI call.", batch_size)
+    if fresh_seed:
+        log("Fresh naming no longer applies: optimize does not create parent products.")
 
-    # --- Load data ---
     all_products = _load_products(conn)
     locations = _load_locations(conn)
     name_to_product = {p.get("name", ""): p for p in all_products}
-
-    # Ensure "Group master" product group exists
-    group_master_id: int | None = None
-    try:
-        group_master_id = _ensure_product_group(conn, "Group master")
-    except Exception as exc:
-        log("Could not ensure 'Group master' group: %s", exc)
-
-    # --- Determine working set ---
-    old_parent_ids: set[int] = set()
-    recipe_linked_ids: set[int] = set()
     if product_ids is None:
-        # Full mode: strip all parents, exclude old parent placeholders
-        old_parent_ids, recipe_linked_ids = _strip_parents(conn, all_products, log, group_master_id)
-        products = [p for p in all_products if int(p["id"]) not in old_parent_ids]
-        # Purge deleted/deactivated parents from name lookup so _ensure_parent_product
-        # creates fresh entries — BUT keep recipe-linked parents so the AI can
-        # reuse them instead of creating duplicates.
-        for p in all_products:
-            pid = int(p["id"])
-            if pid in old_parent_ids and pid not in recipe_linked_ids:
-                name_to_product.pop(p.get("name", ""), None)
-        # Re-add recipe-linked parents that may have been overwritten by
-        # non-recipe-linked duplicates with the same name (dict collision fix).
-        for p in all_products:
-            pid = int(p["id"])
-            if pid in recipe_linked_ids:
-                pname = p.get("name", "")
-                if pname and pname not in name_to_product:
-                    name_to_product[pname] = p
+        products = [p for p in all_products if p.get("kind", "sku") == "sku"]
     else:
         allowed = set(product_ids)
         products = [p for p in all_products if int(p["id"]) in allowed]
@@ -1133,94 +546,28 @@ def run_optimize(
         return {"updated": 0}
 
     log("Starting AI optimize for %d product(s)…", len(products))
-
-    # --- Pre-load existing context (for incremental mode) ---
-    initial_parent_names: list[str] | None = None
-    initial_category_names: list[str] | None = None
-    initial_parent_name_to_id: dict[str, int] | None = None
-    initial_category_name_to_group_id: dict[str, int] | None = None
-
-    if product_ids is not None:
-        has_children: set[int] = set()
-        for p in all_products:
-            if p.get("parent_id"):
-                has_children.add(int(p["parent_id"]))
-        initial_parent_names = sorted({
-            p.get("name", "") for p in all_products
-            if int(p["id"]) in has_children and p.get("name")
-        })
-        initial_parent_name_to_id = {
-            p.get("name", ""): int(p["id"])
-            for p in all_products if int(p["id"]) in has_children
-        }
-        groups = _load_product_groups(conn)
-        initial_category_names = sorted({
-            g["name"] for g in groups
-            if g.get("name") and g["name"] != "Group master"
-        })
-        initial_category_name_to_group_id = {
-            g["name"]: g["id"] for g in groups if g.get("name")
-        }
-    else:
-        # Full mode: seed Phase 1 with old parent names so the AI reuses them
-        # (names collected from in-memory all_products AFTER strip deleted them from DB)
-        if fresh_seed:
-            initial_parent_names = []
-            log("Fresh-seed mode: skipping old parent name seed.")
-        else:
-            initial_parent_names = sorted({
-                p.get("name", "") for p in all_products
-                if int(p["id"]) in old_parent_ids and p.get("name")
-            })
-        initial_parent_name_to_id = {}  # IDs are stale/deleted; new products created
-        groups = _load_product_groups(conn)
-        initial_category_names = sorted({
-            g["name"] for g in groups
-            if g.get("name") and g["name"] != "Group master"
-        })
-        initial_category_name_to_group_id = {
-            g["name"]: g["id"] for g in groups if g.get("name")
-        }
-        if initial_parent_names and not fresh_seed:
-            log("Seeding Phase 1 with %d existing parent name(s) for consistency.",
-                len(initial_parent_names))
-
-    # --- Phase 1: structure ---
-    # Merge enforced_categories into initial list so AI strongly prefers them
-    merged_category_names = list(initial_category_names or [])
+    groups = _load_product_groups(conn)
+    category_names = sorted({
+        g["name"] for g in groups if g.get("name") and g["name"] != "Group master"
+    })
+    for cat in enforced_categories or []:
+        if cat and cat not in category_names:
+            category_names.append(cat)
     if enforced_categories:
-        for cat in enforced_categories:
-            if cat and cat not in merged_category_names:
-                merged_category_names.append(cat)
         log("Enforcing %d user-defined category/categories.", len(enforced_categories))
 
-    log("Phase 1: assigning categories and parent products…")
-    p1 = _phase1_structure(
+    log("Phase 1: assigning categories…")
+    p1 = _phase1_categories(
         conn, products, cfg, log,
-        product_ids=product_ids,
-        name_to_product=name_to_product,
-        group_master_id=group_master_id,
-        initial_parent_names=initial_parent_names,
-        initial_category_names=merged_category_names or None,
+        initial_category_names=category_names or None,
         batch_size=batch_size,
     )
+    for cat in enforced_categories or []:
+        if cat and cat not in p1["category_name_to_group_id"]:
+            p1["category_name_to_group_id"][cat] = _ensure_product_group(conn, cat)
+            log("  Created enforced product group '%s'.", cat)
+    conn.commit()
 
-    if initial_parent_name_to_id:
-        p1["parent_name_to_id"].update(initial_parent_name_to_id)
-    if initial_category_name_to_group_id:
-        for k, v in initial_category_name_to_group_id.items():
-            p1["category_name_to_group_id"].setdefault(k, v)
-
-    # Ensure every enforced category exists as a product_group row
-    if enforced_categories:
-        for cat in enforced_categories:
-            if cat and cat not in p1["category_name_to_group_id"]:
-                gid = _ensure_product_group(conn, cat)
-                p1["category_name_to_group_id"][cat] = gid
-                log("  Created enforced product group '%s'.", cat)
-        conn.commit()
-
-    # --- Phase 2: details ---
     log("Phase 2: assigning locations, best-before, and pack info…")
     updated = _phase2_details(
         conn, products, p1, locations, cfg, log,
@@ -1228,13 +575,18 @@ def run_optimize(
         batch_size=batch_size,
     )
 
-    # --- Phase 3: recipe repair ---
-    log("Phase 3: repairing recipe integrity…")
-    recipe_repaired = _phase3_recipe_repair(conn, log)
-    if recipe_repaired:
-        log("Recipe repair: %d ingredient(s) repaired.", recipe_repaired)
-    else:
-        log("Recipe repair: no issues found.")
+    if link:
+        import linker
+        if product_ids is None:
+            res = linker.run_reconcile(conn)
+            log("Linker sweep: %d linked, %d proposed.", res["linked"], res["proposed"])
+        else:
+            existing = [
+                pid for pid in product_ids
+                if conn.execute("SELECT 1 FROM products WHERE id = ?", (pid,)).fetchone()
+            ]
+            res = linker.link_products(conn, existing)
+            log("Linker: %d linked, %d proposed.", len(res["linked"]), len(res["proposed"]))
 
     log("Optimize complete — %d field(s) updated.", updated)
     return {"updated": updated}
