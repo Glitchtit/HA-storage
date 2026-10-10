@@ -1,3 +1,8 @@
+## 0.27.1
+
+- Undoing a mis-scan (`/stock/correct-purchase`, HA-stock's swipe −1) puts back the shopping rows the scan took off the list, with their note, recipe and set; a row you removed by hand afterwards stays removed, and a ticked row is left alone. The answer lists them (`restored_rows`)
+- HA integration 0.6.1: no more "Could not register Storage panel" warning at start. The integration no longer tries to add a sidebar panel of its own; the add-on's own "Storage" sidebar entry is the UI
+
 ## 0.27.0
 
 - Each shopping row says what to buy: under a generic item, the product you buy most (last half year, else the last one bought), and how many packages cover the amount, marked approximate when estimated (`display.buy_product_id`, `buy_product_name`, `buy_count`, `approx`)
