@@ -1,3 +1,18 @@
+## 0.27.0
+
+- Each shopping row says what to buy: under a generic item, the product you buy most (last half year, else the last one bought), and how many packages cover the amount, marked approximate when estimated (`display.buy_product_id`, `buy_product_name`, `buy_count`, `approx`)
+- Buying a product clears its own rows and the rows of the generic items above it, converted into each row's unit: a 2 kg flour bag covers "5 dl vehnäjauho", a 10-egg carton "6 kpl kananmuna". A row the purchase cannot be measured against counts as bought; a pinned item still waits for its exact product. `/stock/add` returns the rows it cleared (`cleared_rows`)
+- Committing a receipt clears shopping rows and updates minimum-stock rows at once, like scanning
+- `POST /api/shopping-list/apply-basket` re-applies scanned products that cleared nothing (they may have been sorted under a generic item since), so finishing a trip needs the AI match only for what is left
+- `POST /api/shopping-list/{id}/swap` changes what to buy and keeps the row's amount, unit, recipe, set and note; a product under the row's generic item becomes its preferred product
+- A row's amount can be set in packages (`PUT {amount, unit_id: null}`); zero or negative amounts are refused, and clearing a note no longer breaks the list
+- `GET /api/recipes` counts each recipe's missing and partial ingredients (`missing_count`, `yellow_count`); `GET /api/recipes/suggest` lists recipes you can cook now, those using soon-expiring stock first, counting stock under each ingredient
+- `GET /api/products/lookup?name=` finds what a spoken name means, aliases and generic items first
+- Renaming a product renames its shopping rows
+- Recipe import flags a line with an unknown unit word and no amount, and a known variant no longer creates its generic as a stray new concept
+- Each request gets its own database connection: bursts of requests (HA-stock opening) no longer fail with "bad parameter or other API misuse", and a failed request cannot leave half of its writes behind
+- HA integration 0.6.0: shopping-list items show their quantity ("Kerma 3,5 dl"), and adding by name asks Storage first, so "maito" adds the generic item
+
 ## 0.26.2
 
 - Minimum-stock rows for concepts come only from Storage's own sync, which counts the stock of every product under the concept; an HA-stock tab that has not reloaded since 2.12.1 can no longer add them from the concept's own, empty stock
