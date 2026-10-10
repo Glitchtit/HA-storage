@@ -6,7 +6,15 @@ from collections import deque
 
 from fastapi import APIRouter, HTTPException, Query
 
-from models import Conversion, ConversionCreate, ConversionResult, Unit, UnitCreate
+from models import (
+    Conversion,
+    ConversionCreate,
+    ConversionResult,
+    Unit,
+    UnitCreate,
+    UnitResolveResult,
+)
+from quantity import DIMENSIONS, normalize_unit_text
 
 router = APIRouter(tags=["units"])
 
@@ -23,17 +31,40 @@ def list_units():
     return _get_db().execute("SELECT * FROM units ORDER BY abbreviation").fetchall()
 
 
+@router.get("/units/resolve", response_model=UnitResolveResult)
+def resolve_unit_text(text: str = Query(..., min_length=1)):
+    """Map free unit text ("msk", "burk", "cups") to a Storage unit.
+
+    The multiplier converts an amount written in `text` into the returned
+    unit (1 cup = 2.4 dl). 404 when the text is not a known unit word —
+    callers must surface that instead of guessing a unit.
+    """
+    hit = normalize_unit_text(text)
+    if hit is None:
+        raise HTTPException(404, f"Unknown unit '{text}'")
+    abbr, multiplier = hit
+    row = _get_db().execute(
+        "SELECT id FROM units WHERE abbreviation = ?", (abbr,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, f"Unit '{abbr}' is not installed")
+    return UnitResolveResult(unit_id=row["id"], abbreviation=abbr, multiplier=multiplier)
+
+
 @router.post("/units", response_model=Unit, status_code=201)
 def create_unit(body: UnitCreate):
     conn = _get_db()
+    if body.dimension is not None and body.dimension not in DIMENSIONS:
+        raise HTTPException(400, f"dimension must be one of {DIMENSIONS}")
     existing = conn.execute(
         "SELECT id FROM units WHERE abbreviation = ?", (body.abbreviation,)
     ).fetchone()
     if existing:
         raise HTTPException(409, f"Unit '{body.abbreviation}' already exists")
     cur = conn.execute(
-        "INSERT INTO units (name, abbreviation, name_plural) VALUES (?, ?, ?)",
-        (body.name, body.abbreviation, body.name_plural),
+        "INSERT INTO units (name, abbreviation, name_plural, dimension, base_factor) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (body.name, body.abbreviation, body.name_plural, body.dimension, body.base_factor),
     )
     conn.commit()
     return conn.execute("SELECT * FROM units WHERE id = ?", (cur.lastrowid,)).fetchone()

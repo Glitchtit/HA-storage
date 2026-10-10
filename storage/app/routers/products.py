@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 
@@ -18,6 +19,61 @@ log = logging.getLogger(__name__)
 def _get_db():
     from main import get_connection
     return get_connection()
+
+
+KINDS = ("concept", "sku")
+# Fact columns whose provenance is tracked in products.facts_meta. The two
+# content columns share one key because they are one fact ("2 kg").
+_FACT_FIELDS = ("content_amount", "content_unit_id", "pack_count", "density_g_ml", "piece_weight_g")
+
+
+def _fact_key(field: str) -> str:
+    return "content" if field.startswith("content_") else field
+
+
+def _group_master_id(conn) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM product_groups WHERE name = 'Group master'"
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _infer_kind(conn, kind: str | None, product_group_id: int | None) -> str:
+    """Explicit kind wins; otherwise products filed under the legacy
+    "Group master" group are concepts (recipe stubs, optimizer parents)."""
+    if kind is not None:
+        if kind not in KINDS:
+            raise HTTPException(400, f"kind must be one of {KINDS}")
+        return kind
+    gm = _group_master_id(conn)
+    if gm is not None and product_group_id == gm:
+        return "concept"
+    return "sku"
+
+
+def _manual_facts_meta(existing_json: str | None, changed: dict) -> str | None:
+    """Mark each changed fact as 'manual'; a fact cleared to NULL loses its
+    provenance entry. Returns the JSON to store (None when empty)."""
+    try:
+        meta = json.loads(existing_json or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except ValueError:
+        meta = {}
+    for field, value in changed.items():
+        key = _fact_key(field)
+        if value is None:
+            meta.pop(key, None)
+        else:
+            meta[key] = "manual"
+    return json.dumps(meta, sort_keys=True) if meta else None
+
+
+def _validate_unit(conn, unit_id: int | None, label: str) -> None:
+    if unit_id is not None and not conn.execute(
+        "SELECT id FROM units WHERE id = ?", (unit_id,)
+    ).fetchone():
+        raise HTTPException(400, f"{label} {unit_id} not found")
 
 
 def _stores_by_product(conn, product_ids: list[int] | None = None) -> dict[int, list[dict]]:
@@ -202,23 +258,28 @@ def get_product_by_barcode(barcode: str):
 @router.post("/products", response_model=Product, status_code=201)
 def create_product(body: ProductCreate):
     conn = _get_db()
-    # Validate unit exists
-    if not conn.execute("SELECT id FROM units WHERE id = ?", (body.unit_id,)).fetchone():
-        raise HTTPException(400, f"Unit {body.unit_id} not found")
+    _validate_unit(conn, body.unit_id, "Unit")
+    _validate_unit(conn, body.content_unit_id, "Content unit")
+    kind = _infer_kind(conn, body.kind, body.product_group_id)
     try:
         tree.assert_valid_parent(conn, None, body.parent_id)
     except ValueError as exc:
+        conn.rollback()
         raise HTTPException(400, str(exc))
+    facts = {f: getattr(body, f) for f in _FACT_FIELDS if getattr(body, f) is not None}
     cur = conn.execute(
         """INSERT INTO products (name, description, parent_id, location_id,
            product_group_id, unit_id, default_best_before_days, min_stock_amount,
-           picture_filename, active, unit_price, unit_price_currency, pack_count, staple)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           picture_filename, active, unit_price, unit_price_currency, pack_count, staple,
+           kind, content_amount, content_unit_id, density_g_ml, piece_weight_g, facts_meta)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             body.name, body.description, body.parent_id, body.location_id,
             body.product_group_id, body.unit_id, body.default_best_before_days,
             body.min_stock_amount, body.picture_filename, int(body.active),
             body.unit_price, body.unit_price_currency or "EUR", body.pack_count, int(body.staple),
+            kind, body.content_amount, body.content_unit_id, body.density_g_ml,
+            body.piece_weight_g, _manual_facts_meta(None, facts),
         ),
     )
     conn.commit()
@@ -259,14 +320,32 @@ def update_product(product_id: int, body: ProductUpdate):
         return existing
 
     if "unit_id" in updates:
-        if not conn.execute("SELECT id FROM units WHERE id = ?", (updates["unit_id"],)).fetchone():
-            raise HTTPException(400, f"Unit {updates['unit_id']} not found")
+        _validate_unit(conn, updates["unit_id"], "Unit")
+    if "content_unit_id" in updates:
+        _validate_unit(conn, updates["content_unit_id"], "Content unit")
+
+    if "kind" in updates:
+        if updates["kind"] not in KINDS:
+            raise HTTPException(400, f"kind must be one of {KINDS}")
+        has_children = conn.execute(
+            "SELECT 1 FROM products WHERE parent_id = ? LIMIT 1", (product_id,)
+        ).fetchone()
+        if updates["kind"] == "sku" and has_children:
+            raise HTTPException(400, "A product with sub-products must stay a concept")
 
     if "parent_id" in updates:
         try:
             tree.assert_valid_parent(conn, product_id, updates["parent_id"])
         except ValueError as exc:
+            conn.rollback()
             raise HTTPException(400, str(exc))
+
+    changed_facts = {
+        f: updates[f] for f in _FACT_FIELDS
+        if f in updates and updates[f] != existing[f]
+    }
+    if changed_facts:
+        updates["facts_meta"] = _manual_facts_meta(existing["facts_meta"], changed_facts)
 
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     params = list(updates.values()) + [product_id]

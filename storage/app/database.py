@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS units (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL,
     abbreviation TEXT NOT NULL UNIQUE,
-    name_plural  TEXT DEFAULT ''
+    name_plural  TEXT DEFAULT '',
+    dimension    TEXT,
+    base_factor  REAL
 );
 
 CREATE TABLE IF NOT EXISTS locations (
@@ -55,6 +57,12 @@ CREATE TABLE IF NOT EXISTS products (
     unit_price_currency     TEXT DEFAULT 'EUR',
     pack_count              REAL,
     staple                  INTEGER DEFAULT 0,
+    kind                    TEXT NOT NULL DEFAULT 'sku',
+    content_amount          REAL,
+    content_unit_id         INTEGER REFERENCES units(id),
+    density_g_ml            REAL,
+    piece_weight_g          REAL,
+    facts_meta              TEXT,
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -560,6 +568,26 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
         log.info("Added bundle_id column to shopping_list.")
 
+    # ── Quantity model (2026-10): unit dimensions + product roles/facts ───
+    unit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(units)").fetchall()}
+    for col, ddl in (("dimension", "TEXT"), ("base_factor", "REAL")):
+        if col not in unit_cols:
+            conn.execute(f"ALTER TABLE units ADD COLUMN {col} {ddl}")
+            log.info("Added %s column to units.", col)
+    product_cols = {r["name"] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
+    for col, ddl in (
+        ("kind", "TEXT NOT NULL DEFAULT 'sku'"),
+        ("content_amount", "REAL"),
+        ("content_unit_id", "INTEGER REFERENCES units(id)"),
+        ("density_g_ml", "REAL"),
+        ("piece_weight_g", "REAL"),
+        ("facts_meta", "TEXT"),
+    ):
+        if col not in product_cols:
+            conn.execute(f"ALTER TABLE products ADD COLUMN {col} {ddl}")
+            log.info("Added %s column to products.", col)
+    conn.commit()
+
 
 def _backfill_recipe_specificity(conn: sqlite3.Connection) -> int:
     """Heuristic: for each loose ingredient whose `note` mentions a name that
@@ -613,21 +641,51 @@ def _backfill_recipe_specificity(conn: sqlite3.Connection) -> int:
     return upgraded
 
 
+def _ensure_unit_catalog(conn: sqlite3.Connection) -> None:
+    """Make every quantity.UNIT_CATALOG unit exist with its dimension and base
+    factor. Existing rows keep their name; only missing dimension/base_factor
+    values are filled in. Idempotent; runs on every start."""
+    from quantity import UNIT_CATALOG
+
+    existing = {
+        r["abbreviation"]: r
+        for r in conn.execute("SELECT id, abbreviation, dimension FROM units").fetchall()
+    }
+    for abbr, (name, plural, dimension, base_factor) in UNIT_CATALOG.items():
+        row = existing.get(abbr)
+        if row is None:
+            conn.execute(
+                "INSERT INTO units (name, abbreviation, name_plural, dimension, base_factor) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, abbr, plural, dimension, base_factor),
+            )
+        elif row["dimension"] is None:
+            conn.execute(
+                "UPDATE units SET dimension = ?, base_factor = ? WHERE id = ?",
+                (dimension, base_factor, row["id"]),
+            )
+    conn.commit()
+
+
 def init_db(conn: sqlite3.Connection) -> None:
-    """Create tables if they don't exist and seed initial data."""
+    """Create tables if they don't exist, seed initial data, run migrations."""
     conn.executescript(_SCHEMA_SQL)
 
     # Schema migrations for existing databases
     _migrate_schema(conn)
 
-    # Check if already seeded
     row = conn.execute(
         "SELECT value FROM _meta WHERE key = 'schema_version'"
     ).fetchone()
     if row:
         log.info("Database already initialized (schema v%s).", row["value"])
-        return
+    else:
+        _seed(conn)
+    _ensure_unit_catalog(conn)
 
+
+def _seed(conn: sqlite3.Connection) -> None:
+    """Seed a brand-new database with units, conversions and locations."""
     log.info("Seeding database with standard units, conversions, and locations...")
 
     # Seed units

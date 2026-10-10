@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── Units ──────────────────────────────────────────────────────────────────
@@ -11,9 +13,18 @@ class UnitCreate(BaseModel):
     name: str
     abbreviation: str
     name_plural: str = ""
+    # mass | volume | count | package | vague (see quantity.py). A unit without
+    # a dimension is treated as vague: it can be stored but never converted.
+    dimension: str | None = None
+    base_factor: float | None = None
 
 class Unit(UnitCreate):
     id: int
+
+class UnitResolveResult(BaseModel):
+    unit_id: int
+    abbreviation: str
+    multiplier: float
 
 # ── Locations ──────────────────────────────────────────────────────────────
 
@@ -50,6 +61,12 @@ class ProductCreate(BaseModel):
     unit_price_currency: str = "EUR"
     pack_count: float | None = None
     staple: bool = False
+    # 'concept' | 'sku'; None lets Storage infer it ("Group master" → concept).
+    kind: str | None = None
+    content_amount: float | None = None
+    content_unit_id: int | None = None
+    density_g_ml: float | None = None
+    piece_weight_g: float | None = None
 
 class ProductUpdate(BaseModel):
     name: str | None = None
@@ -66,6 +83,11 @@ class ProductUpdate(BaseModel):
     unit_price_currency: str | None = None
     pack_count: float | None = None
     staple: bool | None = None
+    kind: str | None = None
+    content_amount: float | None = None
+    content_unit_id: int | None = None
+    density_g_ml: float | None = None
+    piece_weight_g: float | None = None
 
 class Product(BaseModel):
     id: int
@@ -83,6 +105,13 @@ class Product(BaseModel):
     unit_price_currency: str | None = None
     pack_count: float | None = None
     staple: int | bool = 0
+    kind: str = "sku"
+    content_amount: float | None = None
+    content_unit_id: int | None = None
+    density_g_ml: float | None = None
+    piece_weight_g: float | None = None
+    # Provenance per fact: {"content": "name", "density_g_ml": "ai", ...}.
+    facts_meta: dict[str, str] = {}
     created_at: str
     updated_at: str
     stock_amount: float = 0
@@ -97,6 +126,19 @@ class Product(BaseModel):
     # Per-store assortment availability (see routers/stores.py). Populated by
     # the products read endpoints from product_availability ⋈ stores.
     stores: list["ProductStoreInfo"] = []
+
+    @field_validator("facts_meta", mode="before")
+    @classmethod
+    def _parse_facts_meta(cls, value):
+        if value is None or value == "":
+            return {}
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return value
 
 class ProductDetail(Product):
     """Product with related data included."""
