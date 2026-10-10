@@ -19,6 +19,7 @@ from models import (
     StockSummary,
     StockTransfer,
 )
+from list_clearing import restore_cleared
 from routers.history import log_event
 from routers.shopping import sync_auto_shopping, consume_shopping_for_purchase
 
@@ -194,7 +195,7 @@ def add_stock(body: StockAdd):
     linker.maybe_link_after_purchase(conn, body.product_id)
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
     try:
-        cleared = consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id)
+        cleared = consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id, cur.lastrowid)
     except Exception as exc:  # noqa: BLE001 — the purchase is saved; a list side effect never fails it
         conn.rollback()
         log.warning("Clearing the shopping list for product %d failed: %s", body.product_id, exc)
@@ -267,7 +268,8 @@ def correct_purchase(body: StockCorrectPurchase):
     what was *just added*: it removes stock LIFO (newest lots first) and reduces
     the matching recent 'purchase' history events instead of recording a
     consumption. The net result reads as a clean purchase with no phantom
-    consume row. Used by HA-stock's shopping-mode swipe-down on recents.
+    consume row. The shopping rows those purchases took are put back
+    (`restored_rows`). Used by HA-stock's shopping-mode swipe-down on recents.
     """
     conn = _get_db()
 
@@ -276,12 +278,28 @@ def correct_purchase(body: StockCorrectPurchase):
         "SELECT * FROM stock WHERE product_id = ? AND amount > 0 ORDER BY id DESC",
         (body.product_id,),
     ).fetchall()
+    plan, left = [], body.amount
+    for entry in entries:
+        if left <= 0:
+            break
+        plan.append((entry, min(left, entry["amount"])))
+        left -= plan[-1][1]
+
+    # Put back what those purchases took off the shopping list. A list side
+    # effect never fails the correction itself.
+    restored: list[dict] = []
+    try:
+        for entry, take in plan:
+            restored.extend(restore_cleared(conn, entry["id"], take))
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        log.warning("Restoring shopping rows for product %d failed: %s", body.product_id, exc)
+        restored = []
+
     remaining = body.amount
     corrected = 0.0
-    for entry in entries:
-        if remaining <= 0:
-            break
-        take = min(remaining, entry["amount"])
+    for entry, take in plan:
         new_amount = entry["amount"] - take
         if new_amount <= 0:
             conn.execute("DELETE FROM stock WHERE id = ?", (entry["id"],))
@@ -327,8 +345,12 @@ def correct_purchase(body: StockCorrectPurchase):
 
     conn.commit()
     log.info("Corrected %.1f purchase units for product %d.", corrected, body.product_id)
-    sync_auto_shopping(conn)
-    return {"corrected": corrected, "remaining": remaining}
+    try:
+        sync_auto_shopping(conn)
+    except Exception as exc:  # noqa: BLE001 — a list side effect never fails the correction
+        conn.rollback()
+        log.warning("Minimum-stock sync after a correction of product %d failed: %s", body.product_id, exc)
+    return {"corrected": corrected, "remaining": remaining, "restored_rows": restored}
 
 
 @router.post("/stock/open", status_code=200)

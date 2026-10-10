@@ -234,6 +234,20 @@ CREATE TABLE IF NOT EXISTS bundle_items (
     UNIQUE(bundle_id, product_id)
 );
 
+-- What each purchase took off the shopping list, so undoing a mis-scan
+-- (/stock/correct-purchase) can put it back. One row per touched list row.
+CREATE TABLE IF NOT EXISTS purchase_clearings (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id        INTEGER NOT NULL REFERENCES stock(id) ON DELETE CASCADE,
+    purchase_amount REAL NOT NULL,       -- the lot's purchase still undoable
+    row_id          INTEGER NOT NULL,    -- shopping_list.id (kept when restored)
+    removed         INTEGER NOT NULL,    -- the purchase removed the row
+    taken           REAL NOT NULL,       -- amount taken, in the row's unit
+    row_json        TEXT NOT NULL,       -- the row as it was before
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_clearings_stock ON purchase_clearings(stock_id);
 CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_id);
 CREATE INDEX IF NOT EXISTS idx_aliases_product ON product_aliases(product_id);
 CREATE INDEX IF NOT EXISTS idx_products_group ON products(product_group_id);

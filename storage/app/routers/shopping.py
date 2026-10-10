@@ -231,6 +231,7 @@ def consume_shopping_for_purchase(
     product_id: int,
     amount: float,
     unit_id: int | None,
+    stock_id: int | None = None,
 ) -> list[dict]:
     """Apply a purchase of `product_id` to the shopping list: rows of the
     product and of the concepts above it, converted into each row's unit
@@ -239,7 +240,7 @@ def consume_shopping_for_purchase(
     Returns the touched rows ({id, product_id, removed, amount}) and always
     ends the transaction apply_purchase opened.
     """
-    touched = apply_purchase(conn, Catalog(conn), product_id, amount, unit_id)
+    touched = apply_purchase(conn, Catalog(conn), product_id, amount, unit_id, stock_id)
     conn.commit()
     if touched:
         log.info(

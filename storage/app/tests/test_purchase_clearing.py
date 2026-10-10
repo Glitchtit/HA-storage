@@ -203,3 +203,66 @@ class TestSideEffectsNeverFailAPurchase:
         assert r.status_code == 200
         assert [c["id"] for c in r.json()["cleared_rows"]] == [row]
         assert _amount(row) is None
+
+
+def _correct(product_id, amount=1):
+    r = client.post("/api/stock/correct-purchase", json={"product_id": product_id, "amount": amount})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _row(row_id):
+    return next((i for i in client.get("/api/shopping-list").json() if i["id"] == row_id), None)
+
+
+class TestUndoingAMisScan:
+    # Swiping a scan back (correct-purchase) puts back the list rows it took.
+    def test_a_corrected_scan_puts_back_the_row_it_removed(self):
+        concept = _mk("Kookosmaito c17", kind="concept")
+        sku = _mk("Kookosmaito 400 ml c17", parent_id=concept)
+        recipe = client.post("/api/recipes", json={"name": "Curry c17"}).json()["id"]
+        row = client.post("/api/shopping-list", json={
+            "product_id": concept, "amount": 1, "note": "Reseptistä: Curry c17", "recipe_id": recipe}).json()["id"]
+        _buy(sku)
+        assert _amount(row) is None
+        assert _correct(sku)["restored_rows"] == [{"id": row, "product_id": concept, "amount": 1}]
+        item = _row(row)
+        assert (item["amount"], item["note"], item["recipe_id"], item["done"]) == (1, "Reseptistä: Curry c17", recipe, False)
+
+    def test_a_row_the_scan_reduced_gets_its_amount_back(self):
+        concept = _mk("Kerma c18", unit="dl", kind="concept")
+        sku = _mk("Vispikerma 2 dl c18", parent_id=concept, content_amount=2, content_unit_id=_u("dl"))
+        row = _add(concept, 3, unit="dl", note="Reseptistä: B")
+        _buy(sku)
+        assert _amount(row) == 1
+        _correct(sku)
+        assert _amount(row) == 3
+
+    def test_correcting_part_of_a_multipack_puts_back_that_part(self):
+        concept = _mk("Jogurtti c19", kind="concept")
+        sku = _mk("Jogurtti 6-pack c19", parent_id=concept)
+        row = _add(concept, 6)
+        _buy(sku, 6)
+        assert _amount(row) is None
+        _correct(sku, 2)
+        assert _amount(row) == 2
+        _correct(sku, 1)
+        assert _amount(row) == 3
+
+    def test_rows_removed_by_hand_after_the_scan_stay_removed(self):
+        concept = _mk("Persilja c20", kind="concept")
+        sku = _mk("Persilja ruukku c20", parent_id=concept)
+        row = _add(concept, 3)
+        _buy(sku)
+        assert client.delete(f"/api/shopping-list/{row}").status_code == 204
+        assert _correct(sku)["restored_rows"] == []
+        assert _row(row) is None
+
+    def test_ticked_rows_are_left_alone(self):
+        concept = _mk("Tilli c21", kind="concept")
+        sku = _mk("Tilli nippu c21", parent_id=concept)
+        row = _add(concept, 3)
+        _buy(sku)
+        client.put(f"/api/shopping-list/{row}", json={"done": True})
+        _correct(sku)
+        assert (_row(row)["amount"], _row(row)["done"]) == (2, True)

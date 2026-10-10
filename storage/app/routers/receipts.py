@@ -78,7 +78,7 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     added = 0
     errors: list[str] = []
     purchased_product_ids: set[int] = set()
-    purchases: list[tuple[int, float, int]] = []
+    purchases: list[tuple[int, float, int, int]] = []
     for idx, line in enumerate(body.lines):
         try:
             product = conn.execute(
@@ -135,7 +135,7 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
             )
             added += 1
             purchased_product_ids.add(line.product_id)
-            purchases.append((line.product_id, line.amount, unit_id))
+            purchases.append((line.product_id, line.amount, unit_id, cur.lastrowid))
         except Exception as exc:
             errors.append(f"Line {idx}: {exc}")
 
@@ -148,8 +148,8 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     if purchases:
         try:
             cat = Catalog(conn)
-            for product_id, amount, unit_id in purchases:
-                cleared.extend(apply_purchase(conn, cat, product_id, amount, unit_id))
+            for product_id, amount, unit_id, stock_id in purchases:
+                cleared.extend(apply_purchase(conn, cat, product_id, amount, unit_id, stock_id))
             conn.commit()
         except Exception as exc:  # noqa: BLE001
             conn.rollback()

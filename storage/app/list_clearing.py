@@ -9,9 +9,14 @@ counts as one piece. A row the purchase cannot be converted into is
 satisfied whole and uses the purchase up. Rows of a pinned product
 (pin_brand) above the bought SKU wait for an exact purchase. Minimum-stock
 rows follow stock levels instead (sync_auto_shopping).
+
+Given the lot the purchase created, every change is recorded in
+`purchase_clearings`, so undoing a mis-scan (`restore_cleared`) can put the
+rows back.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from facts import Catalog
@@ -23,11 +28,13 @@ EPS = 1e-9
 
 def apply_purchase(
     conn: sqlite3.Connection, cat: Catalog, product_id: int, amount: float, unit_id: int | None,
+    stock_id: int | None = None,
 ) -> list[dict]:
     """Apply `amount` of `unit_id` (None = the product's own unit) of a bought
     product to the list. Returns the touched rows as {id, product_id, removed,
-    amount}, where amount is what the row still needs. Opens a write
-    transaction when none is open and does not commit."""
+    amount}, where amount is what the row still needs. With `stock_id` (the
+    purchase's new lot) the changes are recorded for `restore_cleared`. Opens
+    a write transaction when none is open and does not commit."""
     product = cat.product(product_id)
     unit = cat.unit(unit_id) if unit_id is not None else None
     if unit is None and product is not None:
@@ -51,7 +58,7 @@ def apply_purchase(
     distance = {pid: i for i, pid in enumerate(chain)}
     marks = ",".join("?" * len(chain))
     rows = conn.execute(
-        "SELECT id, product_id, amount, unit_id, created_at FROM shopping_list "
+        "SELECT * FROM shopping_list "
         f"WHERE done = 0 AND auto_added = 0 AND product_id IN ({marks})", chain,
     ).fetchall()
     rows.sort(key=lambda r: (distance[r["product_id"]], r["created_at"] or "", r["id"]))
@@ -79,4 +86,62 @@ def apply_purchase(
             conn.execute("UPDATE shopping_list SET amount = ? WHERE id = ?", (remaining, row["id"]))
             touched.append({"id": row["id"], "product_id": row["product_id"], "removed": False,
                             "amount": remaining})
+        if stock_id is not None:
+            conn.execute(
+                "INSERT INTO purchase_clearings (stock_id, purchase_amount, row_id, removed, taken, row_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (stock_id, float(amount), row["id"], int(remaining <= 0), need - max(remaining, 0.0),
+                 json.dumps(dict(row), ensure_ascii=False)),
+            )
     return touched
+
+
+def _existing(conn: sqlite3.Connection, table: str, row_id: int | None) -> int | None:
+    if row_id is None:
+        return None
+    return row_id if conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (row_id,)).fetchone() else None
+
+
+def restore_cleared(conn: sqlite3.Connection, stock_id: int, take: float) -> list[dict]:
+    """Undo `take` of the purchase that created lot `stock_id`: the rows it
+    took from get back the same share of what was taken. A row the purchase
+    removed comes back with its id, note, recipe and set; a row removed by
+    hand afterwards stays removed, and a ticked row is left alone. Returns the
+    restored rows as {id, product_id, amount}. Does not commit."""
+    restored: list[dict] = []
+    for rec in conn.execute(
+        "SELECT * FROM purchase_clearings WHERE stock_id = ? ORDER BY id", (stock_id,)
+    ).fetchall():
+        share = min(1.0, float(take) / rec["purchase_amount"]) if rec["purchase_amount"] > EPS else 1.0
+        back = rec["taken"] * share
+        left = rec["purchase_amount"] - float(take)
+        if left <= EPS:
+            conn.execute("DELETE FROM purchase_clearings WHERE id = ?", (rec["id"],))
+        else:
+            conn.execute("UPDATE purchase_clearings SET purchase_amount = ?, taken = ? WHERE id = ?",
+                         (left, rec["taken"] - back, rec["id"]))
+        if back <= EPS:
+            continue
+        row = conn.execute("SELECT * FROM shopping_list WHERE id = ?", (rec["row_id"],)).fetchone()
+        if row is not None:
+            if row["done"]:
+                continue
+            amount = round(float(row["amount"]) + back, 3)
+            conn.execute("UPDATE shopping_list SET amount = ? WHERE id = ?", (amount, row["id"]))
+            restored.append({"id": row["id"], "product_id": row["product_id"], "amount": amount})
+            continue
+        snap = json.loads(rec["row_json"])
+        if not rec["removed"] or _existing(conn, "products", snap["product_id"]) is None:
+            continue
+        amount = round(back, 3)
+        conn.execute(
+            "INSERT INTO shopping_list (id, product_id, amount, unit_id, note, done, recipe_id, bundle_id, "
+            "auto_added, ha_item_name, preferred_product_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 0, ?, ?, ?)",
+            (snap["id"], snap["product_id"], amount, _existing(conn, "units", snap.get("unit_id")),
+             snap.get("note") or "", _existing(conn, "recipes", snap.get("recipe_id")),
+             _existing(conn, "bundles", snap.get("bundle_id")), snap.get("ha_item_name"),
+             _existing(conn, "products", snap.get("preferred_product_id")), snap.get("created_at")),
+        )
+        restored.append({"id": snap["id"], "product_id": snap["product_id"], "amount": amount})
+    return restored
