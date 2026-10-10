@@ -42,9 +42,11 @@ class TestSchema:
 import linker
 
 
-def _mk(name, parent_id=None, active=True):
-    r = client.post("/api/products", json={
-        "name": name, "unit_id": _unit_id(), "parent_id": parent_id, "active": active})
+def _mk(name, parent_id=None, active=True, kind=None):
+    body = {"name": name, "unit_id": _unit_id(), "parent_id": parent_id, "active": active}
+    if kind:
+        body["kind"] = kind
+    r = client.post("/api/products", json=body)
     assert r.status_code == 201, r.text
     return r.json()["id"]
 
@@ -69,14 +71,14 @@ class TestLinkProducts:
             raise AssertionError("AI must not be called for exact matches")
         monkeypatch.setattr("linker.call_ai_json", boom)
         conn = get_connection()
-        cat = _mk("Cheddar-l2")
+        cat = _mk("Cheddar-l2", kind="concept")
         dup = _mk("cheddar-l2")  # same name, case-insensitive
         res = linker.link_products(conn, [dup])
         assert dup in res["linked"]
 
     def test_ai_high_confidence_autolinks(self, monkeypatch):
         conn = get_connection()
-        cat = _mk("lohi-l3")
+        cat = _mk("lohi-l3", kind="concept")
         sku = _mk("Pirkka savulohifileepala 200g ASC l3")
 
         def fake(prompt, conn_, **k):
@@ -89,7 +91,7 @@ class TestLinkProducts:
 
     def test_ai_medium_confidence_queues_proposal(self, monkeypatch):
         conn = get_connection()
-        cat = _mk("voi-l4")
+        cat = _mk("voi-l4", kind="concept")
         sku = _mk("Valio Oivariini 350g l4")
 
         def fake(prompt, conn_, **k):
@@ -107,7 +109,7 @@ class TestLinkProducts:
 
     def test_rejected_pair_never_reproposed(self, monkeypatch):
         conn = get_connection()
-        cat = _mk("margariini-l5")
+        cat = _mk("margariini-l5", kind="concept")
         sku = _mk("Voi-tuote l5")
         conn.execute(
             "INSERT INTO link_proposals (product_id, proposed_parent_id, confidence, status) "
@@ -134,7 +136,7 @@ class TestLinkProducts:
 class TestRunReconcile:
     def test_sweep_links_and_backfills(self, monkeypatch):
         conn = get_connection()
-        cat = _mk("kerma-l7")
+        cat = _mk("kerma-l7", kind="concept")
         sku = _mk("Testikerma 2dl l7")
         # simulate a pre-parser product: wipe its parsed facts to test backfill
         conn.execute(
@@ -202,7 +204,7 @@ class TestLinksRouter:
 class TestReconcileApplyLinks:
     def test_confirmed_match_links_bought_under_row_product(self):
         conn = get_connection()
-        node = _mk("vispikerma-h1")
+        node = _mk("vispikerma-h1", kind="concept")
         bought = _mk("Valio kuohukerma 3,3dl h1")
         # put node on the shopping list
         r = client.post("/api/shopping-list", json={"product_id": node, "amount": 1})
@@ -260,3 +262,53 @@ class TestReconcileApplyLinks:
             "bought_name": "Another rowsku 200g h3d"}]})
         assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
                             (bought,)).fetchone()["parent_id"] is None
+
+
+class TestRoleAwareLinking:
+    def test_sku_never_used_as_link_target(self, monkeypatch):
+        conn = get_connection()
+        # No size token in the name: the old "node-shaped" guess would have
+        # accepted this SKU as a parent; only kind='concept' may be one now.
+        not_a_node = _mk("Valio maito r1")
+        sku = _mk("Arla maito 1l r1")
+
+        def fake(prompt, conn_, **k):
+            return [{"product_id": sku, "parent_id": not_a_node, "confidence": "high"}]
+        monkeypatch.setattr("linker.call_ai_json", fake)
+        res = linker.link_products(conn, [sku])
+        assert sku in res["unmatched"]
+        assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
+                            (sku,)).fetchone()["parent_id"] is None
+
+    def test_inflight_guard_skips_second_attempt(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("linker.link_products", lambda conn, ids, **k: calls.append(ids))
+        sku = _mk("Inflight sku r2")
+        assert linker.claim(sku) is True
+        linker.link_async(sku)  # another attempt is running -> skipped
+        assert calls == []
+        linker.release(sku)
+        linker.link_async(sku)
+        assert calls == [[sku]]
+
+    def test_sweep_places_skus_not_concepts(self, monkeypatch):
+        asked = []
+
+        def fake_link(conn, ids, **k):
+            asked.extend(ids)
+            return {"linked": [], "proposed": [], "unmatched": list(ids)}
+        monkeypatch.setattr("linker.link_products", fake_link)
+        concept = _mk("yksinäinen-konsepti-r3", kind="concept")
+        sku = _mk("Yksinäinen sku r3")
+        linker.run_reconcile(get_connection())
+        assert sku in asked and concept not in asked
+
+    def test_reconcile_target_rules(self):
+        from routers.shopping import _reconcile_link_target
+        conn = get_connection()
+        concept = _mk("kerma-r4", kind="concept")
+        sku_under = _mk("Kerma 2dl r4", parent_id=concept)
+        loose_sku = _mk("Irrallinen kerma 2dl r4")
+        assert _reconcile_link_target(conn, concept) == concept
+        assert _reconcile_link_target(conn, sku_under) == concept
+        assert _reconcile_link_target(conn, loose_sku) is None

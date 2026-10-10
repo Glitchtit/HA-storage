@@ -134,20 +134,25 @@ def _autoplace_product(product_id: int) -> None:
     """Background, best-effort: place a just-created product in the tree via
     the linker; if the linker finds nothing, fall back to the AI optimizer
     (which also assigns a product group). Opens its OWN connection."""
+    import linker
+
+    if not linker.claim(product_id):
+        return
     try:
         from main import DB_PATH
         from database import get_db
-        from linker import link_products
         from optimizer import run_optimize
         conn = get_db(DB_PATH)
         try:
-            res = link_products(conn, [product_id])
+            res = linker.link_products(conn, [product_id])
             if not res["linked"] and not res["proposed"]:
                 run_optimize(conn, product_ids=[product_id])
         finally:
             conn.close()
     except Exception as exc:
         log.warning("Auto-placement for product %d failed: %s", product_id, exc)
+    finally:
+        linker.release(product_id)
 
 
 # ── List / Get ─────────────────────────────────────────────────────────────

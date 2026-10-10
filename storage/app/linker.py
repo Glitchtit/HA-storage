@@ -17,7 +17,7 @@ import sqlite3
 import threading
 
 from ai_client import call_ai_json
-from pack_size import ensure_pack_facts, parse_pack_size
+from pack_size import ensure_pack_facts
 from routers.history import log_event
 import tree
 
@@ -79,14 +79,9 @@ def maybe_link_after_purchase(conn: sqlite3.Connection, product_id: int) -> None
     receipt commit) must be able to trust this can't fail their write."""
     try:
         prod = conn.execute(
-            """
-            SELECT p.parent_id,
-                   EXISTS(SELECT 1 FROM products c WHERE c.parent_id = p.id) AS has_children
-            FROM products p WHERE p.id = ?
-            """,
-            (product_id,),
+            "SELECT parent_id, kind FROM products WHERE id = ?", (product_id,)
         ).fetchone()
-        if not prod or prod["parent_id"] is not None or prod["has_children"]:
+        if not prod or prod["parent_id"] is not None or prod["kind"] != "sku":
             return
         from routers.products import _autoplace_enabled  # lazy: avoid import cycle
         if _autoplace_enabled(conn):
@@ -97,28 +92,35 @@ def maybe_link_after_purchase(conn: sqlite3.Connection, product_id: int) -> None
         log.warning("maybe_link_after_purchase(%s) failed: %s", product_id, exc)
 
 
-def _candidate_nodes(conn: sqlite3.Connection, exclude: set[int]) -> list[dict]:
-    """Nodes a product may be placed under: anything with children, anything in
-    the 'Group master' group, and unparented products without a size token in
-    the name (i.e. category-shaped, not SKU-shaped)."""
-    rows = conn.execute(
-        """
-        SELECT p.id, p.name, p.parent_id,
-               EXISTS(SELECT 1 FROM products c WHERE c.parent_id = p.id) AS has_children,
-               (SELECT 1 FROM product_groups g
-                 WHERE g.id = p.product_group_id AND g.name = 'Group master') AS is_gm
-        FROM products p
-        """
-    ).fetchall()
-    nodes = []
-    for r in rows:
-        if r["id"] in exclude:
-            continue
-        sized = parse_pack_size(r["name"])
-        looks_like_sku = sized["amount"] is not None or sized["count"] is not None
-        if r["has_children"] or r["is_gm"] or (r["parent_id"] is None and not looks_like_sku):
-            nodes.append({"id": r["id"], "name": r["name"], "parent_id": r["parent_id"]})
-    return nodes
+def _candidate_nodes(conn: sqlite3.Connection) -> list[dict]:
+    """Nodes a product may be placed under: every concept."""
+    return [
+        {"id": r["id"], "name": r["name"], "parent_id": r["parent_id"]}
+        for r in conn.execute(
+            "SELECT id, name, parent_id FROM products WHERE kind = 'concept'"
+        ).fetchall()
+    ]
+
+
+# Products with a link attempt running in some thread. Create-time autoplace
+# and purchase-time linking used to race on the same product and link it two
+# or three times in the same second.
+_inflight: set[int] = set()
+_inflight_lock = threading.Lock()
+
+
+def claim(product_id: int) -> bool:
+    """Reserve product_id for one link attempt; False if one is running."""
+    with _inflight_lock:
+        if product_id in _inflight:
+            return False
+        _inflight.add(product_id)
+        return True
+
+
+def release(product_id: int) -> None:
+    with _inflight_lock:
+        _inflight.discard(product_id)
 
 
 def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: bool = True) -> dict:
@@ -143,7 +145,7 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
     # sibling SKU. Self-linking is guarded at match time instead (below),
     # never by removing a product from the candidate pool.
     todo_ids = {t["id"] for t in todo}
-    nodes = _candidate_nodes(conn, set())
+    nodes = _candidate_nodes(conn)
     by_norm: dict[str, dict] = {}
     # Pre-existing (non-batch) nodes take priority for exact-name lookups so
     # that a same-batch peer can never shadow a real node — and, in
@@ -247,10 +249,8 @@ def run_reconcile(conn: sqlite3.Connection) -> dict:
             """
             SELECT p.id FROM products p
             WHERE p.parent_id IS NULL
+              AND p.kind = 'sku'
               AND COALESCE(p.staple, 0) = 0
-              AND NOT EXISTS (SELECT 1 FROM products c WHERE c.parent_id = p.id)
-              AND NOT EXISTS (SELECT 1 FROM product_groups g
-                              WHERE g.id = p.product_group_id AND g.name = 'Group master')
               AND NOT EXISTS (SELECT 1 FROM link_proposals lp
                               WHERE lp.product_id = p.id AND lp.status = 'pending')
             """
@@ -266,7 +266,10 @@ def run_reconcile(conn: sqlite3.Connection) -> dict:
 
 
 def link_async(product_id: int) -> None:
-    """Background variant with its own connection (thread-safe)."""
+    """Background variant with its own connection (thread-safe). Skips the
+    product when another link attempt for it is already running."""
+    if not claim(product_id):
+        return
     try:
         from main import DB_PATH
         from database import get_db
@@ -278,3 +281,5 @@ def link_async(product_id: int) -> None:
             conn.close()
     except Exception as exc:
         log.warning("Async link for product %d failed: %s", product_id, exc)
+    finally:
+        release(product_id)

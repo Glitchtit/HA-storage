@@ -11,7 +11,6 @@ from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
 from quantity import COUNT, PACKAGE, VAGUE, format_qty
-from pack_size import parse_pack_size
 from models import (
     CadenceSuggestionResponse,
     ReconcileApplyRequest,
@@ -471,34 +470,22 @@ def reconcile_shopping(body: ReconcileRequest):
 
 
 def _reconcile_link_target(conn, row_product_id: int) -> int | None:
-    """Resolve the safe parent to link a bought SKU under, given the shopping
-    row's own product. Uses the same node-shaped test as
-    ``linker._candidate_nodes``: has children, is in the 'Group master'
-    group, or its name carries no pack-size/count token. A node-shaped row
-    product is itself a valid link target. A SKU-shaped row product is NOT —
-    parenting one SKU under another creates a fake placeholder parent that
-    the optimizer's strip-parents pass will later deactivate (a real product
-    with stock would vanish). In that case fall back to the row product's
-    own parent, if any; otherwise there is no safe target."""
+    """The concept a bought SKU should be linked under, given the shopping
+    row's product: the row's product itself when it is a concept, else that
+    SKU's own parent when the parent is a concept, else nothing (a SKU is
+    never a parent)."""
     row_prod = conn.execute(
-        """
-        SELECT p.name, p.parent_id,
-               EXISTS(SELECT 1 FROM products c WHERE c.parent_id = p.id) AS has_children,
-               (SELECT 1 FROM product_groups g
-                 WHERE g.id = p.product_group_id AND g.name = 'Group master') AS is_gm
-        FROM products p WHERE p.id = ?
-        """,
+        "SELECT p.kind, p.parent_id, pp.kind AS parent_kind "
+        "FROM products p LEFT JOIN products pp ON pp.id = p.parent_id WHERE p.id = ?",
         (row_product_id,),
     ).fetchone()
     if row_prod is None:
         return None
-    sized = parse_pack_size(row_prod["name"])
-    node_shaped = bool(row_prod["has_children"]) or bool(row_prod["is_gm"]) or (
-        sized["amount"] is None and sized["count"] is None
-    )
-    if node_shaped:
+    if row_prod["kind"] == "concept":
         return row_product_id
-    return row_prod["parent_id"]
+    if row_prod["parent_id"] is not None and row_prod["parent_kind"] == "concept":
+        return row_prod["parent_id"]
+    return None
 
 
 @router.post("/shopping-list/reconcile/apply", response_model=ReconcileApplyResponse)
