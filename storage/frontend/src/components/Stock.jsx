@@ -538,7 +538,7 @@ export default function Stock() {
               <label className="block">
                 <span className="text-sm text-gray-400">Product</span>
                 <ProductCombobox
-                  products={products}
+                  products={products.filter((p) => p.kind !== 'concept')}
                   value={formProduct}
                   onChange={setFormProduct}
                   required

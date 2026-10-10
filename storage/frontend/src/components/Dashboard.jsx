@@ -103,7 +103,9 @@ export default function Dashboard() {
       // Low stock: amount < min_stock_amount where min_stock_amount > 0.
       // Note: /stock drops products with total_amount = 0 via HAVING, so we
       // join products against the stock map ourselves — otherwise completely
-      // out-of-stock items (the worst case) would never appear here.
+      // out-of-stock items (the worst case) would never appear here. A
+      // concept's stock is what its products hold (subtree_amount, in the
+      // concept's own unit), the same measure the shopping-list sync uses.
       const stockByProduct = new Map();
       if (Array.isArray(stock)) {
         for (const s of stock) stockByProduct.set(s.product_id, s);
@@ -116,7 +118,9 @@ export default function Dashboard() {
             return {
               product_id: p.id,
               product_name: p.name,
-              amount: s ? s.amount : 0,
+              amount: p.kind === 'concept' && p.subtree_amount != null
+                ? p.subtree_amount
+                : (s ? s.amount : 0),
               min_stock_amount: p.min_stock_amount,
             };
           })

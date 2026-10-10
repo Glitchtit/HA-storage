@@ -14,6 +14,10 @@ export const updateProduct = (id, data) => api.put(`/products/${id}`, data);
 export const deleteProduct = (id) => api.delete(`/products/${id}`);
 export const mergeProduct = (id, targetId) =>
   api.post(`/products/${id}/merge`, { target_id: targetId });
+export const getAliases = (id) => api.get(`/products/${id}/aliases`);
+export const addAlias = (id, alias) => api.post(`/products/${id}/aliases`, { alias });
+export const deleteAlias = (id, alias) =>
+  api.delete(`/products/${id}/aliases/${encodeURIComponent(alias)}`);
 
 // ── Link Proposals ───────────────────────────────────────────────────────
 export const getLinkProposals = () => api.get('/link-proposals');

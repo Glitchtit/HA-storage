@@ -21,6 +21,9 @@ import {
   addProductStore,
   removeProductStore,
   mergeProduct,
+  getAliases,
+  addAlias,
+  deleteAlias,
 } from '../api';
 
 /* ── helpers ────────────────────────────────────────────────────────────── */
@@ -1068,6 +1071,9 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
             />
           </div>
 
+          {/* Aliases (concepts only) */}
+          {detail.kind === 'concept' && <AliasesSection productId={product.id} />}
+
           {/* Merge */}
           <MergeSection product={detail} products={products} onMerged={() => { onSaved(); onClose(); }} />
 
@@ -1104,6 +1110,93 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         </div>
       </td>
     </tr>
+  );
+}
+
+/* ── Aliases: spellings that bind to this concept ──────────────────────── */
+
+function AliasesSection({ productId }) {
+  const [aliases, setAliases] = useState([]);
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const { data } = await getAliases(productId);
+      setAliases(data);
+    } catch (err) {
+      console.error('Load aliases failed', err);
+    }
+  }, [productId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setError('');
+    try {
+      await addAlias(productId, text.trim());
+      setText('');
+      load();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Adding the alias failed');
+    }
+  };
+
+  const handleDelete = async (alias) => {
+    const previous = aliases;
+    setAliases(aliases.filter((a) => a.alias !== alias));
+    try {
+      await deleteAlias(productId, alias);
+    } catch (err) {
+      setAliases(previous);
+      setError(err.response?.data?.detail || 'Removing the alias failed');
+    }
+  };
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-4 mb-4 border border-gray-600">
+      <h4 className="text-sm font-semibold text-gray-400 mb-1">Aliases</h4>
+      <p className="text-xs text-gray-500 mb-2">
+        Recipe imports and voice adds that use one of these words bind to this concept.
+      </p>
+      <div className="flex flex-wrap gap-2 mb-2">
+        {aliases.length === 0 && <span className="text-xs text-gray-500">No aliases yet.</span>}
+        {aliases.map((a) => (
+          <span
+            key={a.alias}
+            title={`Source: ${a.source}`}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg bg-gray-700 text-gray-200"
+          >
+            {a.alias}
+            <button
+              onClick={() => handleDelete(a.alias)}
+              className="text-gray-400 hover:text-red-400"
+              aria-label={`Remove ${a.alias}`}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+      </div>
+      <form onSubmit={handleAdd} className="flex gap-2">
+        <input
+          className="flex-1 bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+          placeholder="Add a spelling, e.g. vetemjöl"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <button
+          type="submit"
+          disabled={!text.trim()}
+          className="px-4 py-2 text-sm rounded-xl bg-brand-cobalt text-white hover:bg-brand-cobalt-400 disabled:opacity-50"
+        >
+          Add
+        </button>
+      </form>
+      {error && <p className="text-sm text-red-400 mt-2">{error}</p>}
+    </div>
   );
 }
 
@@ -1270,6 +1363,7 @@ export default function Products() {
   const [filterLocation, setFilterLocation] = useState('');
   const [topOnly, setTopOnly] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [filterKind, setFilterKind] = useState('');
 
   const [expandedId, setExpandedId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -1324,6 +1418,7 @@ export default function Products() {
       if (!p.name.toLowerCase().includes(q)) return false;
     }
     if (filterLocation && p.location_id !== Number(filterLocation)) return false;
+    if (filterKind && (p.kind || 'sku') !== filterKind) return false;
     return true;
   });
 
@@ -1337,24 +1432,18 @@ export default function Products() {
 
   const topLevel = filtered.filter((p) => !p.parent_id);
 
-  // Flatten into display rows: parent, then indented children
+  // Flatten into display rows, depth first: concept, variant, product…
   const displayRows = [];
-  for (const p of topLevel) {
-    displayRows.push({ ...p, indent: 0 });
-    const children = childrenMap[p.id];
-    if (children) {
-      for (const c of children) {
-        displayRows.push({ ...c, indent: 1 });
-      }
-    }
-  }
-  // Also show orphan children (parent not in current filtered set)
-  const shownIds = new Set(displayRows.map((r) => r.id));
-  for (const p of filtered) {
-    if (!shownIds.has(p.id)) {
-      displayRows.push({ ...p, indent: 1 });
-    }
-  }
+  const shownIds = new Set();
+  const walk = (p, depth) => {
+    if (shownIds.has(p.id)) return; // also stops legacy parent cycles
+    shownIds.add(p.id);
+    displayRows.push({ ...p, indent: depth });
+    for (const c of childrenMap[p.id] || []) walk(c, depth + 1);
+  };
+  for (const p of topLevel) walk(p, 0);
+  // Products whose parent is filtered out still show, with their subtree
+  for (const p of filtered) walk(p, 1);
 
   /* ─ handlers ─ */
   const handleDelete = async () => {
@@ -1431,6 +1520,16 @@ export default function Products() {
           {locations.map((l) => (
             <option key={l.id} value={l.id}>{l.name}</option>
           ))}
+        </select>
+
+        <select
+          className="bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+          value={filterKind}
+          onChange={(e) => setFilterKind(e.target.value)}
+        >
+          <option value="">Concepts and products</option>
+          <option value="concept">Concepts only</option>
+          <option value="sku">Products only</option>
         </select>
 
         <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
@@ -1569,7 +1668,7 @@ function ProductRow({
       >
         {/* Image */}
         <td className="px-4 py-2">
-          <div style={{ paddingLeft: p.indent ? 24 : 0 }}>
+          <div style={{ paddingLeft: (p.indent || 0) * 24 }}>
             <Thumb filename={p.picture_filename} />
           </div>
         </td>
@@ -1582,6 +1681,11 @@ function ProductRow({
           >
             {p.indent > 0 && <span className="text-gray-500 mr-1">└</span>}
             {p.name}
+            {p.kind === 'concept' && (
+              <span className="ml-2 align-middle text-xs font-medium px-1.5 py-0.5 rounded-lg bg-gray-700 text-gray-300">
+                Concept
+              </span>
+            )}
           </button>
         </td>
 
