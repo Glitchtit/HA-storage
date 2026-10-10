@@ -34,4 +34,15 @@ def resolve_ingredients(body: ResolveRequest):
 
     conn = _get_db()
     ai = call_ai_json if _ai_configured(conn) else None
-    return resolve(conn, [i.model_dump() for i in body.items], ai=ai)
+    result = resolve(conn, [i.model_dump() for i in body.items], ai=ai)
+    if ai is not None:
+        from concept_jobs import schedule_followups
+        from quantity import UNIT_CATALOG
+
+        needs = [
+            (item["product_id"], UNIT_CATALOG[item["unit"]][2])
+            for item in result["items"]
+            if item["product_id"] and item["amount"] > 0 and item["unit"] in UNIT_CATALOG
+        ]
+        schedule_followups(result["created"], needs)
+    return result
