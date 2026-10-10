@@ -146,6 +146,10 @@ class Product(BaseModel):
             return parsed if isinstance(parsed, dict) else {}
         return value
 
+class AliasCreate(BaseModel):
+    alias: str
+
+
 class ProductMerge(BaseModel):
     target_id: int
 

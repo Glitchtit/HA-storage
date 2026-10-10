@@ -1,12 +1,14 @@
 """Merge one product into another without losing any reference.
 
 Used by POST /products/{id}/merge, the optimizer's multi-pack normalisation
-and (phase 2) the concept dedup sweep. Everything that points at the source —
-recipe ingredients, shopping rows, children, lots, barcodes, history, store
-availability, bundle items, legacy conversion rows — is re-pointed at the
-target. Recipe ingredients are never de-duplicated: the same product twice in
-one recipe (butter for the dough and for frying) is legitimate. Facts and
-flags the target lacks are copied over, then the source row is deleted.
+and the concept dedup sweep. Everything that points at the source — recipe
+ingredients, shopping rows, children, lots, barcodes, history, store
+availability, bundle items, legacy conversion rows, aliases — is re-pointed at
+the target, and a concept target learns the source's name as an alias. Recipe
+ingredients are never de-duplicated: the same product twice in one recipe
+(butter for the dough and for frying) is legitimate. Facts and flags the
+target lacks are copied over (package facts only onto a SKU), then the source
+row is deleted. Runs under the catalog lock.
 """
 from __future__ import annotations
 
@@ -14,12 +16,16 @@ import json
 import sqlite3
 
 import tree
+from concepts import add_alias
+from locks import CATALOG_LOCK
 from routers.history import log_event
 
 _FILL_COLUMNS = (
     "pack_count", "density_g_ml", "piece_weight_g", "picture_filename",
     "unit_price", "location_id", "product_group_id",
 )
+# Facts that describe one retail package: never copied onto a concept.
+_PACKAGE_COLUMNS = frozenset({"pack_count", "unit_price"})
 _FACT_KEYS = {"pack_count": "pack_count", "density_g_ml": "density_g_ml", "piece_weight_g": "piece_weight_g"}
 
 
@@ -35,6 +41,11 @@ def merge_products(conn: sqlite3.Connection, source_id: int, target_id: int) -> 
     """Merge source into target. Raises LookupError (missing product) or
     ValueError (merge would break the tree or the concept/SKU roles).
     Commits on success, rolls back on failure."""
+    with CATALOG_LOCK:
+        return _merge(conn, source_id, target_id)
+
+
+def _merge(conn: sqlite3.Connection, source_id: int, target_id: int) -> dict:
     if source_id == target_id:
         raise ValueError("Cannot merge a product into itself")
     src = conn.execute("SELECT * FROM products WHERE id = ?", (source_id,)).fetchone()
@@ -95,16 +106,22 @@ def merge_products(conn: sqlite3.Connection, source_id: int, target_id: int) -> 
             "DELETE FROM link_proposals WHERE product_id = ? OR proposed_parent_id = ?",
             (source_id, source_id),
         )
+        repoint("product_aliases")
+        if tgt["kind"] == "concept":
+            add_alias(conn, src["name"], target_id, "merge")
 
         fill: dict = {}
         meta = _meta(tgt["facts_meta"])
         src_meta = _meta(src["facts_meta"])
+        is_sku = tgt["kind"] == "sku"
         for col in _FILL_COLUMNS:
+            if col in _PACKAGE_COLUMNS and not is_sku:
+                continue
             if tgt[col] is None and src[col] is not None:
                 fill[col] = src[col]
                 if col in _FACT_KEYS and col in src_meta:
                     meta[_FACT_KEYS[col]] = src_meta[col]
-        if tgt["content_amount"] is None and src["content_amount"] is not None:
+        if is_sku and tgt["content_amount"] is None and src["content_amount"] is not None:
             fill["content_amount"] = src["content_amount"]
             fill["content_unit_id"] = src["content_unit_id"]
             if "content" in src_meta:

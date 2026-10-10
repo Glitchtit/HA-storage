@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from availability import own_unit_have
 from facts import Catalog
-from models import Product, ProductCreate, ProductDetail, ProductMerge, ProductUpdate
+from models import AliasCreate, Product, ProductCreate, ProductDetail, ProductMerge, ProductUpdate
 import tree
 import pack_size
 
@@ -441,3 +441,55 @@ def merge_product(product_id: int, body: ProductMerge):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return conn.execute("SELECT * FROM products WHERE id = ?", (body.target_id,)).fetchone()
+
+
+# ── Aliases (spelling -> concept) ─────────────────────────────────────────
+
+@router.get("/products/{product_id}/aliases")
+def list_aliases(product_id: int):
+    from concepts import aliases_of
+
+    conn = _get_db()
+    if not conn.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone():
+        raise HTTPException(404, f"Product {product_id} not found")
+    return aliases_of(conn, product_id)
+
+
+@router.post("/products/{product_id}/aliases", status_code=201)
+def add_alias_route(product_id: int, body: AliasCreate):
+    """Bind a spelling to this concept. A manual alias takes the spelling over
+    from whichever concept had it, so a wrong automatic binding can be fixed."""
+    from concepts import norm
+    from locks import CATALOG_LOCK
+
+    conn = _get_db()
+    prod = conn.execute("SELECT kind FROM products WHERE id = ?", (product_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, f"Product {product_id} not found")
+    if prod["kind"] != "concept":
+        raise HTTPException(400, "Aliases belong to concepts")
+    key = norm(body.alias)
+    if not key:
+        raise HTTPException(400, "Alias is empty")
+    with CATALOG_LOCK:
+        conn.execute(
+            "INSERT OR REPLACE INTO product_aliases (alias_norm, product_id, source) "
+            "VALUES (?, ?, 'manual')",
+            (key, product_id),
+        )
+        conn.commit()
+    return {"alias": key, "source": "manual"}
+
+
+@router.delete("/products/{product_id}/aliases/{alias}", status_code=204)
+def delete_alias(product_id: int, alias: str):
+    from concepts import norm
+
+    conn = _get_db()
+    cur = conn.execute(
+        "DELETE FROM product_aliases WHERE alias_norm = ? AND product_id = ?",
+        (norm(alias), product_id),
+    )
+    if cur.rowcount == 0:
+        raise HTTPException(404, "Alias not found")
+    conn.commit()
