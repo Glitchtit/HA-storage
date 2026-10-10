@@ -17,6 +17,7 @@ import sqlite3
 import threading
 
 from ai_client import call_ai_json
+from locks import CATALOG_LOCK
 from pack_size import ensure_pack_facts
 from routers.history import log_event
 import tree
@@ -55,21 +56,23 @@ def _norm(name: str) -> str:
 
 
 def apply_link(conn: sqlite3.Connection, product_id: int, parent_id: int, *, note: str = "") -> None:
-    """Set parent_id after cycle validation and record a 'link' history event."""
-    tree.prepare_parent(conn, product_id, parent_id)
-    conn.execute(
-        "UPDATE products SET parent_id = ?, updated_at = datetime('now') WHERE id = ?",
-        (parent_id, product_id),
-    )
-    parent = conn.execute("SELECT name FROM products WHERE id = ?", (parent_id,)).fetchone()
-    log_event(
-        conn,
-        product_id=product_id,
-        event_type="link",
-        amount=1,
-        note=note or f"linked under {parent['name'] if parent else parent_id}",
-    )
-    conn.commit()
+    """Set parent_id after cycle validation and record a 'link' history event.
+    Runs under the catalog lock."""
+    with CATALOG_LOCK:
+        tree.prepare_parent(conn, product_id, parent_id)
+        conn.execute(
+            "UPDATE products SET parent_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (parent_id, product_id),
+        )
+        parent = conn.execute("SELECT name FROM products WHERE id = ?", (parent_id,)).fetchone()
+        log_event(
+            conn,
+            product_id=product_id,
+            event_type="link",
+            amount=1,
+            note=note or f"linked under {parent['name'] if parent else parent_id}",
+        )
+        conn.commit()
 
 
 def maybe_link_after_purchase(conn: sqlite3.Connection, product_id: int) -> None:

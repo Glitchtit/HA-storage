@@ -110,12 +110,13 @@ def match_lines_to_products(
 ) -> list[dict[str, Any]]:
     """Add ``suggested_product_id`` and ``confidence`` fields to each line.
 
-    For each line.raw_text, score every active product and pick the best.
+    For each line.raw_text, score every active SKU (a receipt line is always
+    a retail product, never a generic concept) and pick the best.
     Below ``min_confidence`` the suggestion is dropped (line stays unmatched
     so the user can choose manually or queue it for discovery).
     """
     products = conn.execute(
-        "SELECT id, name, unit_id FROM products WHERE active = 1 ORDER BY id"
+        "SELECT id, name, unit_id FROM products WHERE active = 1 AND kind = 'sku' ORDER BY id"
     ).fetchall()
     indexed = [
         (p["id"], p["name"], p["unit_id"], _tokenize(p["name"]))

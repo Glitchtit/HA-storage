@@ -84,7 +84,7 @@ class TestProductKindAndFacts:
             "name": "kind-bad-q3", "unit_id": _units()["kpl"]["id"], "kind": "category"})
         assert r.status_code == 400
 
-    def test_group_master_infers_concept(self):
+    def test_group_master_no_longer_implies_concept(self):
         conn = get_connection()
         gm = conn.execute("SELECT id FROM product_groups WHERE name = 'Group master'").fetchone()
         gid = gm["id"] if gm else conn.execute(
@@ -92,7 +92,7 @@ class TestProductKindAndFacts:
         conn.commit()
         r = client.post("/api/products", json={
             "name": "gm-stub-q4", "unit_id": _units()["g"]["id"], "product_group_id": gid})
-        assert r.json()["kind"] == "concept"
+        assert r.json()["kind"] == "sku"
 
     def test_manual_facts_get_manual_provenance(self):
         units = _units()

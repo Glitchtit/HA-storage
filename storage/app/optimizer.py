@@ -568,9 +568,22 @@ def run_optimize(
             log("  Created enforced product group '%s'.", cat)
     conn.commit()
 
+    # A concept only takes its aisle group: locations, best-before days and
+    # multi-pack normalisation describe retail packages.
+    updated = 0
+    for p in products:
+        if p.get("kind") != "concept":
+            continue
+        cat_name = p1["product_category"].get(int(p["id"]))
+        gid = p1["category_name_to_group_id"].get(cat_name) if cat_name else None
+        if gid is not None:
+            conn.execute("UPDATE products SET product_group_id = ? WHERE id = ?", (gid, int(p["id"])))
+            updated += 1
+    conn.commit()
+
     log("Phase 2: assigning locations, best-before, and pack info…")
-    updated = _phase2_details(
-        conn, products, p1, locations, cfg, log,
+    updated += _phase2_details(
+        conn, [p for p in products if p.get("kind", "sku") != "concept"], p1, locations, cfg, log,
         name_to_product=name_to_product,
         batch_size=batch_size,
     )

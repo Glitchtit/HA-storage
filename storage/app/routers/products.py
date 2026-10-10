@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from availability import own_unit_have
 from facts import Catalog
+from locks import CATALOG_LOCK
 from models import AliasCreate, Product, ProductCreate, ProductDetail, ProductMerge, ProductUpdate
 import tree
 import pack_size
@@ -33,24 +34,12 @@ def _fact_key(field: str) -> str:
     return "content" if field.startswith("content_") else field
 
 
-def _group_master_id(conn) -> int | None:
-    row = conn.execute(
-        "SELECT id FROM product_groups WHERE name = 'Group master'"
-    ).fetchone()
-    return row["id"] if row else None
-
-
-def _infer_kind(conn, kind: str | None, product_group_id: int | None) -> str:
-    """Explicit kind wins; otherwise products filed under the legacy
-    "Group master" group are concepts (recipe stubs, optimizer parents)."""
-    if kind is not None:
-        if kind not in KINDS:
-            raise HTTPException(400, f"kind must be one of {KINDS}")
-        return kind
-    gm = _group_master_id(conn)
-    if gm is not None and product_group_id == gm:
-        return "concept"
-    return "sku"
+def _infer_kind(kind: str | None) -> str:
+    """An explicit kind wins; anything created without one is a SKU (concepts
+    come from the ingredient resolver, the admin UI or a parent promotion)."""
+    if kind is not None and kind not in KINDS:
+        raise HTTPException(400, f"kind must be one of {KINDS}")
+    return kind or "sku"
 
 
 def _manual_facts_meta(existing_json: str | None, changed: dict) -> str | None:
@@ -284,10 +273,12 @@ def create_product(body: ProductCreate):
     conn = _get_db()
     _validate_unit(conn, body.unit_id, "Unit")
     _validate_unit(conn, body.content_unit_id, "Content unit")
-    kind = _infer_kind(conn, body.kind, body.product_group_id)
+    kind = _infer_kind(body.kind)
     # The parent promotion and the INSERT commit together or not at all: the
     # connection is shared, so a half-done write would leak into the next
-    # request's commit.
+    # request's commit. The catalog lock keeps it from interleaving with an
+    # ingredient resolve, a link or a merge.
+    CATALOG_LOCK.acquire()
     try:
         tree.prepare_parent(conn, None, body.parent_id)
         facts = {f: getattr(body, f) for f in _FACT_FIELDS if getattr(body, f) is not None}
@@ -313,6 +304,8 @@ def create_product(body: ProductCreate):
     except Exception:
         conn.rollback()
         raise
+    finally:
+        CATALOG_LOCK.release()
     new = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
     try:
         pack_size.ensure_pack_facts(conn, new["id"])
@@ -364,7 +357,8 @@ def update_product(product_id: int, body: ProductUpdate):
             raise HTTPException(400, "A product with sub-products must stay a concept")
 
     # The parent promotion and the UPDATE commit together or not at all (the
-    # connection is shared between requests).
+    # connection is shared between requests), under the catalog lock.
+    CATALOG_LOCK.acquire()
     try:
         if "parent_id" in updates:
             tree.prepare_parent(conn, product_id, updates["parent_id"])
@@ -389,6 +383,8 @@ def update_product(product_id: int, body: ProductUpdate):
     except Exception:
         conn.rollback()
         raise
+    finally:
+        CATALOG_LOCK.release()
     if "min_stock_amount" in updates or "active" in updates:
         from routers.shopping import sync_auto_shopping
         sync_auto_shopping(conn)
