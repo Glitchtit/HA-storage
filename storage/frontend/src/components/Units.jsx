@@ -122,6 +122,7 @@ export default function Units() {
                 <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Name</th>
                 <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Abbreviation</th>
                 <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Plural</th>
+                <th className="text-left px-3 py-2 text-gray-400 text-xs uppercase">Dimension</th>
                 <th className="px-3 py-2 w-20" />
               </tr>
             </thead>
@@ -131,6 +132,7 @@ export default function Units() {
                   <td className="px-3 py-2">{u.name}</td>
                   <td className="px-3 py-2">{u.abbreviation}</td>
                   <td className="px-3 py-2">{u.name_plural}</td>
+                  <td className="px-3 py-2 text-gray-400">{u.dimension ?? 'vague'}</td>
                   <td className="px-3 py-2 text-right">
                     <button
                       onClick={() => handleDeleteUnit(u.id)}
@@ -143,7 +145,7 @@ export default function Units() {
               ))}
               {units.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-4 text-gray-400 text-center">
+                  <td colSpan={5} className="px-3 py-4 text-gray-400 text-center">
                     No units
                   </td>
                 </tr>

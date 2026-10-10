@@ -12,6 +12,8 @@ export const getProductByBarcode = (bc) => api.get(`/products/by-barcode/${bc}`)
 export const createProduct = (data) => api.post('/products', data);
 export const updateProduct = (id, data) => api.put(`/products/${id}`, data);
 export const deleteProduct = (id) => api.delete(`/products/${id}`);
+export const mergeProduct = (id, targetId) =>
+  api.post(`/products/${id}/merge`, { target_id: targetId });
 
 // ── Link Proposals ───────────────────────────────────────────────────────
 export const getLinkProposals = () => api.get('/link-proposals');

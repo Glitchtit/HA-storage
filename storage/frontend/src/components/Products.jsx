@@ -20,6 +20,7 @@ import {
   getStores,
   addProductStore,
   removeProductStore,
+  mergeProduct,
 } from '../api';
 
 /* ── helpers ────────────────────────────────────────────────────────────── */
@@ -37,6 +38,19 @@ const EMPTY_FORM = {
   picture_filename: null,
   pictureFile: null,
   staple: false,
+  kind: 'sku',
+  content_amount: null,
+  content_unit_id: null,
+  pack_count: null,
+  density_g_ml: null,
+  piece_weight_g: null,
+};
+
+// Numbers in the form: '' means "not set" and is sent as null.
+const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+const fmtQty = (n) => {
+  const v = Number(n || 0);
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '').replace('.', ',');
 };
 
 const lookup = (list, id) => list.find((i) => i.id === id);
@@ -268,18 +282,33 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
         />
       </div>
 
-      {/* Parent product */}
+      {/* Kind */}
       <div>
-        <label className="block text-sm font-medium text-gray-400 mb-1">Parent Product</label>
+        <label className="block text-sm font-medium text-gray-400 mb-1">Kind</label>
+        <select
+          className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+          value={form.kind ?? 'sku'}
+          onChange={(e) => field('kind', e.target.value)}
+        >
+          <option value="sku">Product you buy (SKU)</option>
+          <option value="concept">Concept / category (e.g. Vehnäjauho)</option>
+        </select>
+      </div>
+
+      {/* Parent product — only concepts can have sub-products */}
+      <div>
+        <label className="block text-sm font-medium text-gray-400 mb-1">Parent concept</label>
         <select
           className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
           value={form.parent_id ?? ''}
           onChange={(e) => field('parent_id', e.target.value ? Number(e.target.value) : null)}
         >
           <option value="">— no parent —</option>
-          {products.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
+          {products
+            .filter((p) => p.kind === 'concept' || p.id === form.parent_id)
+            .map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
         </select>
       </div>
 
@@ -394,6 +423,74 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
           />
           Perustarvike (aina saatavilla)
         </label>
+      </div>
+
+      {/* Quantity facts — what makes "3,5 dl" comparable with "1 × 2 kg bag" */}
+      <div className="sm:col-span-2 border-t border-gray-700 pt-3">
+        <p className="text-xs text-gray-500 mb-2">
+          Quantity facts. Leave empty to let Storage fill them from the name or the parent concept.
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {form.kind !== 'concept' && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Content per package</label>
+                <input
+                  type="number" min={0} step="any"
+                  className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+                  value={form.content_amount ?? ''}
+                  onChange={(e) => field('content_amount', numOrNull(e.target.value))}
+                  placeholder="e.g. 2"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Content unit</label>
+                <select
+                  className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+                  value={form.content_unit_id ?? ''}
+                  onChange={(e) => field('content_unit_id', e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">—</option>
+                  {units
+                    .filter((u) => ['mass', 'volume', 'count'].includes(u.dimension))
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>{u.abbreviation}</option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Pieces per package</label>
+                <input
+                  type="number" min={0} step="any"
+                  className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+                  value={form.pack_count ?? ''}
+                  onChange={(e) => field('pack_count', numOrNull(e.target.value))}
+                  placeholder="e.g. 10 eggs"
+                />
+              </div>
+            </>
+          )}
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Density (g/ml)</label>
+            <input
+              type="number" min={0} step="any"
+              className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+              value={form.density_g_ml ?? ''}
+              onChange={(e) => field('density_g_ml', numOrNull(e.target.value))}
+              placeholder="flour 0.6"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Piece weight (g)</label>
+            <input
+              type="number" min={0} step="any"
+              className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+              value={form.piece_weight_g ?? ''}
+              onChange={(e) => field('piece_weight_g', numOrNull(e.target.value))}
+              placeholder="egg 60"
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -797,6 +894,12 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         pictureFile: null,
         active: Boolean(data.active),
         staple: Boolean(data.staple),
+        kind: data.kind ?? 'sku',
+        content_amount: data.content_amount ?? null,
+        content_unit_id: data.content_unit_id ?? null,
+        pack_count: data.pack_count ?? null,
+        density_g_ml: data.density_g_ml ?? null,
+        piece_weight_g: data.piece_weight_g ?? null,
       });
     } catch (err) {
       console.error('Load product failed', err);
@@ -866,6 +969,11 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
               <div>
                 <h3 className="font-semibold text-lg text-gray-100">
                   {detail.name}
+                  {detail.kind === 'concept' && (
+                    <span className="ml-2 align-middle text-xs font-medium px-2 py-0.5 rounded-lg bg-gray-700 text-gray-300">
+                      Concept
+                    </span>
+                  )}
                   {!detail.active && (
                     <span className="ml-2 align-middle text-xs font-medium px-2 py-0.5 rounded-lg bg-amber-900/40 text-amber-300">
                       Inactive
@@ -891,9 +999,10 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
               In stock: <strong>{detail.stock_amount ?? 0}</strong>
               {unit && ` ${unit.abbreviation || unit.name}`}
             </span>
-            {(detail.children_stock_amount ?? 0) > 0 && (
-              <span title="Sum of stock held against this product's immediate children (mixed units possible)">
-                In children: <strong>{detail.children_stock_amount}</strong>
+            {detail.subtree_amount != null && (
+              <span title="Stock of everything under this product, converted into its unit">
+                Under this: <strong>{detail.subtree_approx ? '~' : ''}{fmtQty(detail.subtree_amount)}</strong>
+                {unit && ` ${unit.abbreviation || unit.name}`}
               </span>
             )}
             {(detail.stock_opened ?? 0) > 0 && (
@@ -959,6 +1068,9 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
             />
           </div>
 
+          {/* Merge */}
+          <MergeSection product={detail} products={products} onMerged={() => { onSaved(); onClose(); }} />
+
           {/* History */}
           <div className="bg-gray-800 rounded-lg p-4 mb-4 border border-gray-600">
             <ProductHistorySection productId={product.id} />
@@ -992,6 +1104,60 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         </div>
       </td>
     </tr>
+  );
+}
+
+/* ── Merge into another product ─────────────────────────────────────────── */
+
+function MergeSection({ product, products, onMerged }) {
+  const [targetId, setTargetId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const candidates = products
+    .filter((p) => p.id !== product.id && p.kind === product.kind)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const handleMerge = async () => {
+    if (!targetId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await mergeProduct(product.id, Number(targetId));
+      onMerged();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Merge failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-4 mb-4 border border-gray-600">
+      <h4 className="text-sm font-semibold text-gray-400 mb-1">Merge into another product</h4>
+      <p className="text-xs text-gray-500 mb-2">
+        Moves recipes, shopping rows, sub-products, stock and barcodes to the chosen product, then removes this one.
+      </p>
+      <div className="flex gap-2">
+        <select
+          className="flex-1 bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm"
+          value={targetId}
+          onChange={(e) => setTargetId(e.target.value)}
+        >
+          <option value="">— choose —</option>
+          {candidates.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <button
+          onClick={handleMerge}
+          disabled={busy || !targetId}
+          className="px-4 py-2 text-sm rounded-xl bg-brand-cobalt text-white hover:bg-brand-cobalt-400 disabled:opacity-50"
+        >
+          {busy ? 'Merging…' : 'Merge'}
+        </button>
+      </div>
+      {error && <p className="text-sm text-red-400 mt-2">{error}</p>}
+    </div>
   );
 }
 
@@ -1440,19 +1606,17 @@ function ProductRow({
             stock entries. Pure-leaf rows render their own stock as before. */}
         <td className="px-4 py-2 text-right font-medium text-gray-100">
           {(() => {
-            const own = p.stock_amount ?? 0;
-            const fromChildren = p.children_stock_amount ?? 0;
-            const total = own + fromChildren;
-            if (total === 0) return '–';
-            if (fromChildren > 0) {
+            if (p.subtree_amount != null) {
+              if (!p.subtree_amount) return '–';
               return (
-                <span title={`${own} on this product + ${fromChildren} aggregated from children`}>
-                  {total}
+                <span title="Everything under this concept, converted into its unit">
+                  {p.subtree_approx ? '~' : ''}{fmtQty(p.subtree_amount)} {unitAbbr(p.subtree_unit_id)}
                   <span className="text-gray-500 ml-0.5">↓</span>
                 </span>
               );
             }
-            return total;
+            const own = p.stock_amount ?? 0;
+            return own === 0 ? '–' : fmtQty(own);
           })()}
         </td>
 

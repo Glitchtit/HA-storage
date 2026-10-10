@@ -15,7 +15,6 @@ export default function Optimize() {
   const [categories, setCategories] = useState([]);
   const [catInput, setCatInput] = useState('');
   const [catSaving, setCatSaving] = useState(false);
-  const [freshSeed, setFreshSeed] = useState(false);
   const [ungroupedOnly, setUngroupedOnly] = useState(false);
 
   useEffect(() => {
@@ -69,7 +68,7 @@ export default function Optimize() {
   const handleStart = async () => {
     setError(''); setLogs([]); setUpdated(0); setStatus('running');
     try {
-      const { data } = await startOptimize(null, freshSeed, ungroupedOnly);
+      const { data } = await startOptimize(null, false, ungroupedOnly);
       setTaskId(data.task_id);
       startPolling(data.task_id);
     } catch (err) {
@@ -86,7 +85,7 @@ export default function Optimize() {
         <div>
           <h2 className="text-xl font-semibold text-white">AI Optimize</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Assigns locations, best-before dates, and groups all products using AI.
+            Assigns aisle groups, locations and best-before dates using AI, then links loose products under matching concepts.
           </p>
         </div>
         <button
@@ -102,11 +101,12 @@ export default function Optimize() {
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 text-sm text-gray-300 space-y-1">
         <div className="font-medium text-white">What this does</div>
         <ul className="list-disc list-inside space-y-0.5 text-gray-400">
-          <li>Phase 1 - AI assigns product categories and groups similar items under parent products</li>
-          <li>Phase 2 - AI assigns storage locations, best-before days, and normalises multi-packs</li>
+          <li>Phase 1 - AI assigns each product an aisle category</li>
+          <li>Phase 2 - AI assigns storage locations, best-before days, and merges genuine multi-packs into their base product</li>
+          <li>Finally the linker places unparented products under matching concepts</li>
         </ul>
-        <p className="text-yellow-400 text-xs pt-1">
-          Full optimize rewrites all parent-product groupings from scratch. Configure your AI provider in Settings first.
+        <p className="text-gray-400 text-xs pt-1">
+          Optimize never deletes products, recipe ingredients or existing groupings. Configure your AI provider in Settings first.
         </p>
       </div>
 
@@ -121,24 +121,7 @@ export default function Optimize() {
           <div>
             <div className="text-sm font-medium text-white">Ungrouped only</div>
             <p className="text-xs text-gray-400 mt-0.5">
-              Only optimize products that currently have no product group. The AI is seeded with the existing groups and parent products and will try to slot each ungrouped product into the best-fitting one — nothing else is changed.
-            </p>
-          </div>
-        </label>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={freshSeed}
-            onChange={(e) => setFreshSeed(e.target.checked)}
-            disabled={ungroupedOnly}
-            className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0 disabled:opacity-40"
-          />
-          <div>
-            <div className={"text-sm font-medium " + (ungroupedOnly ? "text-gray-500" : "text-white")}>Fresh naming (ignore previous parent names)</div>
-            <p className="text-xs text-gray-400 mt-0.5">
-              By default, the AI is seeded with the previous parent product names for naming consistency.
-              Enable this to let the AI invent all parent names from scratch on a clean slate.
-              {ungroupedOnly && " (Disabled in 'Ungrouped only' mode.)"}
+              Only optimize products that currently have no product group. The AI is seeded with the existing groups and slots each ungrouped product into the best-fitting one — nothing else is changed.
             </p>
           </div>
         </label>
