@@ -76,3 +76,19 @@ def test_optimize_gives_a_concept_its_aisle_group_and_nothing_else(monkeypatch):
     assert groups[after["product_group_id"]] == "Leivonta g3"
     assert after["name"] == "Hiiva g3" and after["location_id"] is None
     assert after["default_best_before_days"] == 60
+
+
+def test_shopping_sync_leaves_no_open_transaction():
+    """Live finding (0.26.0 deploy): a sync that changed nothing still ran a
+    no-op DELETE, which opened a write transaction on the shared connection
+    and never committed it, so every background job on its own connection
+    (the concept sweep, import follow-ups, purchase-time linking) failed with
+    'database is locked'."""
+    from routers.shopping import sync_auto_shopping
+
+    sku = _mk("Valio maito g4 1l", min_stock_amount=1)
+    client.post("/api/stock/add", json={"product_id": sku, "amount": 3})
+    conn = get_connection()
+    conn.commit()
+    assert sync_auto_shopping(conn) == {"added": 0, "removed": 0, "updated": 0}
+    assert conn.in_transaction is False

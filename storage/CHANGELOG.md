@@ -1,3 +1,7 @@
+## 0.26.1
+
+- The 5-minute shopping-list sync no longer keeps the database's write lock after a run that changed nothing. Because of it, background jobs that write through their own connection (the concept sweep after upgrading, the follow-ups after a recipe import, linking a newly bought product) could fail with "database is locked"
+
 ## 0.26.0
 
 - Recipe import now asks Storage which product each ingredient is (`POST /api/ingredients/resolve`): known words bind through their aliases, the rest through one AI match, and only a genuinely new ingredient becomes a new concept, so duplicate stubs stop appearing; requires HA-recipes 2.8.0

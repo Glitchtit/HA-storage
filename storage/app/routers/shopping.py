@@ -170,8 +170,11 @@ def sync_auto_shopping(conn) -> dict:
             if cur.rowcount:
                 removed += cur.rowcount
 
+    # Always end the transaction: even a DELETE that removed nothing opened a
+    # write transaction, and leaving it open on the shared connection blocks
+    # every background job that writes through its own connection.
+    conn.commit()
     if added or removed or updated:
-        conn.commit()
         log.info("Shopping auto-sync: added=%d, removed=%d, updated=%d",
                  added, removed, updated)
     return {"added": added, "removed": removed, "updated": updated}
