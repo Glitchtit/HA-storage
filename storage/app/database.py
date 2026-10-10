@@ -683,6 +683,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         _seed(conn)
     _ensure_unit_catalog(conn)
 
+    import migrate_quantity
+    migrate_quantity.run(conn)
+
 
 def _seed(conn: sqlite3.Connection) -> None:
     """Seed a brand-new database with units, conversions and locations."""
