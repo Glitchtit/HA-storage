@@ -136,8 +136,10 @@ class TestRunReconcile:
         conn = get_connection()
         cat = _mk("kerma-l7")
         sku = _mk("Testikerma 2dl l7")
-        # simulate a pre-parser product: wipe its conversion to test backfill
-        conn.execute("DELETE FROM unit_conversions WHERE product_id = ?", (sku,))
+        # simulate a pre-parser product: wipe its parsed facts to test backfill
+        conn.execute(
+            "UPDATE products SET content_amount = NULL, content_unit_id = NULL, "
+            "facts_meta = NULL WHERE id = ?", (sku,))
         conn.commit()
 
         def fake(prompt, conn_, **k):
@@ -145,8 +147,10 @@ class TestRunReconcile:
         monkeypatch.setattr("linker.call_ai_json", fake)
         res = linker.run_reconcile(conn)
         assert res["linked"] >= 1
-        assert conn.execute(
-            "SELECT 1 FROM unit_conversions WHERE product_id = ?", (sku,)).fetchone()
+        assert res["facts_backfilled"] >= 1
+        row = conn.execute(
+            "SELECT content_amount FROM products WHERE id = ?", (sku,)).fetchone()
+        assert row["content_amount"] == 2.0
 
 
 class TestLinksRouter:

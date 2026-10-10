@@ -285,7 +285,7 @@ def create_product(body: ProductCreate):
     conn.commit()
     new = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
     try:
-        pack_size.ensure_pack_conversions(conn, new["id"])
+        pack_size.ensure_pack_facts(conn, new["id"])
         new = conn.execute("SELECT * FROM products WHERE id = ?", (new["id"],)).fetchone()
     except Exception as exc:
         log.warning("Pack-size parse for product %d failed: %s", new["id"], exc)

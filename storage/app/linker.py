@@ -17,7 +17,7 @@ import sqlite3
 import threading
 
 from ai_client import call_ai_json
-from pack_size import ensure_pack_conversions, parse_pack_size
+from pack_size import ensure_pack_facts, parse_pack_size
 from routers.history import log_event
 import tree
 
@@ -229,15 +229,15 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
 
 
 def run_reconcile(conn: sqlite3.Connection) -> dict:
-    """Idempotent sweep: backfill pack conversions everywhere, then try to link
+    """Idempotent sweep: backfill pack facts on every SKU, then try to link
     every unparented, childless, non-staple product that is not itself a
     category node."""
-    conversions = 0
+    backfilled = 0
     all_ids = [r["id"] for r in conn.execute("SELECT id FROM products").fetchall()]
     for pid in all_ids:
         try:
-            if ensure_pack_conversions(conn, pid):
-                conversions += 1
+            if ensure_pack_facts(conn, pid):
+                backfilled += 1
         except Exception as exc:
             log.warning("Pack backfill for %d failed: %s", pid, exc)
 
@@ -261,7 +261,7 @@ def run_reconcile(conn: sqlite3.Connection) -> dict:
         "examined": len(orphans),
         "linked": len(res["linked"]),
         "proposed": len(res["proposed"]),
-        "conversions_backfilled": conversions,
+        "facts_backfilled": backfilled,
     }
 
 
