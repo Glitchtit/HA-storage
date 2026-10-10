@@ -95,6 +95,15 @@ Key design decisions:
 - `merge.py` — `POST /api/products/{id}/merge`; `DELETE /api/products/{id}` answers 409 while recipes or bundles use the product.
 - Products have `kind` (`concept` | `sku`). Parents are concepts. A `kpl` attached to a SKU (its lots, shopping rows, own unit) means retail packages; a recipe need in `kpl` means natural pieces.
 
+## Concept identity (0.26.0)
+
+- `concepts.py` — `norm()` (alias normalization), aliases in `product_aliases` (first mapping wins; a manual alias from `POST /api/products/{id}/aliases` takes the word over), `concept_index()` / `find_concept()`, `create_concept()`, `dedup_concepts()` (run by `POST /api/products/reconcile`).
+- `ingredient_resolver.py` — `POST /api/ingredients/resolve`: unit text to a catalog unit (an unknown word becomes `kpl` with `needs_review`), alias or exact-name match, one AI match outside the lock, then concept creation under the lock. It never creates SKUs, changes a unit or deletes anything.
+- `concept_jobs.py` — background AI follow-ups: `place` (merge into a twin, or move under the broader concept), `adopt` (SKUs that are the concept), `assign_groups`, `estimate_facts`. `run_sweep` covers the whole catalog once after an upgrade (`_meta` `concepts_sweep_v1`) and on `POST /api/concepts/sweep` (status: `GET /api/concepts/sweep`).
+- `migrate_concepts.py` — idempotent startup steps (`_meta` `concepts_*_v1`): demote mislabelled packs, make concepts visible (retires "Group master"), seed aliases, merge twins. `POST /api/concepts/repair-units` re-derives concept display units from recipe usage.
+- `locks.CATALOG_LOCK` — one process-wide RLock around catalog writes (resolve, product create/update, link, adopt, merge). Never hold it across an AI call.
+- Recipe ingredients carry `raw_text` and `needs_review`. `PUT /api/recipes/{id}/ingredients` replaces them in one transaction and copies the old rows to `recipe_ingredients_backup`.
+
 ## Web UI
 
 React 18 + Vite + Tailwind. English UI. Dark mode (bg-gray-900, bg-gray-800, emerald accents).

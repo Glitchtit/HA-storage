@@ -1,3 +1,15 @@
+## 0.26.0
+
+- Recipe import now asks Storage which product each ingredient is (`POST /api/ingredients/resolve`): known words bind through their aliases, the rest through one AI match, and only a genuinely new ingredient becomes a new concept, so duplicate stubs stop appearing; requires HA-recipes 2.8.0
+- Concepts are visible: they are active, sit in a real aisle group and carry a "Concept" marker in Products, where you can also filter by kind; the "Group master" group is retired
+- Aliases: every spelling seen in recipes (Swedish, English, variants) binds to one concept; a concept's detail view lists its aliases and lets you add or remove one
+- A new concept adopts the matching products you already have, moves under its broader concept, gets an aisle group and the density or piece weight its recipes need; this runs in the background when AI is configured, and once over the whole catalog after upgrading (`POST /api/concepts/sweep` runs it again)
+- The reconcile sweep merges twin concepts (another spelling of the same name, or a sub-product with its parent's name) without losing recipe rows
+- Recipe ingredients keep their source line and flag a line whose unit could not be read; `PUT /api/recipes/{id}/ingredients` replaces a recipe's ingredients in one step and keeps the old rows in a backup table
+- Products created without a kind are products you buy; receipt scanning never suggests a concept; AI Optimize gives a concept an aisle group and nothing else; low-stock alerts on the dashboard count a concept's products
+- Concepts now appear in product pickers and lists, so the product count (and the HA "Storage Products Total" sensor) grows by the number of concepts
+- Upgrading turns concept-looking packs back into products (for example "Pepsi Max … 18-pack"), makes concepts visible and merges twin concepts once. To go back to 0.25.x, restore the backup taken before upgrading
+
 ## 0.25.0
 
 - Recipe availability converts every unit properly and counts stock anywhere under an ingredient: a 2 kg flour bag counts as ~33 dl, a 10-egg carton as 10 eggs
