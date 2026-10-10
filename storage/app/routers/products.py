@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from availability import own_unit_have
 from facts import Catalog
-from models import Product, ProductCreate, ProductDetail, ProductUpdate
+from models import Product, ProductCreate, ProductDetail, ProductMerge, ProductUpdate
 import tree
 import pack_size
 
@@ -382,13 +382,46 @@ def update_product(product_id: int, body: ProductUpdate):
 # ── Delete ─────────────────────────────────────────────────────────────────
 
 @router.delete("/products/{product_id}", status_code=204)
-def delete_product(product_id: int):
+def delete_product(product_id: int, force: bool = Query(False)):
+    """Delete a product. Refused (409) while recipe ingredients or bundles use
+    it — merge it into another product instead. force=true deletes anyway and
+    takes the referencing recipe ingredients and shopping rows with it."""
     conn = _get_db()
-    existing = conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
+    existing = conn.execute("SELECT id, name FROM products WHERE id = ?", (product_id,)).fetchone()
     if not existing:
         raise HTTPException(404, f"Product {product_id} not found")
+    if not force:
+        refs = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM recipe_ingredients WHERE product_id = ?) AS ingredients, "
+            "       (SELECT COUNT(*) FROM bundle_items WHERE product_id = ?) AS bundle_items",
+            (product_id, product_id),
+        ).fetchone()
+        if refs["ingredients"] or refs["bundle_items"]:
+            raise HTTPException(
+                409,
+                f"'{existing['name']}' is used by {refs['ingredients']} recipe ingredient(s) "
+                f"and {refs['bundle_items']} bundle item(s). Merge it into another product "
+                "instead, or delete with force=true.",
+            )
     # Clean up references that lack ON DELETE CASCADE
     conn.execute("DELETE FROM recipe_ingredients WHERE product_id = ?", (product_id,))
     conn.execute("DELETE FROM shopping_list WHERE product_id = ?", (product_id,))
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
+
+
+@router.post("/products/{product_id}/merge", response_model=Product)
+def merge_product(product_id: int, body: ProductMerge):
+    """Merge this product into body.target_id: every recipe ingredient,
+    shopping row, sub-product, lot, barcode and history row moves over, then
+    this product is deleted."""
+    from merge import merge_products
+
+    conn = _get_db()
+    try:
+        merge_products(conn, product_id, body.target_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return conn.execute("SELECT * FROM products WHERE id = ?", (body.target_id,)).fetchone()

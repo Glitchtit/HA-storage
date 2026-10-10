@@ -146,6 +146,9 @@ class Product(BaseModel):
             return parsed if isinstance(parsed, dict) else {}
         return value
 
+class ProductMerge(BaseModel):
+    target_id: int
+
 class ProductDetail(Product):
     """Product with related data included."""
     children: list[Product] = []
