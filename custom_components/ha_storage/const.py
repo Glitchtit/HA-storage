@@ -10,7 +10,3 @@ DEFAULT_EXPIRING_WITHIN_DAYS = 7
 
 ADDON_SLUG = "ha_storage"
 SUPERVISOR_ADDON_API = f"http://supervisor/addons/{ADDON_SLUG}/info"
-
-PANEL_TITLE = "Storage"
-PANEL_ICON = "mdi:database"
-PANEL_URL = "ha-storage"
