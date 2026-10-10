@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
@@ -12,7 +13,8 @@ from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
 from list_clearing import apply_purchase
 from buy_hints import buy_hint, purchase_stats
-from quantity import PACKAGE, VAGUE, format_qty
+from quantity import COUNT, PACKAGE, VAGUE, convert, format_qty
+from recipe_rows import row_unit
 from models import (
     ApplyBasketRequest,
     ApplyBasketResponse,
@@ -26,6 +28,7 @@ from models import (
     ShoppingItemCreate,
     ShoppingItemUpdate,
     ShoppingProposalResponse,
+    ShoppingSwap,
 )
 
 router = APIRouter(tags=["shopping-list"])
@@ -614,9 +617,17 @@ def update_shopping_item(item_id: int, body: ShoppingItemUpdate):
 
     updates = {}
     for field, value in body.model_dump(exclude_unset=True).items():
+        if value is None and field not in ("unit_id", "note"):
+            continue  # only a unit or a note can be cleared
         if field in ("done", "pinned"):
             value = int(value)
+        if field == "note" and value is None:
+            value = ""
         updates[field] = value
+    if updates.get("unit_id") is not None and not conn.execute(
+        "SELECT 1 FROM units WHERE id = ?", (updates["unit_id"],)
+    ).fetchone():
+        raise HTTPException(400, f"Unit {updates['unit_id']} not found")
     # Pinning is a product-level preference, not a row attribute: route it to
     # products.pin_brand so it persists across re-adds and applies to every
     # row of the product. The stored shopping_list.pinned is left untouched.
@@ -629,6 +640,61 @@ def update_shopping_item(item_id: int, body: ShoppingItemUpdate):
         conn.execute(
             f"UPDATE shopping_list SET {set_clause} WHERE id = ?",
             list(updates.values()) + [item_id],
+        )
+    conn.commit()
+    return _one(conn, item_id)
+
+
+def _swapped_quantity(cat: Catalog, row: dict, target_id: int) -> tuple[float, int | None]:
+    """The row's quantity carried over to another product: retail packages
+    stay packages, natural pieces become whole packages of a SKU, and mass
+    or volume stays as it is."""
+    amount = float(row["amount"])
+    side = row_unit(cat, row["product_id"], row["unit_id"])
+    if side is None:
+        return amount, row["unit_id"]
+    unit, dim = side
+    if dim == PACKAGE:
+        return amount, None
+    kpl = cat.unit_by_abbr("kpl")
+    if dim == COUNT and cat.is_sku(target_id) and kpl is not None:
+        conv = convert(amount, unit, kpl, cat.facts(target_id), from_dim=COUNT, to_dim=PACKAGE)
+        return float(max(1, math.ceil((conv.amount if conv else amount) - 1e-9))), None
+    return amount, row["unit_id"]
+
+
+@router.post("/shopping-list/{item_id}/swap", response_model=ShoppingItem)
+def swap_shopping_item(item_id: int, body: ShoppingSwap):
+    """Buy something else for a row (spec §4.8); amount, unit, recipe, bundle
+    and note stay. A SKU under the row's product becomes the row's preferred
+    product, so the requirement stays and the buy hint follows it; the row's
+    own product clears that preference. Any other product takes the row over
+    (see _swapped_quantity). A minimum-stock row belongs to its product, so it
+    can only take a preferred product (409 otherwise)."""
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM shopping_list WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, f"Shopping list item {item_id} not found")
+    cat = Catalog(conn)
+    target = cat.product(body.product_id)
+    if target is None:
+        raise HTTPException(400, f"Product {body.product_id} not found")
+    if body.product_id == row["product_id"]:
+        conn.execute("UPDATE shopping_list SET preferred_product_id = NULL WHERE id = ?", (item_id,))
+    elif cat.is_sku(body.product_id) and body.product_id in cat.descendants(row["product_id"]):
+        conn.execute(
+            "UPDATE shopping_list SET preferred_product_id = ? WHERE id = ?", (body.product_id, item_id)
+        )
+    else:
+        if row["auto_added"]:
+            raise HTTPException(
+                409, "A minimum-stock row belongs to its product; pick a product under it instead"
+            )
+        amount, unit_id = _swapped_quantity(cat, row, body.product_id)
+        conn.execute(
+            "UPDATE shopping_list SET product_id = ?, preferred_product_id = NULL, amount = ?, "
+            "unit_id = ?, ha_item_name = ? WHERE id = ?",
+            (body.product_id, amount, unit_id, target["name"], item_id),
         )
     conn.commit()
     return _one(conn, item_id)

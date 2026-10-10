@@ -572,10 +572,14 @@ class ShoppingItemCreate(BaseModel):
     pinned: bool = False
 
 class ShoppingItemUpdate(BaseModel):
-    amount: float | None = None
+    amount: float | None = Field(None, gt=0)
     done: bool | None = None
     note: str | None = None
     pinned: bool | None = None
+    unit_id: int | None = None  # an explicit null makes the amount retail packages
+
+class ShoppingSwap(BaseModel):
+    product_id: int
 
 class ShoppingDisplay(BaseModel):
     """Render hints: "3,5 dl" and how the amount reads (mass, volume, count =
