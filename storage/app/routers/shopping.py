@@ -14,6 +14,8 @@ from list_clearing import apply_purchase
 from buy_hints import buy_hint, purchase_stats
 from quantity import PACKAGE, VAGUE, format_qty
 from models import (
+    ApplyBasketRequest,
+    ApplyBasketResponse,
     CadenceSuggestionResponse,
     ReconcileApplyRequest,
     ReconcileApplyResponse,
@@ -311,6 +313,27 @@ def sync_shopping():
     that fell below their `min_stock_amount` and removes auto-added rows for
     products that are now back at or above the threshold."""
     return sync_auto_shopping(_get_db())
+
+
+@router.post("/shopping-list/apply-basket", response_model=ApplyBasketResponse)
+def apply_basket(body: ApplyBasketRequest):
+    """Finishing a trip, step one (spec §4.8): apply the basket items whose
+    scan cleared nothing once more, since the linker may have placed a new
+    product under a concept in the meantime. Send only those items: this
+    adds no stock, and an item applied twice clears its rows twice. Items
+    that still clear nothing come back as `unmatched`, for the AI reconcile."""
+    conn = _get_db()
+    cat = Catalog(conn)
+    cleared: list[dict] = []
+    unmatched = []
+    for item in body.basket:
+        rows = apply_purchase(conn, cat, item.product_id, item.amount, item.unit_id)
+        if rows:
+            cleared.extend(rows)
+        else:
+            unmatched.append(item)
+    conn.commit()
+    return {"cleared_rows": cleared, "unmatched": unmatched}
 
 
 # ── Cross-brand reconcile ────────────────────────────────────────────────────

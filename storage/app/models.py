@@ -687,6 +687,14 @@ class BundleToShoppingResponse(BaseModel):
 class BasketItem(BaseModel):
     product_id: int
     amount: float = 1
+    unit_id: int | None = None  # None: the product's own unit, as /stock/add
+
+class ApplyBasketRequest(BaseModel):
+    basket: list[BasketItem] = []
+
+class ApplyBasketResponse(BaseModel):
+    cleared_rows: list[ClearedRow] = []
+    unmatched: list[BasketItem] = []
 
 class ReconcileRequest(BaseModel):
     basket: list[BasketItem]
