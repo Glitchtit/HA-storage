@@ -11,13 +11,22 @@ record    one row per concept in sku_searches
 
 AI and scraper calls never hold CATALOG_LOCK; apply_link takes it for the
 write. The scraper object is injected (ScraperClient in production).
+
+run_pending searches every pending concept once; start() runs it on a
+daemon thread with its own connection (single-flight, only with an AI
+provider). The shopping-list add, recipe push and periodic sync call start().
 """
 from __future__ import annotations
 
 import json
 import logging
 import sqlite3
+import threading
+import time
+from datetime import datetime, timezone
 from typing import Any, Callable
+
+import httpx
 
 import tree
 from concepts import aliases_of, norm
@@ -203,3 +212,136 @@ def record(conn: sqlite3.Connection, concept_id: int, result: dict) -> None:
         (concept_id, result["status"], result.get("found_product_id"), result.get("detail") or ""),
     )
     conn.commit()
+
+
+# ── scraper client ───────────────────────────────────────────────────────
+
+# Storage's own nginx proxies /api/scraper/ to the auto-detected scraper add-on
+# (a placeholder that refuses connections when there is none).
+SCRAPER_BASE = "http://127.0.0.1:8099/api/scraper"
+SEARCH_DEADLINE_S = 60
+ADD_DEADLINE_S = 180
+
+
+class ScraperClient:
+    """The scraper's fire-and-poll API: a POST returns a task id, and
+    GET /task/{id} answers until its status is no longer 'running'."""
+
+    def __init__(self, base: str = SCRAPER_BASE, http: httpx.Client | None = None,
+                 poll: float = 1.0):
+        self.base, self.poll = base.rstrip("/"), poll
+        self.http = http or httpx.Client(timeout=15)
+
+    def _run(self, path: str, body: dict, deadline_s: float) -> dict:
+        try:
+            r = self.http.post(f"{self.base}/{path}", json=body)
+        except httpx.HTTPError as exc:
+            raise ScraperError(f"unreachable: {exc}") from exc
+        if r.status_code == 409:
+            raise ScraperError("busy")
+        if r.status_code >= 400:
+            raise ScraperError(f"HTTP {r.status_code}")
+        try:
+            task = (r.json() or {}).get("task_id")
+        except ValueError as exc:
+            raise ScraperError(f"bad answer: {exc}") from exc
+        if not task:
+            raise ScraperError("no task id")
+        end = time.monotonic() + deadline_s
+        while time.monotonic() < end:
+            time.sleep(self.poll)
+            try:
+                t = self.http.get(f"{self.base}/task/{task}").json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise ScraperError(f"poll: {exc}") from exc
+            if t.get("status") == "running":
+                continue
+            if t.get("status") == "error" or t.get("success") is False:
+                raise ScraperError(str(t.get("error") or "; ".join(t.get("errors") or []) or "failed"))
+            return t
+        raise ScraperError("timed out")
+
+    def search(self, query: str) -> list[dict]:
+        return self._run("search", {"query": query, "max_products": MAX_HITS},
+                         SEARCH_DEADLINE_S).get("products") or []
+
+    def add_product(self, hit: dict, *, parent_id: int, product_group_id: int | None) -> int | None:
+        item = {**{k: hit.get(k, "") for k in ("name", "ean", "description", "image_url")},
+                "parent_id": parent_id}
+        if product_group_id is not None:
+            item["product_group_id"] = product_group_id
+        ids = self._run("add_products", {"products": [item]}, ADD_DEADLINE_S).get("added_ids") or []
+        return int(ids[0]) if ids else None
+
+
+# ── background run ───────────────────────────────────────────────────────
+
+def run_pending(conn: sqlite3.Connection, scraper: Any, ai: Callable[..., Any]) -> dict[str, int]:
+    """Search for every pending concept once, including ones added meanwhile;
+    stop at the first scraper error (the rest would fail the same way)."""
+    counts: dict[str, int] = {}
+    done: set[int] = set()
+    while todo := [c for c in pending(conn) if c not in done]:
+        for cid in todo:
+            done.add(cid)
+            res = find_for(conn, cid, scraper, ai)
+            record(conn, cid, res)
+            counts[res["status"]] = counts.get(res["status"], 0) + 1
+            log.info("Product search for concept %d: %s %s", cid, res["status"], res["detail"])
+            if res["stop"]:
+                return counts
+    return counts
+
+
+_state: dict = {"running": False, "last_run": None}
+_guard = threading.Lock()
+
+
+def _finish(result: dict) -> None:
+    with _guard:
+        _state.update(running=False, last_run={
+            **result, "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+
+
+def _job() -> None:
+    from ai_client import call_ai_json
+    from database import get_db
+    from main import DB_PATH
+
+    result: dict = {}
+    try:
+        conn = get_db(DB_PATH)
+        try:
+            result = run_pending(conn, ScraperClient(), call_ai_json)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — a background run never raises
+        log.warning("Product search run failed: %s", exc)
+        result = {"failed": str(exc)}
+    _finish(result)
+
+
+def start() -> bool:
+    """Run the search in the background unless it is running or no AI
+    provider is configured. True when started."""
+    from main import get_connection
+    from routers.products import _ai_configured
+
+    if not _ai_configured(get_connection()):
+        return False
+    with _guard:
+        if _state["running"]:
+            return False
+        _state["running"] = True
+    threading.Thread(target=_job, daemon=True, name="sku-finder").start()
+    return True
+
+
+def status(conn: sqlite3.Connection) -> dict:
+    with _guard:
+        state = dict(_state)
+    records = conn.execute(
+        "SELECT f.*, p.name FROM sku_searches f JOIN products p ON p.id = f.product_id "
+        "ORDER BY f.last_attempt_at DESC, f.product_id DESC LIMIT 50"
+    ).fetchall()
+    return {**state, "records": records}

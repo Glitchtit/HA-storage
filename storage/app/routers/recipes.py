@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+import sku_finder
 from availability import EPS, need_status
 from cook_recipe import cook_recipe
 from facts import Catalog
@@ -348,6 +349,8 @@ def recipe_to_shopping(recipe_id: int, body: RecipeToShoppingRequest | None = No
     except Exception:
         conn.rollback()
         raise
+    if created + merged:
+        sku_finder.start()
     return {"added": created + merged, "created": created, "merged": merged}
 
 

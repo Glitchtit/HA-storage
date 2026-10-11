@@ -12,6 +12,7 @@ from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
 from list_clearing import apply_purchase
+import sku_finder
 from buy_hints import buy_hint, fallback_ranks, purchase_stats
 from quantity import COUNT, PACKAGE, VAGUE, convert, format_qty
 from recipe_rows import row_unit
@@ -321,6 +322,23 @@ def sync_shopping():
     return sync_auto_shopping(_get_db())
 
 
+@router.get("/shopping-list/find-products")
+def find_products_status():
+    """Store searches for generic items that have no product (sku_finder)."""
+    return sku_finder.status(_get_db())
+
+
+@router.post("/shopping-list/find-products")
+def find_products_start():
+    return {"started": sku_finder.start()}
+
+
+def _find_products_for(product: dict) -> None:
+    """A generic item may have no product to buy yet: look for one."""
+    if product["kind"] == "concept":
+        sku_finder.start()
+
+
 @router.post("/shopping-list/apply-basket", response_model=ApplyBasketResponse)
 def apply_basket(body: ApplyBasketRequest):
     """Finishing a trip, step one (spec §4.8): apply the basket items whose
@@ -600,6 +618,7 @@ def add_shopping_item(body: ShoppingItemCreate, response: Response):
             )
             conn.commit()
             response.status_code = 200
+            _find_products_for(product)
             return _one(conn, existing["id"])
     cur = conn.execute(
         "INSERT INTO shopping_list (product_id, amount, unit_id, note, recipe_id, ha_item_name, auto_added, pinned)"
@@ -608,6 +627,7 @@ def add_shopping_item(body: ShoppingItemCreate, response: Response):
          int(body.auto_added), int(body.pinned)),
     )
     conn.commit()
+    _find_products_for(product)
     return _one(conn, cur.lastrowid)
 
 

@@ -201,3 +201,136 @@ class TestFindFor:
         res = sku_finder.find_for(get_connection(), concept, _Scraper(hits), broken)
         assert (res["status"], res["stop"]) == ("error", False)
         assert client.get("/api/products/by-barcode/9000000000073").status_code == 404
+
+
+import httpx  # noqa: E402
+
+
+def _transport(handler):
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+class TestScraperClient:
+    def test_search_polls_the_task_until_done(self):
+        calls = []
+
+        def handler(request):
+            calls.append((request.method, request.url.path))
+            if request.method == "POST":
+                assert json.loads(request.content) == {"query": "juustokreemi", "max_products": 20}
+                return httpx.Response(200, json={"task_id": "7", "status": "running"})
+            if len(calls) < 3:
+                return httpx.Response(200, json={"status": "running"})
+            return httpx.Response(200, json={"status": "done", "success": True,
+                                             "products": [_hit("Valio", "1")]})
+        c = sku_finder.ScraperClient("http://s/api/scraper", http=_transport(handler), poll=0)
+        assert c.search("juustokreemi") == [_hit("Valio", "1")]
+        assert calls[0] == ("POST", "/api/scraper/search")
+        assert calls[-1] == ("GET", "/api/scraper/task/7")
+
+    def test_busy_failed_and_unreachable_raise(self):
+        busy = sku_finder.ScraperClient("http://s/api/scraper", poll=0, http=_transport(
+            lambda r: httpx.Response(409, json={"error": "busy"})))
+        failed = sku_finder.ScraperClient("http://s/api/scraper", poll=0, http=_transport(
+            lambda r: httpx.Response(200, json={"task_id": "1", "status": "running"})
+            if r.method == "POST" else httpx.Response(200, json={"status": "done", "success": False,
+                                                                 "error": "boom"})))
+
+        def down(request):
+            raise httpx.ConnectError("refused")
+        unreachable = sku_finder.ScraperClient("http://s/api/scraper", poll=0, http=_transport(down))
+        for c in (busy, failed, unreachable):
+            with pytest.raises(sku_finder.ScraperError):
+                c.search("x")
+
+    def test_add_product_sends_the_parent_and_returns_the_new_id(self):
+        sent = []
+
+        def handler(request):
+            if request.method == "POST":
+                sent.append(json.loads(request.content))
+                return httpx.Response(200, json={"task_id": "2", "status": "running"})
+            return httpx.Response(200, json={"status": "done", "success": True, "added_ids": [91]})
+        c = sku_finder.ScraperClient("http://s/api/scraper", http=_transport(handler), poll=0)
+        assert c.add_product(_hit("Valio", "1"), parent_id=5, product_group_id=3) == 91
+        assert sent == [{"products": [{**_hit("Valio", "1"), "parent_id": 5, "product_group_id": 3}]}]
+
+
+class TestRun:
+    def test_run_records_each_concept_once(self):
+        conn = get_connection()
+        a = _mk("Käsite r1a", kind="concept")
+        b = _mk("Käsite r1b", kind="concept")
+        _add(a)
+        _add(b)
+        scraper = _Scraper({"käsite r1a": [_hit("Tuote r1a", "9000000000103")]})
+        counts = sku_finder.run_pending(conn, scraper, _ai())
+        assert counts["found"] >= 1 and counts["no_hits"] >= 1
+        assert not {a, b} & set(sku_finder.pending(conn))
+        assert scraper.searched.count("käsite r1a") == 1
+
+    def test_run_stops_at_the_first_scraper_error(self):
+        conn = get_connection()
+        _add(_mk("Käsite r2a", kind="concept"))
+        _add(_mk("Käsite r2b", kind="concept"))
+        scraper = _Scraper(fail="search")
+        assert sku_finder.run_pending(conn, scraper, _ai()) == {"error": 1}
+        assert len(scraper.searched) == 1
+
+    def test_start_needs_an_ai_provider(self):
+        assert sku_finder.start() is False
+
+    def test_start_is_single_flight(self, monkeypatch):
+        import threading
+        import time
+        import routers.products
+
+        gate, ran = threading.Event(), []
+
+        def job():
+            ran.append(1)
+            gate.wait(5)
+            sku_finder._finish({"done": 1})
+        monkeypatch.setattr(routers.products, "_ai_configured", lambda conn: True)
+        monkeypatch.setattr(sku_finder, "_job", job)
+        assert sku_finder.start() is True
+        assert sku_finder.start() is False
+        gate.set()
+        for _ in range(100):
+            if not sku_finder.status(get_connection())["running"]:
+                break
+            time.sleep(0.02)
+        assert ran == [1]
+        assert sku_finder.status(get_connection())["last_run"]["done"] == 1
+
+
+class TestEndpointsAndTriggers:
+    def test_status_lists_records(self):
+        concept = _mk("Käsite e1", kind="concept")
+        sku_finder.record(get_connection(), concept, {"status": "no_hits"})
+        body = client.get("/api/shopping-list/find-products").json()
+        assert body["running"] is False
+        assert any(r["product_id"] == concept and r["name"] == "Käsite e1" for r in body["records"])
+        assert client.post("/api/shopping-list/find-products").json() == {"started": False}
+
+    def test_adding_a_concept_row_or_a_recipe_starts_a_run(self, monkeypatch):
+        started = []
+        monkeypatch.setattr(sku_finder, "start", lambda: started.append(1) or True)
+        concept = _mk("Käsite e2", kind="concept")
+        _add(_mk("Tuote e2"))
+        assert started == []
+        _add(concept)
+        assert started == [1]
+        r = client.post("/api/recipes", json={"name": "Resepti e2", "servings": 4, "ingredients": [
+            {"product_id": concept, "amount": 1, "unit_id": _u("kpl"), "specificity": "loose"}]})
+        assert r.status_code == 201, r.text
+        pushed = client.post(f"/api/recipes/{r.json()['id']}/to-shopping", json={"mode": "all"})
+        assert pushed.status_code in (200, 201), pushed.text
+        assert started == [1, 1]
+
+    def test_the_periodic_sync_starts_a_run(self, monkeypatch):
+        import main
+        started = []
+        monkeypatch.setattr(sku_finder, "start", lambda: started.append(1) or True)
+        main.periodic_sync_once()
+        assert started == [1]

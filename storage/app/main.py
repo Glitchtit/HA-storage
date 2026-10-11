@@ -236,10 +236,17 @@ def periodic_sync_once() -> dict:
 
     conn = get_connection()
     try:
-        return sync_auto_shopping(conn)
+        result = sync_auto_shopping(conn)
     except BaseException:
         conn.rollback()
         raise
+    # Generic items on the list with no product to buy: look for one.
+    try:
+        import sku_finder
+        sku_finder.start()
+    except Exception as exc:  # noqa: BLE001 — never break the sync loop
+        log.warning("Product search did not start: %s", exc)
+    return result
 
 
 async def _periodic_shopping_sync() -> None:
