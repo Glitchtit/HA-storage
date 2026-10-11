@@ -130,6 +130,16 @@ CREATE TABLE IF NOT EXISTS product_aliases (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Store searches for concepts with no product under them (2026-10-11).
+CREATE TABLE IF NOT EXISTS sku_searches (
+    product_id       INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+    status           TEXT NOT NULL,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at  TEXT,
+    found_product_id INTEGER,
+    detail           TEXT
+);
+
 -- Ingredient rows replaced by a recipe re-import, kept for rollback.
 CREATE TABLE IF NOT EXISTS recipe_ingredients_backup (
     backup_id    INTEGER PRIMARY KEY AUTOINCREMENT,
