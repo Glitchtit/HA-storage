@@ -1,3 +1,9 @@
+## 0.28.0
+
+- A generic item on the shopping list now names a product to buy even when none of its products was bought before: one sold in your stores first, then one with a price, then the oldest
+- A generic item on the open shopping list with no product at all gets one automatically: Storage searches K-Ruoka through the Scraper add-on, the AI picks the hit that is the item, and the Scraper creates it under the item with its picture, barcode and price. Each item is searched once; when K-Ruoka has nothing it is tried again a day later (three times in all), and while the Scraper or the AI is unavailable the search waits 15 minutes and no item is marked. It needs the Scraper add-on (2.6.0 or later) and an AI provider. `GET /api/shopping-list/find-products` lists the searches, `POST` starts one
+- HA integration 0.6.2: the to-do list names the product to buy instead of the generic item
+
 ## 0.27.1
 
 - Undoing a mis-scan (`/stock/correct-purchase`, HA-stock's swipe −1) puts back the shopping rows the scan took off the list, with their note, recipe and set; a row you removed by hand afterwards stays removed, and a ticked row, or one whose amount you switched to packages in the meantime, is left as it is. The answer lists them (`restored_rows`)
