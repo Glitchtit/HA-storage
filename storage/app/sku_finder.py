@@ -2,7 +2,9 @@
 (spec 2026-10-11 §5).
 
 pending   concepts on open shopping rows with no active SKU under them and
-          no final search record (errors retry after 30 minutes, 5 times)
+          no final search record (an error retries after 30 minutes, five
+          times; "no hits" after a day, three times — K-Ruoka answers empty
+          when it fails)
 find_for  search K-Ruoka (through the scraper) by the concept's name and
           aliases, let the AI pick the hit that is the concept, then file
           it under the concept: move an existing unparented product there,
@@ -15,6 +17,9 @@ write. The scraper object is injected (ScraperClient in production).
 run_pending searches every pending concept once; start() runs it on a
 daemon thread with its own connection (single-flight, only with an AI
 provider). The shopping-list add, recipe push and periodic sync call start().
+An outage (scraper unreachable, busy or failing, AI failing) is nobody's
+concept's fault: it is not recorded, the run stops and no run starts for
+OUTAGE_BACKOFF_S.
 """
 from __future__ import annotations
 
@@ -38,6 +43,9 @@ log = logging.getLogger(__name__)
 FINAL = frozenset({"found", "linked", "no_hits", "no_match", "exists_elsewhere"})
 MAX_ATTEMPTS = 5
 RETRY_AFTER_MINUTES = 30
+NO_HITS_ATTEMPTS = 3
+NO_HITS_RETRY_HOURS = 24
+OUTAGE_BACKOFF_S = 15 * 60
 MAX_QUERIES = 3
 MAX_HITS = 20
 
@@ -74,10 +82,14 @@ def pending(conn: sqlite3.Connection) -> list[int]:
         "  JOIN products p ON p.id = s.product_id "
         "  LEFT JOIN sku_searches f ON f.product_id = p.id "
         " WHERE s.done = 0 AND p.kind = 'concept' AND p.active = 1 "
-        "   AND (f.product_id IS NULL OR (f.status = 'error' AND f.attempts < ? "
-        "        AND f.last_attempt_at <= datetime('now', ?))) "
+        "   AND (f.product_id IS NULL "
+        "        OR (f.status = 'error' AND f.attempts < ? "
+        "            AND f.last_attempt_at <= datetime('now', ?)) "
+        "        OR (f.status = 'no_hits' AND f.attempts < ? "
+        "            AND f.last_attempt_at <= datetime('now', ?))) "
         " ORDER BY s.product_id",
-        (MAX_ATTEMPTS, f"-{RETRY_AFTER_MINUTES} minutes"),
+        (MAX_ATTEMPTS, f"-{RETRY_AFTER_MINUTES} minutes",
+         NO_HITS_ATTEMPTS, f"-{NO_HITS_RETRY_HOURS} hours"),
     ).fetchall()
     if not rows:
         return []
@@ -88,9 +100,12 @@ def pending(conn: sqlite3.Connection) -> list[int]:
 
 
 def _queries(conn: sqlite3.Connection, name: str, concept_id: int) -> list[str]:
+    """The name as written (store names keep their accents: "Jalapeño"), the
+    name without accents ("creme fraiche"), then the aliases."""
     out: list[str] = []
-    for text in [name] + [a["alias"] for a in aliases_of(conn, concept_id)]:
-        q = norm(text)
+    texts = [" ".join(name.casefold().split()), norm(name)]
+    texts += [norm(a["alias"]) for a in aliases_of(conn, concept_id)]
+    for q in texts:
         if q and q not in out:
             out.append(q)
     return out[:MAX_QUERIES]
@@ -171,8 +186,8 @@ def find_for(conn: sqlite3.Connection, concept_id: int, scraper: Any,
 
     try:
         answer = ai(_pick_prompt(conn, concept, hits), conn)
-    except Exception as exc:  # noqa: BLE001 — any AI failure is a retryable error
-        return _result("error", detail=f"ai: {exc}")
+    except Exception as exc:  # noqa: BLE001 — an AI failure is an outage
+        return _result("error", detail=f"ai: {exc}", stop=True)
     index = _int(answer.get("index")) if isinstance(answer, dict) else None
     confidence = str(answer.get("confidence", "")).lower() if isinstance(answer, dict) else ""
     if index is None or not 0 <= index < len(hits) or confidence != "high":
@@ -251,7 +266,10 @@ class ScraperClient:
         while time.monotonic() < end:
             time.sleep(self.poll)
             try:
-                t = self.http.get(f"{self.base}/task/{task}").json()
+                answer = self.http.get(f"{self.base}/task/{task}")
+                if answer.status_code != 200:  # e.g. 404: the scraper restarted
+                    raise ScraperError(f"poll: HTTP {answer.status_code}")
+                t = answer.json()
             except (httpx.HTTPError, ValueError) as exc:
                 raise ScraperError(f"poll: {exc}") from exc
             if t.get("status") == "running":
@@ -276,20 +294,25 @@ class ScraperClient:
 
 # ── background run ───────────────────────────────────────────────────────
 
+_outage_until = 0.0  # time.monotonic() before which no run starts
+
+
 def run_pending(conn: sqlite3.Connection, scraper: Any, ai: Callable[..., Any]) -> dict[str, int]:
-    """Search for every pending concept once, including ones added meanwhile;
-    stop at the first scraper error (the rest would fail the same way)."""
+    """Search for every pending concept once, including ones added meanwhile.
+    An outage stops the run without a record and holds off new runs."""
+    global _outage_until
     counts: dict[str, int] = {}
     done: set[int] = set()
     while todo := [c for c in pending(conn) if c not in done]:
         for cid in todo:
             done.add(cid)
             res = find_for(conn, cid, scraper, ai)
-            record(conn, cid, res)
             counts[res["status"]] = counts.get(res["status"], 0) + 1
             log.info("Product search for concept %d: %s %s", cid, res["status"], res["detail"])
             if res["stop"]:
+                _outage_until = time.monotonic() + OUTAGE_BACKOFF_S
                 return counts
+            record(conn, cid, res)
     return counts
 
 
@@ -327,7 +350,7 @@ def start() -> bool:
     from main import get_connection
     from routers.products import _ai_configured
 
-    if not _ai_configured(get_connection()):
+    if time.monotonic() < _outage_until or not _ai_configured(get_connection()):
         return False
     with _guard:
         if _state["running"]:
@@ -340,6 +363,8 @@ def start() -> bool:
 def status(conn: sqlite3.Connection) -> dict:
     with _guard:
         state = dict(_state)
+    left = _outage_until - time.monotonic()
+    state["outage_until"] = (datetime.now(timezone.utc).timestamp() + left) if left > 0 else None
     records = conn.execute(
         "SELECT f.*, p.name FROM sku_searches f JOIN products p ON p.id = f.product_id "
         "ORDER BY f.last_attempt_at DESC, f.product_id DESC LIMIT 50"

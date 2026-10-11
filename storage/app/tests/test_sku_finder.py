@@ -24,6 +24,14 @@ import sku_finder
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _no_outage():
+    """Each test starts outside an outage backoff."""
+    sku_finder._outage_until = 0.0
+    yield
+    sku_finder._outage_until = 0.0
+
+
 def _u(abbr):
     return next(u["id"] for u in client.get("/api/units").json() if u["abbreviation"] == abbr)
 
@@ -153,7 +161,7 @@ class TestFindFor:
         conn.commit()
         scraper = _Scraper({"ranskankerma f2": [_hit("Ranskankerma f2 2dl", "9000000000028")]})
         res = sku_finder.find_for(conn, concept, scraper, _ai())
-        assert scraper.searched[0] == "creme fraiche f2"
+        assert scraper.searched[:2] == ["crème fraîche f2", "creme fraiche f2"]
         assert res["status"] == "found"
 
     def test_no_hits(self):
@@ -199,7 +207,7 @@ class TestFindFor:
         def broken(prompt, conn):
             raise RuntimeError("quota")
         res = sku_finder.find_for(get_connection(), concept, _Scraper(hits), broken)
-        assert (res["status"], res["stop"]) == ("error", False)
+        assert (res["status"], res["stop"]) == ("error", True)
         assert client.get("/api/products/by-barcode/9000000000073").status_code == 404
 
 
@@ -334,3 +342,54 @@ class TestEndpointsAndTriggers:
         monkeypatch.setattr(sku_finder, "start", lambda: started.append(1) or True)
         main.periodic_sync_once()
         assert started == [1]
+
+
+class TestOutages:
+    def test_outages_do_not_use_up_attempts(self):
+        conn = get_connection()
+        cs = [_mk(f"Käsite o1{i}", kind="concept") for i in "abc"]
+        for c in cs:
+            _add(c)
+        for _ in range(3):
+            sku_finder._outage_until = 0.0
+            sku_finder.run_pending(conn, _Scraper(fail="search"), _ai())
+
+        def broken(prompt, conn):
+            raise RuntimeError("quota")
+        sku_finder._outage_until = 0.0
+        sku_finder.run_pending(conn, _Scraper({"käsite o1a": [_hit("Tuote o1a", "9000000000127")]}),
+                               broken)
+        marks = ",".join("?" * len(cs))
+        assert conn.execute(f"SELECT * FROM sku_searches WHERE product_id IN ({marks})", cs).fetchall() == []
+        assert set(cs) <= set(sku_finder.pending(conn))
+
+    def test_an_outage_holds_off_new_runs(self, monkeypatch):
+        import routers.products
+        _add(_mk("Käsite o2", kind="concept"))  # before the patch: no real run may start
+        sku_finder.run_pending(get_connection(), _Scraper(fail="search"), _ai())
+        monkeypatch.setattr(routers.products, "_ai_configured", lambda conn: True)
+        assert sku_finder.start() is False
+        assert sku_finder.status(get_connection())["outage_until"] is not None
+
+    def test_no_hits_is_retried_a_day_later_three_times(self):
+        conn = get_connection()
+        concept = _mk("Käsite o3", kind="concept")
+        _add(concept)
+        sku_finder.record(conn, concept, {"status": "no_hits"})
+        assert concept not in sku_finder.pending(conn)
+        conn.execute("UPDATE sku_searches SET last_attempt_at = datetime('now', '-25 hours') "
+                     "WHERE product_id = ?", (concept,))
+        conn.commit()
+        assert concept in sku_finder.pending(conn)
+        conn.execute("UPDATE sku_searches SET attempts = 3 WHERE product_id = ?", (concept,))
+        conn.commit()
+        assert concept not in sku_finder.pending(conn)
+
+    def test_a_lost_task_is_a_scraper_error(self):
+        def handler(request):
+            if request.method == "POST":
+                return httpx.Response(200, json={"task_id": "9", "status": "running"})
+            return httpx.Response(404, json={"error": "Unknown task"})
+        c = sku_finder.ScraperClient("http://s/api/scraper", http=_transport(handler), poll=0)
+        with pytest.raises(sku_finder.ScraperError):
+            c.search("x")
