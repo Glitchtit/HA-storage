@@ -12,7 +12,7 @@ from ai_client import call_ai_json
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
 from list_clearing import apply_purchase
-from buy_hints import buy_hint, purchase_stats
+from buy_hints import buy_hint, fallback_ranks, purchase_stats
 from quantity import COUNT, PACKAGE, VAGUE, convert, format_qty
 from recipe_rows import row_unit
 from models import (
@@ -69,7 +69,9 @@ def _with_display(conn, rows: list[dict]) -> list[dict]:
     if not rows:
         return rows
     cat = Catalog(conn)
-    stats = purchase_stats(conn) if any(not cat.is_sku(r["product_id"]) for r in rows) else {}
+    concepts = any(not cat.is_sku(r["product_id"]) for r in rows)
+    stats = purchase_stats(conn) if concepts else {}
+    ranks = fallback_ranks(conn) if concepts else {}
     out = []
     for row in rows:
         unit = cat.unit(row["unit_id"])
@@ -83,7 +85,7 @@ def _with_display(conn, rows: list[dict]) -> list[dict]:
             "qty_text": format_qty(float(row["amount"]), abbr),
             "unit_abbr": abbr,
             "unit_dimension": dim,
-            **buy_hint(cat, row, stats),
+            **buy_hint(cat, row, stats, ranks),
         }})
     return out
 

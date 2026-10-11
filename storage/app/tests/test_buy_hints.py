@@ -101,9 +101,8 @@ class TestBuyProduct:
         d = _display(_add(concept))
         assert (d["buy_product_id"], d["buy_count"], d["approx"]) == (None, None, False)
 
-    def test_concept_nobody_bought_has_no_hint(self):
+    def test_concept_with_no_products_has_no_hint(self):
         concept = _mk("Kardemumma h6", kind="concept")
-        _mk("Kardemumma 20 g h6", parent_id=concept)
         d = _display(_add(concept))
         assert (d["buy_product_id"], d["buy_product_name"], d["buy_count"]) == (None, None, None)
 
@@ -185,3 +184,55 @@ class TestBuyCount:
         _bought(sku, days_ago=5)
         d = _display(_add(concept, 2.5))
         assert (d["buy_count"], d["approx"]) == (3, False)
+
+
+def _store(store_id):
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO stores (id, name) VALUES (?, ?)", (store_id, store_id))
+    conn.commit()
+
+
+def _carried(product_id, store_id="T1", available=1):
+    _store(store_id)
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO product_availability (product_id, store_id, available) "
+                 "VALUES (?, ?, ?)", (product_id, store_id, available))
+    conn.commit()
+
+
+class TestNeverBought:
+    def test_a_variant_sold_in_a_store_beats_a_priced_one_and_the_oldest(self):
+        concept = _mk("Kerma nb1", kind="concept")
+        _mk("Vanhin kerma nb1", parent_id=concept)
+        _mk("Hinnoiteltu kerma nb1", parent_id=concept, unit_price=1.5)
+        sold = _mk("Myytävä kerma nb1", parent_id=concept)
+        _carried(sold)
+        assert _display(_add(concept))["buy_product_id"] == sold
+
+    def test_a_priced_variant_beats_the_oldest(self):
+        concept = _mk("Kerma nb2", kind="concept")
+        _mk("Vanhin kerma nb2", parent_id=concept)
+        priced = _mk("Hinnoiteltu kerma nb2", parent_id=concept, unit_price=1.5)
+        assert _display(_add(concept))["buy_product_id"] == priced
+
+    def test_without_ranks_the_oldest_variant_is_picked(self):
+        concept = _mk("Kerma nb3", kind="concept")
+        oldest = _mk("Vanhin kerma nb3", parent_id=concept)
+        _mk("Uudempi kerma nb3", parent_id=concept)
+        d = _display(_add(concept))
+        assert (d["buy_product_id"], d["buy_product_name"]) == (oldest, "Vanhin kerma nb3")
+
+    def test_a_bought_variant_still_wins(self):
+        concept = _mk("Kerma nb4", kind="concept")
+        bought = _mk("Ostettu kerma nb4", parent_id=concept)
+        sold = _mk("Myytävä kerma nb4", parent_id=concept, unit_price=2)
+        _carried(sold)
+        _bought(bought, days_ago=5)
+        assert _display(_add(concept))["buy_product_id"] == bought
+
+    def test_inactive_variant_is_never_picked(self):
+        concept = _mk("Kerma nb5", kind="concept")
+        gone = _mk("Poistunut kerma nb5", parent_id=concept)
+        r = client.put(f"/api/products/{gone}", json={"active": False})
+        assert r.status_code == 200, r.text
+        assert _display(_add(concept))["buy_product_id"] is None

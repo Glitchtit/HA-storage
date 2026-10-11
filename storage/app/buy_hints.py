@@ -5,7 +5,9 @@ A concept row ("3 dl kerma") says what is needed; the hint names the SKU the
 household actually buys. That is the row's preferred product (set by a swap)
 while it is still a SKU under the row's product, else the row's own product
 when it is a SKU, else the active descendant SKU bought most often in the
-last 180 days, then the one bought most recently. The count converts the
+last 180 days, then the one bought most recently; a concept none of whose
+SKUs was ever bought takes any active SKU, one sold in a store first, then
+one with a price, then the oldest. The count converts the
 row's quantity into whole packages of that SKU; when the facts for that are
 missing it is 1, marked approximate.
 """
@@ -47,14 +49,40 @@ def usual_sku(cat: Catalog, product_id: int, stats: dict[int, tuple[int, str]]) 
     return best
 
 
-def buy_product(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]]) -> int | None:
+def fallback_ranks(conn: sqlite3.Connection) -> dict[int, tuple[int, int]]:
+    """SKU id -> (sold in at least one store, has a price): how to choose
+    among variants nobody has bought yet."""
+    rows = conn.execute(
+        "SELECT p.id, "
+        "       EXISTS (SELECT 1 FROM product_availability a "
+        "                WHERE a.product_id = p.id AND a.available = 1) AS sold, "
+        "       p.unit_price IS NOT NULL AS priced "
+        "  FROM products p WHERE p.kind != 'concept'"
+    ).fetchall()
+    return {r["id"]: (int(r["sold"]), int(r["priced"])) for r in rows}
+
+
+def any_sku(cat: Catalog, product_id: int, ranks: dict[int, tuple[int, int]]) -> int | None:
+    """Any active descendant SKU: sold in a store first, then priced, then the oldest."""
+    best, best_key = None, None
+    for pid in cat.descendants(product_id):
+        if not cat.is_sku(pid) or not (cat.product(pid) or {}).get("active"):
+            continue
+        key = (*ranks.get(pid, (0, 0)), -pid)
+        if best_key is None or key > best_key:
+            best, best_key = pid, key
+    return best
+
+
+def buy_product(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]],
+                ranks: dict[int, tuple[int, int]] | None = None) -> int | None:
     pid = row["product_id"]
     preferred = row.get("preferred_product_id")
     if preferred is not None and cat.is_sku(preferred) and preferred in cat.descendants(pid):
         return preferred
     if cat.is_sku(pid):
         return pid
-    return usual_sku(cat, pid, stats)
+    return usual_sku(cat, pid, stats) or any_sku(cat, pid, ranks or {})
 
 
 def buy_count(cat: Catalog, row: dict, sku: int) -> tuple[int, bool]:
@@ -72,9 +100,10 @@ def buy_count(cat: Catalog, row: dict, sku: int) -> tuple[int, bool]:
     return max(1, math.ceil(conv.amount - 1e-9)), conv.approx
 
 
-def buy_hint(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]]) -> dict:
+def buy_hint(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]],
+             ranks: dict[int, tuple[int, int]] | None = None) -> dict:
     """The buy-hint fields of a row's display block."""
-    sku = buy_product(cat, row, stats)
+    sku = buy_product(cat, row, stats, ranks)
     if sku is None:
         return {"buy_product_id": None, "buy_product_name": None, "buy_count": None, "approx": False}
     count, approx = buy_count(cat, row, sku)
