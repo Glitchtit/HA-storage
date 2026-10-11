@@ -50,3 +50,13 @@ def test_rows_from_an_older_storage_without_display_show_a_count():
 
 def test_a_product_missing_from_the_list_uses_the_stored_name():
     assert todo_summary(_item(1, _display("1", None, "package")), {}) == "Tallennettu nimi"
+
+
+def test_a_generic_row_names_the_product_to_buy():
+    display = {**_display("1", None, "package"), "buy_product_id": 9,
+               "buy_product_name": "Pirkka creme fraiche 150g"}
+    assert todo_summary(_item(1, display), {7: "Crème fraîche"}) == "Pirkka creme fraiche 150g"
+    need = {**_display("300 g", "g", "mass"), "buy_product_id": 9, "buy_product_name": "Tomaatti 500g"}
+    assert todo_summary(_item(300, need), {7: "Tomaatti"}) == "Tomaatti 500g 300 g"
+    own = {**_display("1", None, "package"), "buy_product_id": 7, "buy_product_name": "Maito"}
+    assert todo_summary(_item(1, own), {7: "Maito"}) == "Maito"
