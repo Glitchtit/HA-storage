@@ -258,6 +258,16 @@ class TestUndoingAMisScan:
         assert _correct(sku)["restored_rows"] == []
         assert _row(row) is None
 
+    def test_a_row_switched_to_packages_after_the_scan_is_left_as_set(self):
+        concept = _mk("Kerma c22", unit="dl", kind="concept")
+        sku = _mk("Vispikerma 2 dl c22", parent_id=concept, content_amount=2, content_unit_id=_u("dl"))
+        row = _add(concept, 3, unit="dl", note="Reseptistä: C")
+        _buy(sku)
+        assert client.put(f"/api/shopping-list/{row}", json={"amount": 2, "unit_id": None}).status_code == 200
+        assert _correct(sku)["restored_rows"] == []
+        item = _row(row)
+        assert (item["amount"], item["unit_id"]) == (2, None)
+
     def test_ticked_rows_are_left_alone(self):
         concept = _mk("Tilli c21", kind="concept")
         sku = _mk("Tilli nippu c21", parent_id=concept)

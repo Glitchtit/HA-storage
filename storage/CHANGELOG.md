@@ -1,6 +1,6 @@
 ## 0.27.1
 
-- Undoing a mis-scan (`/stock/correct-purchase`, HA-stock's swipe −1) puts back the shopping rows the scan took off the list, with their note, recipe and set; a row you removed by hand afterwards stays removed, and a ticked row is left alone. The answer lists them (`restored_rows`)
+- Undoing a mis-scan (`/stock/correct-purchase`, HA-stock's swipe −1) puts back the shopping rows the scan took off the list, with their note, recipe and set; a row you removed by hand afterwards stays removed, and a ticked row, or one whose amount you switched to packages in the meantime, is left as it is. The answer lists them (`restored_rows`)
 - HA integration 0.6.1: no more "Could not register Storage panel" warning at start. The integration no longer tries to add a sidebar panel of its own; the add-on's own "Storage" sidebar entry is the UI
 
 ## 0.27.0

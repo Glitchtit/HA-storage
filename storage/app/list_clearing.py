@@ -106,8 +106,9 @@ def restore_cleared(conn: sqlite3.Connection, stock_id: int, take: float) -> lis
     """Undo `take` of the purchase that created lot `stock_id`: the rows it
     took from get back the same share of what was taken. A row the purchase
     removed comes back with its id, note, recipe and set; a row removed by
-    hand afterwards stays removed, and a ticked row is left alone. Returns the
-    restored rows as {id, product_id, amount}. Does not commit."""
+    hand afterwards stays removed, and a ticked row or one whose unit was
+    changed since (the ± stepper's packages, a swap) is left as it is.
+    Returns the restored rows as {id, product_id, amount}. Does not commit."""
     restored: list[dict] = []
     for rec in conn.execute(
         "SELECT * FROM purchase_clearings WHERE stock_id = ? ORDER BY id", (stock_id,)
@@ -122,15 +123,15 @@ def restore_cleared(conn: sqlite3.Connection, stock_id: int, take: float) -> lis
                          (left, rec["taken"] - back, rec["id"]))
         if back <= EPS:
             continue
+        snap = json.loads(rec["row_json"])
         row = conn.execute("SELECT * FROM shopping_list WHERE id = ?", (rec["row_id"],)).fetchone()
         if row is not None:
-            if row["done"]:
-                continue
+            if row["done"] or row["unit_id"] != snap.get("unit_id"):
+                continue  # `back` is in the old unit; a changed row stays as set
             amount = round(float(row["amount"]) + back, 3)
             conn.execute("UPDATE shopping_list SET amount = ? WHERE id = ?", (amount, row["id"]))
             restored.append({"id": row["id"], "product_id": row["product_id"], "amount": amount})
             continue
-        snap = json.loads(rec["row_json"])
         if not rec["removed"] or _existing(conn, "products", snap["product_id"]) is None:
             continue
         amount = round(back, 3)
