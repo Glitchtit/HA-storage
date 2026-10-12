@@ -17,7 +17,7 @@ import math
 import sqlite3
 
 from facts import Catalog
-from quantity import PACKAGE, convert
+from quantity import COUNT, MASS, PACKAGE, VOLUME, convert
 from recipe_rows import row_unit
 
 LOOKBACK_DAYS = 180
@@ -85,6 +85,14 @@ def buy_product(cat: Catalog, row: dict, stats: dict[int, tuple[int, str]],
     return usual_sku(cat, pid, stats) or any_sku(cat, pid, ranks or {})
 
 
+def _sold_by_measure(facts) -> bool:
+    """A package whose content is a weight or volume and whose piece weight is
+    unknown: pieces cannot be counted into it."""
+    cu = facts.content_unit
+    return (bool(facts.content_amount) and cu is not None and cu.dimension in (MASS, VOLUME)
+            and not facts.piece_weight_g)
+
+
 def buy_count(cat: Catalog, row: dict, sku: int) -> tuple[int, bool]:
     """Whole packages of `sku` that cover the row, and whether that is an estimate."""
     amount = float(row["amount"])
@@ -92,9 +100,15 @@ def buy_count(cat: Catalog, row: dict, sku: int) -> tuple[int, bool]:
     if side is not None and side[1] == PACKAGE:
         return max(1, math.ceil(amount - 1e-9)), False
     kpl = cat.unit_by_abbr("kpl")
+    facts = cat.facts(sku)
     conv = None
     if side is not None and kpl is not None:
-        conv = convert(amount, side[0], kpl, cat.facts(sku), from_dim=side[1], to_dim=PACKAGE)
+        conv = convert(amount, side[0], kpl, facts, from_dim=side[1], to_dim=PACKAGE)
+    if conv is not None and side[1] == COUNT and _sold_by_measure(facts):
+        # Pieces into a bag or jar of known weight or volume: without a piece
+        # weight, convert's one-piece-per-package fallback would turn "1,5
+        # perunaa" into two 1 kg bags.
+        conv = None
     if conv is None:
         return 1, True
     return max(1, math.ceil(conv.amount - 1e-9)), conv.approx

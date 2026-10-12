@@ -66,7 +66,9 @@ def _call_gemini(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"response_mime_type": "application/json"},
     }
-    resp = requests.post(url, json=payload, params={"key": api_key}, timeout=300)
+    # The key goes in a header: in the URL, any request error would print it
+    # into the add-on log.
+    resp = requests.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=300)
     resp.raise_for_status()
     data = resp.json()
     usage = data.get("usageMetadata", {})

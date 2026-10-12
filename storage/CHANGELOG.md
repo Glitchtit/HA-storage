@@ -1,3 +1,8 @@
+## 0.28.1
+
+- The Gemini API key is sent in a request header instead of the URL, so a failed AI call no longer writes the key into the add-on log
+- A recipe line counted in pieces ("1,5 perunaa", "4 maustepippuria") no longer tells you to buy that many bags or jars when the product is sold by weight or volume: without a piece weight the hint says to buy about one package
+
 ## 0.28.0
 
 - A generic item on the shopping list now names a product to buy even when none of its products was bought before: one sold in your stores first, then one with a price, then the oldest

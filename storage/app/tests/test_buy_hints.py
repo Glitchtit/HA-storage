@@ -185,6 +185,37 @@ class TestBuyCount:
         d = _display(_add(concept, 2.5))
         assert (d["buy_count"], d["approx"]) == (3, False)
 
+    def test_pieces_from_a_bag_sold_by_weight_buy_one_bag_marked_approximate(self):
+        # "1,5 perunaa" must not become two 1 kg bags: without a piece weight
+        # nothing says how many potatoes a bag holds.
+        concept = _mk("Peruna h17", kind="concept")
+        sku = _mk("Peruna 1 kg h17", parent_id=concept, content_amount=1, content_unit_id=_u("kg"))
+        _bought(sku, days_ago=5)
+        d = _display(_add(concept, 1.5, unit="kpl", note="Reseptistä: V"))
+        assert (d["buy_product_id"], d["buy_count"], d["approx"]) == (sku, 1, True)
+
+    def test_whole_spices_from_a_jar_buy_one_jar(self):
+        concept = _mk("Maustepippuri h18", kind="concept")
+        sku = _mk("Maustepippuri 17 g h18", parent_id=concept, content_amount=17, content_unit_id=_u("g"))
+        _bought(sku, days_ago=5)
+        d = _display(_add(concept, 4, unit="kpl", note="Reseptistä: U"))
+        assert (d["buy_count"], d["approx"]) == (1, True)
+
+    def test_pieces_with_a_piece_weight_count_the_bags(self):
+        concept = _mk("Sipuli h19", kind="concept")
+        sku = _mk("Sipuli 500 g h19", parent_id=concept, content_amount=500, content_unit_id=_u("g"),
+                  piece_weight_g=100)
+        _bought(sku, days_ago=5)
+        d = _display(_add(concept, 7, unit="kpl", note="Reseptistä: T"))
+        assert (d["buy_count"], d["approx"]) == (2, True)
+
+    def test_a_product_sold_by_the_piece_counts_pieces(self):
+        concept = _mk("Kurkku h20", kind="concept")
+        sku = _mk("Kurkku irto h20", parent_id=concept)
+        _bought(sku, days_ago=5)
+        d = _display(_add(concept, 2, unit="kpl", note="Reseptistä: S"))
+        assert (d["buy_count"], d["approx"]) == (2, True)
+
 
 def _store(store_id):
     conn = get_connection()
