@@ -1,3 +1,7 @@
+## 0.28.3
+
+- Correcting a stock lot can also fix its amount, for example rolls that were counted as packs
+
 ## 0.28.2
 
 - A stock lot can be corrected in place (PUT /api/stock/{id}): the product it belongs to, its unit, location or best-before date. A correction logs no purchase or use

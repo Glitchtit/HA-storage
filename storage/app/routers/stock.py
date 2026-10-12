@@ -440,8 +440,8 @@ def transfer_stock(body: StockTransfer):
 
 @router.put("/stock/{entry_id}", response_model=StockEntry)
 def update_stock_entry(entry_id: int, body: StockEntryUpdate):
-    """Correct a lot: move it to the right product, fix its unit, location or
-    best-before date. A correction is not a purchase or a consumption, so
+    """Correct a lot: move it to the right product, fix its amount, unit,
+    location or best-before date. A correction is not a purchase or a consumption, so
     nothing is logged and the shopping list is left alone."""
     conn = _get_db()
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (entry_id,)).fetchone()
@@ -455,6 +455,9 @@ def update_stock_entry(entry_id: int, body: StockEntryUpdate):
             if not conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (value,)).fetchone():
                 raise HTTPException(404, f"{field} {value} not found")
             updates[field] = value
+    if body.amount is not None:
+        updates["amount"] = body.amount
+        updates["amount_opened"] = min(float(entry["amount_opened"] or 0), body.amount)
     if "best_before_date" in sent:
         updates["best_before_date"] = body.best_before_date
         if body.best_before_date and entry["purchased_date"]:

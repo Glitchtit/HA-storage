@@ -74,6 +74,22 @@ class TestEditLot:
         r = client.put(f"/api/stock/{lot}", json={"best_before_date": "2026-07-20"})
         assert (r.json()["best_before_date"], r.json()["best_before_days"]) == ("2026-07-20", 10)
 
+    def test_corrects_the_amount_when_rolls_were_counted_as_packs(self):
+        concept = _mk("Talouspaperi m7", kind="concept")
+        sku = _mk("Serla talouspaperi 4rl m7", parent_id=concept, pack_count=4)
+        lot = _lot(concept, amount=4)
+        r = client.put(f"/api/stock/{lot}", json={"product_id": sku, "amount": 1})
+        assert r.status_code == 200, r.text
+        assert (r.json()["product_id"], r.json()["amount"]) == (sku, 1)
+
+    def test_opened_never_exceeds_the_corrected_amount_and_zero_is_refused(self):
+        sku = _mk("Kahvi m8")
+        lot = _lot(sku, amount=3)
+        client.post("/api/stock/open", json={"product_id": sku, "amount": 2})
+        r = client.put(f"/api/stock/{lot}", json={"amount": 1})
+        assert (r.json()["amount"], r.json()["amount_opened"]) == (1, 1)
+        assert client.put(f"/api/stock/{lot}", json={"amount": 0}).status_code == 422
+
     def test_unknown_lot_product_or_unit_is_refused(self):
         sku = _mk("Maito m5")
         lot = _lot(sku)
