@@ -257,6 +257,15 @@ class StockSpoilLot(BaseModel):
     amount: float | None = None
     note: str = ""
 
+class StockEntryUpdate(BaseModel):
+    """Correct a lot in place: which product it is, its unit, location or
+    best-before date. Sending best_before_date null clears it."""
+    product_id: int | None = None
+    unit_id: int | None = None
+    location_id: int | None = None
+    best_before_date: str | None = None
+
+
 class StockEntry(BaseModel):
     id: int
     product_id: int

@@ -13,6 +13,7 @@ from models import (
     StockConsume,
     StockCorrectPurchase,
     StockEntry,
+    StockEntryUpdate,
     StockEntryWithProduct,
     StockOpen,
     StockSpoilLot,
@@ -435,6 +436,41 @@ def transfer_stock(body: StockTransfer):
         )
     conn.commit()
     return {"transferred": transferred}
+
+
+@router.put("/stock/{entry_id}", response_model=StockEntry)
+def update_stock_entry(entry_id: int, body: StockEntryUpdate):
+    """Correct a lot: move it to the right product, fix its unit, location or
+    best-before date. A correction is not a purchase or a consumption, so
+    nothing is logged and the shopping list is left alone."""
+    conn = _get_db()
+    entry = conn.execute("SELECT * FROM stock WHERE id = ?", (entry_id,)).fetchone()
+    if not entry:
+        raise HTTPException(404, f"Stock entry {entry_id} not found")
+    sent = body.model_fields_set
+    updates: dict = {}
+    for field, table in (("product_id", "products"), ("unit_id", "units"), ("location_id", "locations")):
+        value = getattr(body, field)
+        if field in sent and value is not None:
+            if not conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (value,)).fetchone():
+                raise HTTPException(404, f"{field} {value} not found")
+            updates[field] = value
+    if "best_before_date" in sent:
+        updates["best_before_date"] = body.best_before_date
+        if body.best_before_date and entry["purchased_date"]:
+            updates["best_before_days"] = conn.execute(
+                "SELECT CAST(julianday(?) - julianday(?) AS INTEGER) AS d",
+                (body.best_before_date, entry["purchased_date"]),
+            ).fetchone()["d"]
+        else:
+            updates["best_before_days"] = None
+    if updates:
+        conn.execute(
+            f"UPDATE stock SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?",
+            [*updates.values(), entry_id],
+        )
+        conn.commit()
+    return conn.execute("SELECT * FROM stock WHERE id = ?", (entry_id,)).fetchone()
 
 
 @router.delete("/stock/{entry_id}", status_code=204)

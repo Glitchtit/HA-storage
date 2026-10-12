@@ -1,3 +1,9 @@
+## 0.28.2
+
+- A stock lot can be corrected in place (PUT /api/stock/{id}): the product it belongs to, its unit, location or best-before date. A correction logs no purchase or use
+- A store can be removed (DELETE /api/stores/{id}), together with what is known about its assortment
+- The copy of retired unit conversions kept since 0.25.0 is dropped once at startup; the ingredient undo log stays
+
 ## 0.28.1
 
 - The Gemini API key is sent in a request header instead of the URL, so a failed AI call no longer writes the key into the add-on log

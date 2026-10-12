@@ -75,6 +75,17 @@ def upsert_store(store_id: str, body: StoreUpsert):
     return conn.execute("SELECT * FROM stores WHERE id = ?", (store_id,)).fetchone()
 
 
+@router.delete("/stores/{store_id}", status_code=204)
+def delete_store(store_id: str):
+    """Remove a store and what is known about its assortment."""
+    conn = _get_db()
+    if not conn.execute("SELECT 1 FROM stores WHERE id = ?", (store_id,)).fetchone():
+        raise HTTPException(404, f"Store {store_id} not found")
+    conn.execute("DELETE FROM product_availability WHERE store_id = ?", (store_id,))
+    conn.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+    conn.commit()
+
+
 @router.put("/products/{product_id}/availability",
             response_model=list[ProductStoreInfo])
 def set_product_availability(product_id: int, body: list[AvailabilityEntry]):

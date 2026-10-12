@@ -758,6 +758,20 @@ def init_db(conn: sqlite3.Connection) -> None:
     import migrate_concepts
     migrate_concepts.run(conn)
 
+    drop_old_backups(conn)
+
+
+def drop_old_backups(conn: sqlite3.Connection) -> None:
+    """Drop the phase-1 copy of retired unit conversions (0.25.0) once:
+    later versions run on product facts, and the add-on backups taken before
+    each upgrade are the rollback. recipe_ingredients_backup stays, as the
+    undo log of ingredient replaces and re-imports."""
+    if conn.execute("SELECT 1 FROM _meta WHERE key = 'drop_qty1_backup_v1'").fetchone():
+        return
+    conn.execute("DROP TABLE IF EXISTS unit_conversions_backup_qty1")
+    conn.execute("INSERT OR REPLACE INTO _meta (key, value) VALUES ('drop_qty1_backup_v1', '1')")
+    conn.commit()
+
 
 def _seed(conn: sqlite3.Connection) -> None:
     """Seed a brand-new database with units, conversions and locations."""
