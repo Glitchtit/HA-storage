@@ -1,3 +1,8 @@
+## 0.28.4
+
+- New icon and logo in the add-on store, part of one matching set across all GlitchyRee apps
+- Integration 0.6.3: its own icon and logo on the Integrations page (Home Assistant 2026.3 or newer)
+
 ## 0.28.3
 
 - Correcting a stock lot can also fix its amount, for example rolls that were counted as packs
