@@ -1,3 +1,7 @@
+## 0.28.5
+
+- Integration 0.6.5: setup finds the add-on through the Supervisor again (it asked for the wrong add-on name); the fallback address is now the add-on's own hostname instead of `homeassistant.local:8099`
+
 ## 0.28.4
 
 - New icon and logo in the add-on store, part of one matching set across all GlitchyRee apps

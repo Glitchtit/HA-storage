@@ -30,10 +30,22 @@ async def _discover_addon_url() -> str | None:
         return None
     try:
         async with httpx.AsyncClient(verify=get_default_context(), timeout=5) as client:
-            resp = await client.get(
-                f"http://supervisor/addons/{ADDON_SLUG}/info",
-                headers={"Authorization": f"Bearer {token}"},
+            headers = {"Authorization": f"Bearer {token}"}
+            # Store add-ons carry a repository prefix (e.g. "0a9ed235_ha_lists"),
+            # so find the full slug before asking for its hostname.
+            resp = await client.get("http://supervisor/addons", headers=headers)
+            resp.raise_for_status()
+            slug = next(
+                (
+                    a["slug"]
+                    for a in (resp.json().get("data") or {}).get("addons", [])
+                    if a.get("slug") == ADDON_SLUG or a.get("slug", "").endswith(f"_{ADDON_SLUG}")
+                ),
+                None,
             )
+            if slug is None:
+                return None
+            resp = await client.get(f"http://supervisor/addons/{slug}/info", headers=headers)
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
                 hostname = data.get("hostname") or data.get("ip_address")
