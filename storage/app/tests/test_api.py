@@ -1035,7 +1035,7 @@ class TestCookRecipe:
             if i["product_id"] == pid and i["recipe_id"] == recipe_id
         ]
         assert len(items) == 1
-        assert items[0]["note"].startswith("Reseptistä:")
+        assert items[0]["note"].startswith("From recipe:")
 
     def test_cook_shortfall_caches_ha_item_name_for_inactive_product(self):
         """Shortfall rows must cache a display name (ha_item_name).
@@ -1122,7 +1122,7 @@ class TestCookRecipe:
         )
         client.post(f"/api/recipes/{recipe_id}/cook", json={})
         history = client.get(f"/api/history?product_id={pid}&event_type=consume").json()
-        assert any(abs(h["amount"] - 1.5) < 0.001 and "Reseptistä" in h.get("note", "") for h in history)
+        assert any(abs(h["amount"] - 1.5) < 0.001 and "From recipe" in h.get("note", "") for h in history)
 
 
 # ── Receipt OCR ────────────────────────────────────────────────────────────

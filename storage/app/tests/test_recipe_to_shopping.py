@@ -55,7 +55,7 @@ class TestToShopping:
         assert _rows(top) == []
         rows = _rows(sugar)
         assert len(rows) == 1 and rows[0]["amount"] == 1 and rows[0]["unit_id"] == _u("dl")
-        assert rows[0]["note"] == "Reseptistä: Pulla s1" and rows[0]["recipe_id"] == rid
+        assert rows[0]["note"] == "From recipe: Pulla s1" and rows[0]["recipe_id"] == rid
 
     def test_strict_need_lands_on_variant(self):
         cat = _mk("juusto-s2", unit="g", kind="concept")
@@ -125,7 +125,7 @@ class TestToShopping:
         rows = _rows(cat)
         assert len(rows) == 1
         assert abs(rows[0]["amount"] - 3.3) < 1e-9  # 3 dl + 2 rkl (0.3 dl)
-        assert rows[0]["note"] == "Reseptistä: Pulla s9, Kastike s9"
+        assert rows[0]["note"] == "From recipe: Pulla s9, Kastike s9"
 
     def test_pressing_twice_does_not_double(self):
         cat = _mk("kerma-s10", unit="dl", kind="concept")
@@ -203,3 +203,39 @@ class TestToShopping:
             client.post(f"/api/recipes/{rid}/to-shopping", json={"mode": "missing"})
         get_connection().commit()  # what the next unrelated request would do
         assert _rows(cream) == [] and _rows(milk) == []
+
+
+class TestLegacyRecipeNote:
+    """Rows written before the English UI carry "Reseptistä: "; they are
+    still recipe notes."""
+
+    def test_note_names_recognise_both_prefixes(self):
+        from recipe_rows import recipe_note_names
+        assert recipe_note_names("From recipe: A, B") == ["A", "B"]
+        assert recipe_note_names("Reseptistä: A, B") == ["A", "B"]
+        assert recipe_note_names("osta tarjouksesta") is None
+        assert recipe_note_names(None) is None
+
+    def test_merge_into_legacy_row_rewrites_prefix(self):
+        cat = _mk("kerma-s11", unit="dl", kind="concept")
+        r1 = _recipe("Pulla s11", [(cat, 3, "dl", "loose")])
+        r2 = _recipe("Kastike s11", [(cat, 2, "dl", "loose")])
+        r = client.post("/api/shopping-list", json={
+            "product_id": cat, "amount": 3, "unit_id": _u("dl"),
+            "note": "Reseptistä: Pulla s11", "recipe_id": r1})
+        assert r.status_code == 201, r.text
+        result = _push(r2)
+        assert result["merged"] == 1 and result["created"] == 0
+        [row] = _rows(cat)
+        assert row["amount"] == 5
+        assert row["note"] == "From recipe: Pulla s11, Kastike s11"
+
+    def test_legacy_note_counts_as_already_listed(self):
+        cat = _mk("maito-s12", unit="dl", kind="concept")
+        other = _recipe("Muu s12", [(cat, 1, "dl", "loose")])
+        rid = _recipe("Kastike s12", [(cat, 2, "dl", "loose")])
+        client.post("/api/shopping-list", json={
+            "product_id": cat, "amount": 2, "unit_id": _u("dl"),
+            "note": "Reseptistä: Kastike s12", "recipe_id": other})
+        assert _push(rid)["added"] == 0
+        assert [r["amount"] for r in _rows(cat)] == [2]

@@ -759,6 +759,25 @@ def init_db(conn: sqlite3.Connection) -> None:
     migrate_concepts.run(conn)
 
     drop_old_backups(conn)
+    english_recipe_notes(conn)
+
+
+def english_recipe_notes(conn: sqlite3.Connection) -> None:
+    """Rewrite shopping notes written with the old Finnish recipe prefix
+    ("Reseptistä: A, B") to the English one, once, so the UI stays English."""
+    if conn.execute("SELECT 1 FROM _meta WHERE key = 'english_recipe_notes_v1'").fetchone():
+        return
+    from recipe_rows import LEGACY_NOTE_PREFIXES, NOTE_PREFIX
+
+    for old in LEGACY_NOTE_PREFIXES:
+        cur = conn.execute(
+            "UPDATE shopping_list SET note = ? || substr(note, ?) WHERE substr(note, 1, ?) = ?",
+            (NOTE_PREFIX, len(old) + 1, len(old), old),
+        )
+        if cur.rowcount:
+            log.info("Rewrote %d shopping note(s) to the English recipe prefix.", cur.rowcount)
+    conn.execute("INSERT OR REPLACE INTO _meta (key, value) VALUES ('english_recipe_notes_v1', '1')")
+    conn.commit()
 
 
 def drop_old_backups(conn: sqlite3.Connection) -> None:

@@ -6,7 +6,7 @@ ingredient's unit. Two exceptions keep rows buyable:
 - a count need bound directly to a SKU ("1 kpl" of a 1 kg potato bag) is
   converted to whole retail packages (unit NULL);
 - a need is merged into an existing open recipe row of the same product when
-  the units convert, and the row's note lists every recipe ("Reseptistä: A, B").
+  the units convert, and the row's note lists every recipe ("From recipe: A, B").
 Manual rows are never touched.
 """
 from __future__ import annotations
@@ -17,7 +17,20 @@ import sqlite3
 from facts import Catalog
 from quantity import COUNT, PACKAGE, Unit, convert
 
-NOTE_PREFIX = "Reseptistä: "
+NOTE_PREFIX = "From recipe: "
+# Rows written before the English UI carry the Finnish prefix; they are still
+# recipe notes, and a merge rewrites them to NOTE_PREFIX.
+LEGACY_NOTE_PREFIXES = ("Reseptistä: ",)
+
+
+def recipe_note_names(note: str | None) -> list[str] | None:
+    """Recipe names listed in a recipe note ("From recipe: A, B", or the
+    legacy "Reseptistä: A, B"); None when the note is not a recipe note."""
+    note = note or ""
+    for prefix in (NOTE_PREFIX, *LEGACY_NOTE_PREFIXES):
+        if note.startswith(prefix):
+            return [n.strip() for n in note[len(prefix):].split(",") if n.strip()]
+    return None
 
 
 def row_unit(cat: Catalog, product_id: int, unit_id: int | None) -> tuple[Unit, str] | None:
@@ -32,10 +45,9 @@ def row_unit(cat: Catalog, product_id: int, unit_id: int | None) -> tuple[Unit, 
 
 
 def _merged_note(note: str | None, recipe_name: str) -> str:
-    note = note or ""
-    if not note.startswith(NOTE_PREFIX):
-        return note
-    names = [n.strip() for n in note[len(NOTE_PREFIX):].split(",") if n.strip()]
+    names = recipe_note_names(note)
+    if names is None:
+        return note or ""
     if recipe_name not in names:
         names.append(recipe_name)
     return NOTE_PREFIX + ", ".join(names)
@@ -51,10 +63,7 @@ def recipe_already_listed(conn: sqlite3.Connection, product_id: int, recipe_id: 
     ).fetchall():
         if row["recipe_id"] == recipe_id:
             return True
-        note = row["note"] or ""
-        if note.startswith(NOTE_PREFIX) and recipe_name in [
-            n.strip() for n in note[len(NOTE_PREFIX):].split(",")
-        ]:
+        if recipe_name in (recipe_note_names(row["note"]) or []):
             return True
     return False
 

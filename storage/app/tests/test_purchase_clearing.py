@@ -78,7 +78,7 @@ class TestTreeAwareClearing:
     def test_purchase_is_converted_into_the_row_unit(self):
         concept = _mk("Kerma c3", unit="dl", kind="concept")
         sku = _mk("Vispikerma 2 dl c3", parent_id=concept, content_amount=2, content_unit_id=_u("dl"))
-        row = _add(concept, 3, unit="dl", note="Reseptistä: A")
+        row = _add(concept, 3, unit="dl", note="From recipe: A")
         _buy(sku)
         assert _amount(row) == 1
         _buy(sku)
@@ -87,29 +87,29 @@ class TestTreeAwareClearing:
     def test_a_bag_of_flour_covers_a_dl_row_through_density(self):
         concept = _mk("Vehnäjauho c4", unit="dl", kind="concept", density_g_ml=0.6)
         sku = _mk("Vehnäjauho 2 kg c4", parent_id=concept, content_amount=2, content_unit_id=_u("kg"))
-        row = _add(concept, 5, unit="dl", note="Reseptistä: B")
+        row = _add(concept, 5, unit="dl", note="From recipe: B")
         _buy(sku)
         assert _amount(row) is None
 
     def test_a_mass_row_without_facts_is_satisfied_whole_by_one_purchase(self):
         concept = _mk("Juustoraaste c5", unit="g", kind="concept")
         sku = _mk("Juustoraaste pussi c5", parent_id=concept)
-        first = _add(concept, 200, unit="g", note="Reseptistä: C")
-        second = _add(concept, 150, unit="g", note="Reseptistä: D")
+        first = _add(concept, 200, unit="g", note="From recipe: C")
+        second = _add(concept, 150, unit="g", note="From recipe: D")
         _buy(sku)
         assert (_amount(first), _amount(second)) == (None, 150)
 
     def test_a_package_counts_as_one_piece_without_a_pack_size(self):
         concept = _mk("Sitruuna c6", kind="concept")
         sku = _mk("Sitruuna kpl c6", parent_id=concept)
-        row = _add(concept, 3, unit="kpl", note="Reseptistä: E")
+        row = _add(concept, 3, unit="kpl", note="From recipe: E")
         _buy(sku)
         assert _amount(row) == 2
 
     def test_pack_size_counts_pieces(self):
         concept = _mk("Kananmuna c7", kind="concept")
         sku = _mk("Kananmunat 10 kpl c7", parent_id=concept, pack_count=10)
-        row = _add(concept, 12, unit="kpl", note="Reseptistä: F")
+        row = _add(concept, 12, unit="kpl", note="From recipe: F")
         _buy(sku)
         assert _amount(row) == 2
 
@@ -222,17 +222,17 @@ class TestUndoingAMisScan:
         sku = _mk("Kookosmaito 400 ml c17", parent_id=concept)
         recipe = client.post("/api/recipes", json={"name": "Curry c17"}).json()["id"]
         row = client.post("/api/shopping-list", json={
-            "product_id": concept, "amount": 1, "note": "Reseptistä: Curry c17", "recipe_id": recipe}).json()["id"]
+            "product_id": concept, "amount": 1, "note": "From recipe: Curry c17", "recipe_id": recipe}).json()["id"]
         _buy(sku)
         assert _amount(row) is None
         assert _correct(sku)["restored_rows"] == [{"id": row, "product_id": concept, "amount": 1}]
         item = _row(row)
-        assert (item["amount"], item["note"], item["recipe_id"], item["done"]) == (1, "Reseptistä: Curry c17", recipe, False)
+        assert (item["amount"], item["note"], item["recipe_id"], item["done"]) == (1, "From recipe: Curry c17", recipe, False)
 
     def test_a_row_the_scan_reduced_gets_its_amount_back(self):
         concept = _mk("Kerma c18", unit="dl", kind="concept")
         sku = _mk("Vispikerma 2 dl c18", parent_id=concept, content_amount=2, content_unit_id=_u("dl"))
-        row = _add(concept, 3, unit="dl", note="Reseptistä: B")
+        row = _add(concept, 3, unit="dl", note="From recipe: B")
         _buy(sku)
         assert _amount(row) == 1
         _correct(sku)
@@ -261,7 +261,7 @@ class TestUndoingAMisScan:
     def test_a_row_switched_to_packages_after_the_scan_is_left_as_set(self):
         concept = _mk("Kerma c22", unit="dl", kind="concept")
         sku = _mk("Vispikerma 2 dl c22", parent_id=concept, content_amount=2, content_unit_id=_u("dl"))
-        row = _add(concept, 3, unit="dl", note="Reseptistä: C")
+        row = _add(concept, 3, unit="dl", note="From recipe: C")
         _buy(sku)
         assert client.put(f"/api/shopping-list/{row}", json={"amount": 2, "unit_id": None}).status_code == 200
         assert _correct(sku)["restored_rows"] == []

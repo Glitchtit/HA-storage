@@ -91,16 +91,16 @@ def compute_proposal(
             "weekly_rate": round(weekly_rate, 2),
             "days_to_zero": round(days_to_zero, 1),
             "suggested_amount": suggested,
-            "reasoning": _reasoning_fi(weekly_rate, current),
+            "reasoning": _reasoning(weekly_rate, current),
         })
 
     proposal.sort(key=lambda x: x["days_to_zero"])
     return proposal
 
 
-def _reasoning_fi(weekly_rate: float, current_qty: float) -> str:
-    """Short Finnish reasoning string for the proposal UI."""
-    return f"{round(weekly_rate, 1)}/vk, varastossa {round(current_qty, 1)}"
+def _reasoning(weekly_rate: float, current_qty: float) -> str:
+    """Short reasoning string for the proposal UI."""
+    return f"{round(weekly_rate, 1)}/wk, {round(current_qty, 1)} in stock"
 
 
 def compute_cadence_suggestions(
@@ -204,17 +204,17 @@ def compute_cadence_suggestions(
             "days_until_expected": round(days_until_expected, 1),
             "suggested_amount": suggested,
             "is_kept": is_kept,
-            "reasoning": _cadence_reasoning_fi(avg_interval, days_since_last),
+            "reasoning": _cadence_reasoning(avg_interval, days_since_last),
         })
 
     out.sort(key=lambda x: x["days_until_expected"])
     return out
 
 
-def _cadence_reasoning_fi(avg_interval: float, days_since_last: float) -> str:
-    """Short Finnish reasoning string for the cadence-suggestion UI."""
-    base = f"~{round(avg_interval)} pv välein, ostettu {round(days_since_last)} pv sitten"
-    return base + " (myöhässä)" if days_since_last > avg_interval else base
+def _cadence_reasoning(avg_interval: float, days_since_last: float) -> str:
+    """Short reasoning string for the cadence-suggestion UI."""
+    base = f"every ~{round(avg_interval)} d, bought {round(days_since_last)} d ago"
+    return base + " (overdue)" if days_since_last > avg_interval else base
 
 
 def predicted_runouts(

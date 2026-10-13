@@ -154,28 +154,28 @@ class TestBuyCount:
         concept = _mk("Kerma h12", unit="dl", kind="concept")
         sku = _mk("Vispikerma 2 dl h12", parent_id=concept, content_amount=2, content_unit_id=_u("dl"))
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 3, unit="dl", note="Reseptistä: X"))
+        d = _display(_add(concept, 3, unit="dl", note="From recipe: X"))
         assert (d["qty_text"], d["buy_product_id"], d["buy_count"], d["approx"]) == ("3 dl", sku, 2, False)
 
     def test_density_makes_the_count_approximate(self):
         concept = _mk("Vehnäjauho h13", unit="dl", kind="concept", density_g_ml=0.6)
         sku = _mk("Vehnäjauho 2 kg h13", parent_id=concept, content_amount=2, content_unit_id=_u("kg"))
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 5, unit="dl", note="Reseptistä: Y"))
+        d = _display(_add(concept, 5, unit="dl", note="From recipe: Y"))
         assert (d["buy_count"], d["approx"]) == (1, True)
 
     def test_count_need_uses_the_pack_size(self):
         concept = _mk("Kananmuna h14", kind="concept")
         sku = _mk("Kananmunat 10 kpl h14", parent_id=concept, pack_count=10)
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 12, unit="kpl", note="Reseptistä: Z"))
+        d = _display(_add(concept, 12, unit="kpl", note="From recipe: Z"))
         assert (d["qty_text"], d["buy_count"], d["approx"]) == ("12 kpl", 2, False)
 
     def test_missing_facts_buy_one_package_marked_approximate(self):
         concept = _mk("Juustoraaste h15", unit="g", kind="concept")
         sku = _mk("Juustoraaste pussi h15", parent_id=concept)
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 200, unit="g", note="Reseptistä: W"))
+        d = _display(_add(concept, 200, unit="g", note="From recipe: W"))
         assert (d["buy_product_id"], d["buy_count"], d["approx"]) == (sku, 1, True)
 
     def test_packages_on_a_concept_row_are_counted_as_given(self):
@@ -191,14 +191,14 @@ class TestBuyCount:
         concept = _mk("Peruna h17", kind="concept")
         sku = _mk("Peruna 1 kg h17", parent_id=concept, content_amount=1, content_unit_id=_u("kg"))
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 1.5, unit="kpl", note="Reseptistä: V"))
+        d = _display(_add(concept, 1.5, unit="kpl", note="From recipe: V"))
         assert (d["buy_product_id"], d["buy_count"], d["approx"]) == (sku, 1, True)
 
     def test_whole_spices_from_a_jar_buy_one_jar(self):
         concept = _mk("Maustepippuri h18", kind="concept")
         sku = _mk("Maustepippuri 17 g h18", parent_id=concept, content_amount=17, content_unit_id=_u("g"))
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 4, unit="kpl", note="Reseptistä: U"))
+        d = _display(_add(concept, 4, unit="kpl", note="From recipe: U"))
         assert (d["buy_count"], d["approx"]) == (1, True)
 
     def test_pieces_with_a_piece_weight_count_the_bags(self):
@@ -206,14 +206,14 @@ class TestBuyCount:
         sku = _mk("Sipuli 500 g h19", parent_id=concept, content_amount=500, content_unit_id=_u("g"),
                   piece_weight_g=100)
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 7, unit="kpl", note="Reseptistä: T"))
+        d = _display(_add(concept, 7, unit="kpl", note="From recipe: T"))
         assert (d["buy_count"], d["approx"]) == (2, True)
 
     def test_a_product_sold_by_the_piece_counts_pieces(self):
         concept = _mk("Kurkku h20", kind="concept")
         sku = _mk("Kurkku irto h20", parent_id=concept)
         _bought(sku, days_ago=5)
-        d = _display(_add(concept, 2, unit="kpl", note="Reseptistä: S"))
+        d = _display(_add(concept, 2, unit="kpl", note="From recipe: S"))
         assert (d["buy_count"], d["approx"]) == (2, True)
 
 

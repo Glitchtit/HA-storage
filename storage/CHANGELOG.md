@@ -1,3 +1,8 @@
+## 0.28.6
+
+- English throughout: the suggested-links panel (Accept / Reject, Uncertain), purchase-rhythm hints ("every ~N d, bought M d ago (overdue)"), and the History time stamps
+- Shopping rows added from a recipe say "From recipe: …"; existing "Reseptistä: …" notes are rewritten once at startup and still recognised
+
 ## 0.28.5
 
 - Integration 0.6.5: setup finds the add-on through the Supervisor again (it asked for the wrong add-on name); the fallback address is now the add-on's own hostname instead of `homeassistant.local:8099`

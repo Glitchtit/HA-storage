@@ -260,7 +260,7 @@ def delete_recipe(recipe_id: int):
 @router.post("/recipes/{recipe_id}/cook", response_model=CookRecipeResponse)
 def cook(recipe_id: int, body: CookRecipeRequest | None = None):
     """Cook the recipe: deduct ingredients from stock (FIFO) and queue any
-    shortfall on the shopping list with a "Reseptistä: <name>" note.
+    shortfall on the shopping list with a "From recipe: <name>" note.
 
     Pass an optional ``servings`` count to scale the recipe up or down; defaults
     to the recipe's stored servings.

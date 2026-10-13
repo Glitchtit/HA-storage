@@ -49,12 +49,12 @@ class TestSwap:
     def test_a_sku_under_the_concept_becomes_the_preferred_product(self):
         concept = _mk("Kerma s1", unit="dl", kind="concept")
         chosen = _mk("Laktoositon kerma 2 dl s1", parent_id=concept)
-        row = _add(concept, 3, unit="dl", note="Reseptistä: A")
+        row = _add(concept, 3, unit="dl", note="From recipe: A")
         r = _swap(row, chosen)
         assert r.status_code == 200
         item = r.json()
         assert (item["product_id"], item["preferred_product_id"], item["amount"], item["unit_id"],
-                item["note"]) == (concept, chosen, 3, _u("dl"), "Reseptistä: A")
+                item["note"]) == (concept, chosen, 3, _u("dl"), "From recipe: A")
         assert item["display"]["buy_product_id"] == chosen
 
     def test_swapping_back_to_the_concept_clears_the_preference(self):
@@ -69,19 +69,19 @@ class TestSwap:
         new = _mk("Tomaattipyree s3")
         recipe = client.post("/api/recipes", json={"name": "Kastike s3"}).json()["id"]
         bundle = client.post("/api/bundles", json={"name": "Setti s3", "items": []}).json()["id"]
-        row = _add(old, 2, note="Reseptistä: Kastike s3", recipe_id=recipe)
+        row = _add(old, 2, note="From recipe: Kastike s3", recipe_id=recipe)
         conn = get_connection()
         conn.execute("UPDATE shopping_list SET bundle_id = ? WHERE id = ?", (bundle, row))
         conn.commit()
         item = _swap(row, new).json()
         assert (item["product_id"], item["amount"], item["unit_id"], item["note"], item["recipe_id"],
                 item["bundle_id"], item["ha_item_name"], item["preferred_product_id"]) == (
-            new, 2, None, "Reseptistä: Kastike s3", recipe, bundle, "Tomaattipyree s3", None)
+            new, 2, None, "From recipe: Kastike s3", recipe, bundle, "Tomaattipyree s3", None)
 
     def test_pieces_become_packages_on_a_sku(self):
         concept = _mk("Sitruuna s4", kind="concept")
         sku = _mk("Sitruunat 4 kpl s4", pack_count=4)
-        row = _add(concept, 3, unit="kpl", note="Reseptistä: B")
+        row = _add(concept, 3, unit="kpl", note="From recipe: B")
         item = _swap(row, sku).json()
         assert (item["product_id"], item["amount"], item["unit_id"]) == (sku, 1, None)
 
@@ -111,7 +111,7 @@ class TestSwap:
 class TestUpdate:
     def test_the_stepper_turns_a_requirement_into_packages(self):
         concept = _mk("Ruokakerma s8", unit="dl", kind="concept")
-        row = _add(concept, 3, unit="dl", note="Reseptistä: C")
+        row = _add(concept, 3, unit="dl", note="From recipe: C")
         r = client.put(f"/api/shopping-list/{row}", json={"amount": 2, "unit_id": None})
         assert r.status_code == 200
         item = r.json()

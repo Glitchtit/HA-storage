@@ -43,7 +43,7 @@ class TestDisplay:
     def test_recipe_volume_row(self):
         cat = _mk("vehnäjauho-d2", unit="dl", kind="concept")
         r = client.post("/api/shopping-list", json={
-            "product_id": cat, "amount": 3.5, "unit_id": _u("dl"), "note": "Reseptistä: X"})
+            "product_id": cat, "amount": 3.5, "unit_id": _u("dl"), "note": "From recipe: X"})
         assert _qty(_row(r.json()["id"])["display"]) == {
             "qty_text": "3,5 dl", "unit_abbr": "dl", "unit_dimension": "volume"}
 

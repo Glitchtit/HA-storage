@@ -13,7 +13,8 @@ function formatDateTime(s) {
   if (!s) return '—';
   const d = new Date(s.replace(' ', 'T') + 'Z');
   if (isNaN(d.getTime())) return s;
-  return d.toLocaleString('fi-FI');
+  // Date + time separately: fi-FI toLocaleString inserts the Finnish word "klo".
+  return `${d.toLocaleDateString('fi-FI')} ${d.toLocaleTimeString('fi-FI')}`;
 }
 
 export default function History() {

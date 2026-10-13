@@ -1301,7 +1301,7 @@ function LinkProposals({ onApplied }) {
       onApplied?.();
     } catch (err) {
       console.error('Link proposal action failed', err);
-      setError('Linkityksen käsittely epäonnistui — yritä uudelleen.');
+      setError('Could not process the link. Please try again.');
     } finally {
       setBusy(null);
     }
@@ -1311,7 +1311,7 @@ function LinkProposals({ onApplied }) {
   return (
     <div className="bg-gray-800 rounded-xl p-4 mb-4">
       <h3 className="text-sm font-bold text-gray-300 mb-2">
-        🔗 Ehdotetut linkitykset
+        🔗 Suggested links
       </h3>
       {error && <p className="text-sm text-red-400 mb-2">{error}</p>}
       <ul className="space-y-2">
@@ -1323,7 +1323,7 @@ function LinkProposals({ onApplied }) {
               <span className="text-gray-300">{p.proposed_parent_name}</span>
               {p.confidence !== 'high' && (
                 <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-300/80">
-                  epävarma
+                  uncertain
                 </span>
               )}
             </span>
@@ -1332,14 +1332,14 @@ function LinkProposals({ onApplied }) {
               onClick={() => act(p.id, acceptLinkProposal)}
               className="px-3 py-1 rounded-xl text-white text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
             >
-              Hyväksy
+              Accept
             </button>
             <button
               disabled={busy === p.id}
               onClick={() => act(p.id, rejectLinkProposal)}
               className="px-3 py-1 rounded-xl text-gray-300 text-xs font-semibold bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
             >
-              Hylkää
+              Reject
             </button>
           </li>
         ))}

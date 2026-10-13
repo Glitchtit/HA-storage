@@ -155,4 +155,5 @@ def test_response_shape_and_fields():
     assert abs(item["avg_interval_days"] - 10.0) < 0.5
     assert item["suggested_amount"] == 3.0
     assert item["is_kept"] is False
-    assert "pv" in item["reasoning"]
+    assert item["reasoning"].startswith("every ~10 d, bought ")
+    assert " d ago" in item["reasoning"]
