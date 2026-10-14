@@ -1,3 +1,7 @@
+## 0.28.7
+
+- AI features (optimize, receipt scanning) work with newer Claude models (5.x), which think before answering: the answer text is read past the thinking block, and there is more output room so thinking doesn't cut the answer short
+
 ## 0.28.6
 
 - English throughout: the suggested-links panel (Accept / Reject, Uncertain), purchase-rhythm hints ("every ~N d, bought M d ago (overdue)"), and the History time stamps

@@ -110,13 +110,23 @@ def _call_ollama(prompt: str, url: str, model: str) -> tuple[str, dict]:
     return data["message"]["content"], {"in": prompt_tokens, "out": output_tokens, "ms": total_ms}
 
 
+def _claude_response_text(response) -> str:
+    """Join the text blocks of a Claude response.
+
+    Newer models think by default, so content[0] may be a thinking block.
+    """
+    if response.stop_reason == "max_tokens":
+        logger.warning("Claude response hit max_tokens; output may be truncated")
+    return "".join(b.text for b in response.content if b.type == "text")
+
+
 def _call_claude(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
     import anthropic as _anthropic  # optional dependency
 
     client = _anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model=model or "claude-3-5-haiku-20241022",
-        max_tokens=8192,
+        max_tokens=16000,
         messages=[{"role": "user", "content": prompt}],
     )
     usage = response.usage
@@ -125,7 +135,7 @@ def _call_claude(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
         "Claude usage — input tokens: %s, output tokens: %s",
         stats["in"], stats["out"],
     )
-    return response.content[0].text, stats
+    return _claude_response_text(response), stats
 
 
 def _call_claude_vision(
@@ -149,7 +159,7 @@ def _call_claude_vision(
         # when the configured one cannot do vision so first-time users get a
         # useful error instead of a silent rejection.
         model=model or "claude-sonnet-4-5",
-        max_tokens=8192,
+        max_tokens=16000,
         messages=[
             {
                 "role": "user",
@@ -173,7 +183,7 @@ def _call_claude_vision(
         "Claude vision usage — input tokens: %s, output tokens: %s",
         stats["in"], stats["out"],
     )
-    return response.content[0].text, stats
+    return _claude_response_text(response), stats
 
 
 def call_ai_vision_json(
