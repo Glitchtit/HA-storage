@@ -98,12 +98,19 @@ def _words(name: str) -> set[str]:
     return {w for w in norm(name).split() if len(w) >= 3 and w.isalpha()}
 
 
+def _stem(word: str) -> str:
+    """A long word without its last three letters, so a Finnish ending on
+    either side still matches ("fileesuikaleet" / "fileesuikale",
+    "hunajamarinoidut" / "hunajamarinoitu")."""
+    return word[:-3] if len(word) >= 8 else word
+
+
 def _mentions(sku_name: str, words: set[str]) -> bool:
     """A word of four or more letters may sit inside a compound ("hillosokeri"
     in "Dansukker hillosokeri"); a three-letter word must stand alone ("voi"
     in "Valio voi 500g", not in "Voileipäkeksi")."""
     name = norm(sku_name)
-    return any(w in name if len(w) >= 4 else re.search(rf"(?<!\w){w}(?!\w)", name)
+    return any(_stem(w) in name if len(w) >= 4 else re.search(rf"(?<!\w){w}(?!\w)", name)
                for w in words)
 
 
@@ -504,8 +511,8 @@ def estimate_facts(conn: sqlite3.Connection, needs: list[tuple[int, str]], ai: A
 def run_followups(conn: sqlite3.Connection, created: list[int],
                   needs: list[tuple[int, str]], ai: AiFn | None) -> dict:
     """After one import: place new top-level concepts, gather existing
-    variants under every new concept, adopt SKUs for them, group them, then
-    fill missing facts for every bound need."""
+    variants under every new concept, adopt SKUs for every new or bound
+    concept, group the new ones, then fill missing facts for every bound need."""
     if ai is None:
         return {}
 
@@ -515,7 +522,10 @@ def run_followups(conn: sqlite3.Connection, created: list[int],
     top = [c for c in alive(created) if _concept(conn, c)["parent_id"] is None]
     out = {"place": place(conn, top, ai)}
     out["gather"] = gather(conn, alive(created), ai)
-    out["adopt"] = adopt(conn, alive(created), ai)
+    # Existing concepts the recipe binds to adopt too: their SKUs may still
+    # sit on the generic above them ("Ruokakerma" under "Kerma").
+    bound = list(dict.fromkeys([*created, *(c for c, _ in needs)]))
+    out["adopt"] = adopt(conn, alive(bound), ai)
     out["grouped"] = assign_groups(conn, alive(created), ai)
     out["facts"] = estimate_facts(conn, [(c, d) for c, d in needs if _concept(conn, c)], ai)
     return out

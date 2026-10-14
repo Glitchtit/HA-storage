@@ -1,3 +1,8 @@
+## 0.28.9
+
+- Importing a recipe also tidies the ingredients it already knew: a product sitting one level too high ("Valio ruokakerma" directly under "Kerma") moves down to the ingredient the recipe asks for ("Ruokakerma"), so it counts as in stock
+- Product matching tolerates Finnish word endings, so "Pirkka kanan fileesuikale hunajamarinoitu" is found for "Hunajamarinoidut broilerin fileesuikaleet"
+
 ## 0.28.8
 
 - A new generic ingredient picks up the specific kinds you already have: importing a recipe that creates "Riisi" moves "Basmatiriisi" and "Jasmiiniriisi" under it, so the recipe sees that rice in stock. Only kinds a recipe could use in place of the plain ingredient move (porridge rice does not count as "Riisi"); unsure matches become link proposals. The concept sweep does the same for the whole catalog

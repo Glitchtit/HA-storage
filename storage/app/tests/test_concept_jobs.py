@@ -117,6 +117,19 @@ class TestAdopt:
         assert bags in ids and cup not in ids
 
 
+    def test_inflected_words_still_find_the_product(self):
+        """The recipe word is often inflected differently from the package:
+        "fileesuikaleet" / "hunajamarinoidut" vs "fileesuikale hunajamarinoitu"."""
+        strips = _mk("Hunajamarinoidut broilerin fileesuikaleet k1", unit="g", kind="concept")
+        sku = _mk("Pirkka kanan fileesuikale hunajamarinoitu k1 450g")
+        _mk("Pirkka hunajakakku k1 350g")
+        ai = _Ai(adopt=[])
+        concept_jobs.adopt(get_connection(), [strips], ai)
+        [batch] = _payload(ai.prompts[0])
+        ids = {c["id"] for c in batch["candidates"]}
+        assert sku in ids
+
+
 class TestPlace:
     def test_same_merges_kind_of_reparents_medium_proposes(self):
         spag = _mk("Spagetti j3", unit="g", kind="concept")
@@ -306,3 +319,29 @@ def test_import_of_a_new_generic_gathers_its_existing_variants(monkeypatch):
     rice = r.json()["items"][0]["product_id"]
     assert rice != basmati
     assert _get(basmati)["parent_id"] == rice
+
+
+def test_import_bound_to_an_existing_concept_adopts_its_skus_from_the_parent(monkeypatch):
+    """A SKU sitting on the generic ("Kerma") moves down to the existing
+    variant ("Ruokakerma") a recipe binds to, not only for new concepts."""
+    class _Inline:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None, **_):
+            self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+        def start(self):
+            self.target(*self.args, **self.kwargs)
+
+    cream = _mk("Kerma k2", unit="dl", kind="concept")
+    cooking = _mk("Ruokakerma k2", unit="dl", kind="concept", parent_id=cream)
+    _mk("Pirkka ruokakerma k2 1dl", parent_id=cooking)
+    sku = _mk("Valio ruokakerma k2 2dl", parent_id=cream)
+    ai = _Ai(adopt=lambda prompt: [
+        {"concept_id": b["concept_id"], "product_id": c["id"], "confidence": "high"}
+        for b in _payload(prompt) for c in b["candidates"] if "ruokakerma" in c["name"]])
+    monkeypatch.setattr("routers.products._ai_configured", lambda conn: True)
+    monkeypatch.setattr("ai_client.call_ai_json", ai)
+    monkeypatch.setattr("concept_jobs.threading.Thread", _Inline)
+    r = client.post("/api/ingredients/resolve",
+                    json={"items": [{"name": "ruokakerma k2", "amount": 2, "unit_text": "dl"}]})
+    assert r.json()["items"][0]["product_id"] == cooking
+    assert _get(sku)["parent_id"] == cooking
