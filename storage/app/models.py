@@ -551,6 +551,9 @@ class IngredientDetail(Ingredient):
     stock_unit_id: int | None = None
     status: str = "red"
     approx: bool = False
+    substitute: bool = False            # 'prefer': only the fallback's other kinds cover it
+    preferred_name: str | None = None   # 'prefer': the preferred variant
+    fallback_name: str | None = None    # 'prefer': its parent, the acceptable fallback
 
 class RecipeToShoppingRequest(BaseModel):
     mode: str = "missing"  # missing | missing_and_opened | all

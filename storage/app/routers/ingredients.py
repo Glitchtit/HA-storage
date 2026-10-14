@@ -21,6 +21,7 @@ class ResolveItem(BaseModel):
     raw: str | None = None          # the source line, kept by the caller as raw_text
     name: str | None = None         # generic Finnish name ("kerma")
     specific: str | None = None     # variant ("vispikerma") or null
+    preferred: str | None = None    # exact variant, brand-free ("ruokakerma kolme juustoa") or null
     amount: float | None = None
     unit_text: str | None = None
     source_name: str | None = None  # the word in the source language ("vispgrädde")

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from availability import EPS
+from availability import EPS, fallback_root
 from facts import Catalog
 from quantity import PACKAGE, VAGUE, convert
 from recipe_rows import NOTE_PREFIX, add_recipe_need, recipe_already_listed
@@ -99,14 +99,20 @@ def _cook(conn, cat: Catalog, recipe, ratio: float, ingredients, listed: set[int
     for ing in ingredients:
         pid = int(ing["product_id"])
         unit = cat.unit(ing["unit_id"])
-        if (cat.product(pid) or {}).get("staple"):
+        root = fallback_root(cat, pid, ing["specificity"])
+        if (cat.product(root) or {}).get("staple"):
             continue
         need = float(ing["amount"] or 0) * ratio
         if need <= EPS or unit is None or unit.dimension == VAGUE:
             continue
 
         remaining = need
-        lots = cat.lots([pid, *cat.descendants(pid)])
+        # A 'prefer' need uses the preferred variant's lots first, then the
+        # rest of its fallback's subtree.
+        preferred = {pid, *cat.descendants(pid)}
+        lots = cat.lots(list(preferred)) + [
+            lot for lot in cat.lots([root, *cat.descendants(root)])
+            if lot["product_id"] not in preferred]
         convertible = 0
         for lot in lots:
             if remaining <= EPS:

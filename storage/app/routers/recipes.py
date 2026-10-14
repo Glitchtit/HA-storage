@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 import sku_finder
-from availability import EPS, need_status
+from availability import EPS, fallback_root, need_status
 from cook_recipe import cook_recipe
 from facts import Catalog
 from recipe_rows import add_recipe_need, needs_in_unit, recipe_already_listed
@@ -28,6 +28,10 @@ from models import (
 
 router = APIRouter(tags=["recipes"])
 
+# loose: any kind of the bound concept; strict: exactly the bound node;
+# prefer: the bound variant first, its parent's other kinds as substitutes.
+SPECIFICITIES = ("loose", "strict", "prefer")
+
 
 def _get_db():
     from main import get_connection
@@ -38,10 +42,11 @@ def _status_counts(conn, cat: Catalog) -> dict[int, dict]:
     """recipe id -> ingredient count and how many are red / yellow."""
     counts: dict[int, dict] = {}
     for ri in conn.execute(
-        "SELECT ri.recipe_id, ri.product_id, ri.amount, ri.unit_id FROM recipe_ingredients ri "
+        "SELECT ri.recipe_id, ri.product_id, ri.amount, ri.unit_id, ri.specificity FROM recipe_ingredients ri "
         "JOIN products p ON p.id = ri.product_id JOIN units u ON u.id = ri.unit_id"
     ).fetchall():
-        status = need_status(cat, ri["product_id"], ri["amount"] or 0, cat.unit(ri["unit_id"]))["status"]
+        status = need_status(cat, ri["product_id"], ri["amount"] or 0, cat.unit(ri["unit_id"]),
+                             ri["specificity"])["status"]
         c = counts.setdefault(ri["recipe_id"], {"ingredient_count": 0, "missing_count": 0, "yellow_count": 0})
         c["ingredient_count"] += 1
         if status == "red":
@@ -78,10 +83,11 @@ def suggest_recipes(expiring_within_days: int | None = Query(None, ge=0, le=365)
     uses: dict[int, list[str]] = {}
     if expiring:
         for ri in conn.execute(
-            "SELECT ri.recipe_id, ri.product_id, p.name FROM recipe_ingredients ri "
+            "SELECT ri.recipe_id, ri.product_id, ri.specificity, p.name FROM recipe_ingredients ri "
             "JOIN products p ON p.id = ri.product_id ORDER BY ri.sort_order, ri.id"
         ).fetchall():
-            if expiring & {ri["product_id"], *cat.descendants(ri["product_id"])}:
+            root = fallback_root(cat, ri["product_id"], ri["specificity"])
+            if expiring & {root, *cat.descendants(root)}:
                 names = uses.setdefault(ri["recipe_id"], [])
                 if ri["name"] not in names:
                     names.append(ri["name"])
@@ -117,13 +123,17 @@ def get_recipe(recipe_id: int):
     cat = Catalog(conn)
     ingredients = []
     for row in conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall():
-        st = need_status(cat, row["product_id"], row["amount"] or 0, cat.unit(row["unit_id"]))
+        st = need_status(cat, row["product_id"], row["amount"] or 0, cat.unit(row["unit_id"]),
+                         row["specificity"])
         ingredients.append(IngredientDetail(
             **row,
             stock_amount=st["available"] or 0,
             stock_unit_id=row["unit_id"],
             status=st["status"],
             approx=st["approx"],
+            substitute=st["substitute"],
+            preferred_name=st["preferred_name"],
+            fallback_name=st["fallback_name"],
         ))
     return RecipeDetail(**recipe, ingredients=ingredients)
 
@@ -142,7 +152,8 @@ def recipe_availability(recipe_id: int):
     cat = Catalog(conn)
     out = []
     for ri in conn.execute(_INGREDIENT_ROWS_SQL, (recipe_id,)).fetchall():
-        st = need_status(cat, ri["product_id"], ri["amount"] or 0, cat.unit(ri["unit_id"]))
+        st = need_status(cat, ri["product_id"], ri["amount"] or 0, cat.unit(ri["unit_id"]),
+                         ri["specificity"])
         out.append({
             "ingredient_id": ri["id"],
             "product_id": ri["product_id"],
@@ -160,6 +171,9 @@ def recipe_availability(recipe_id: int):
             "available_unopened": st["available_unopened"],
             "approx": st["approx"],
             "unknown_lots": st["unknown_lots"],
+            "substitute": st["substitute"],
+            "preferred_name": st["preferred_name"],
+            "fallback_name": st["fallback_name"],
         })
     return {"recipe_id": recipe_id, "ingredients": out}
 
@@ -188,7 +202,7 @@ def _insert_ingredient(conn, recipe_id: int, ing: IngredientCreate, idx: int) ->
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (recipe_id, ing.product_id, ing.amount, ing.unit_id, ing.note,
          ing.sort_order if ing.sort_order else idx,
-         ing.specificity if ing.specificity in ("strict", "loose") else "loose",
+         ing.specificity if ing.specificity in SPECIFICITIES else "loose",
          ing.raw_text, int(ing.needs_review)),
     )
     return cur.lastrowid
@@ -318,11 +332,14 @@ def recipe_to_shopping(recipe_id: int, body: RecipeToShoppingRequest | None = No
     try:
         for ing in ingredients:
             pid = ing["product_id"]
-            if pid in listed or (cat.product(pid) or {}).get("staple"):
+            root = fallback_root(cat, pid, ing["specificity"])
+            if pid in listed or (cat.product(root) or {}).get("staple"):
                 continue
             unit = cat.unit(ing["unit_id"])
             need = float(ing["amount"] or 0) * ratio
-            st = need_status(cat, pid, need, unit)
+            # Judged on the fallback's stock, but the shortfall lands on the
+            # bound (preferred) product.
+            st = need_status(cat, pid, need, unit, ing["specificity"])
             if st["to_taste"]:
                 if pid not in taste_added and (body.mode == "all" or st["have"].lots == 0):
                     add(pid, 1, None)
@@ -387,8 +404,8 @@ def update_ingredient(recipe_id: int, ingredient_id: int, body: IngredientUpdate
         "SELECT 1 FROM units WHERE id = ?", (updates["unit_id"],)
     ).fetchone():
         raise HTTPException(400, f"Unit {updates['unit_id']} not found")
-    if "specificity" in updates and updates["specificity"] not in ("strict", "loose"):
-        raise HTTPException(400, "specificity must be 'strict' or 'loose'")
+    if "specificity" in updates and updates["specificity"] not in SPECIFICITIES:
+        raise HTTPException(400, "specificity must be 'strict', 'loose' or 'prefer'")
     if "needs_review" in updates:
         updates["needs_review"] = int(bool(updates["needs_review"]))
     set_clause = ", ".join(f"{k} = ?" for k in updates)

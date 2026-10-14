@@ -58,14 +58,46 @@ def have(cat: Catalog, product_id: int, unit: Unit, *, target_dim: str | None = 
     return out
 
 
-def need_status(cat: Catalog, product_id: int, need: float, unit: Unit | None) -> dict:
+def fallback_root(cat: Catalog, product_id: int, specificity: str | None) -> int:
+    """The node whose subtree satisfies a need: the bound product itself, or
+    for a 'prefer' binding its parent (the preferred variant's fallback)."""
+    if specificity == "prefer":
+        parent = (cat.product(product_id) or {}).get("parent_id")
+        if parent is not None and cat.product(parent) is not None:
+            return parent
+    return product_id
+
+
+def need_status(cat: Catalog, product_id: int, need: float, unit: Unit | None,
+                specificity: str | None = None) -> dict:
     """Status of one recipe need against the product's subtree stock.
 
     green  enough (or staple, or to-taste with something in stock)
     yellow some but not enough, amount unknown, to-taste with nothing in stock,
            or covered only by opened packs and the need is over half of them
     red    nothing at all
+
+    A 'prefer' need is judged on its fallback's subtree; `substitute` says the
+    preferred variant alone does not cover it.
     """
+    root = fallback_root(cat, product_id, specificity)
+    status = _status(cat, root, need, unit)
+    preferred = cat.product(product_id) or {}
+    substitute = False
+    if root != product_id and status["status"] != "red" and status["have"].lots and not preferred.get("staple"):
+        if status["to_taste"]:
+            substitute = not cat.lots([product_id, *cat.descendants(product_id)])
+        else:
+            substitute = have(cat, product_id, unit).amount < need - EPS
+    status.update(
+        substitute=substitute,
+        preferred_name=preferred.get("name") if root != product_id else None,
+        fallback_name=(cat.product(root) or {}).get("name") if root != product_id else None,
+    )
+    return status
+
+
+def _status(cat: Catalog, product_id: int, need: float, unit: Unit | None) -> dict:
     product = cat.product(product_id) or {}
     to_taste = need <= EPS or unit is None or unit.dimension == VAGUE
     h = have(cat, product_id, unit) if unit is not None and not to_taste else None

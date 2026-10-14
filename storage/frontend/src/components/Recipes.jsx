@@ -24,16 +24,28 @@ function formatDate(iso) {
 
 /* ── Specificity toggle ───────────────────────────────────────────────────
    Loose: any child of the linked parent product counts as stock (default).
+   Prefer: the linked variant first; its parent's other kinds count as a
+   substitute (flavoured cream, grated cheese).
    Strict: only the exact linked product counts (use for variants like
    parmesan-vs-gouda where siblings under a "Juusto" parent aren't
-   interchangeable).
+   interchangeable). Clicking cycles loose → prefer → strict.
 */
+const SPECIFICITY = {
+  loose: { next: 'prefer', label: '〰️ loose', cls: 'bg-gray-700 text-gray-300',
+    title: 'Loose — any child of the parent product counts as stock' },
+  prefer: { next: 'strict', label: '⭐ prefer', cls: 'bg-sky-900/40 text-sky-300',
+    title: 'Prefer — this variant first; other kinds of its parent count as a substitute' },
+  strict: { next: 'loose', label: '🎯 strict', cls: 'bg-amber-900/40 text-amber-300',
+    title: 'Strict — only this exact product counts as stock' },
+};
+
 function SpecificityToggle({ ingredient, recipeId, onChanged }) {
   const [saving, setSaving] = useState(false);
-  const current = ingredient.specificity === 'strict' ? 'strict' : 'loose';
+  const current = SPECIFICITY[ingredient.specificity] ? ingredient.specificity : 'loose';
+  const spec = SPECIFICITY[current];
 
   const flip = async () => {
-    const next = current === 'strict' ? 'loose' : 'strict';
+    const next = spec.next;
     setSaving(true);
     try {
       await updateIngredient(recipeId, ingredient.id, { specificity: next });
@@ -50,18 +62,10 @@ function SpecificityToggle({ ingredient, recipeId, onChanged }) {
       type="button"
       onClick={flip}
       disabled={saving}
-      title={
-        current === 'strict'
-          ? 'Strict — only this exact product counts as stock'
-          : 'Loose — any child of the parent product counts as stock'
-      }
-      className={`px-2 py-0.5 rounded-full text-xs ${
-        current === 'strict'
-          ? 'bg-amber-900/40 text-amber-300'
-          : 'bg-gray-700 text-gray-300'
-      } disabled:opacity-50`}
+      title={spec.title}
+      className={`px-2 py-0.5 rounded-full text-xs ${spec.cls} disabled:opacity-50`}
     >
-      {current === 'strict' ? '🎯 strict' : '〰️ loose'}
+      {spec.label}
     </button>
   );
 }

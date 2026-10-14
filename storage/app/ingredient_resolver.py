@@ -18,6 +18,9 @@ Used by POST /api/ingredients/resolve. Per line, cheapest step first:
 5. Anything left becomes a new concept: a variant under its generic, a
    generic at top level. The generic, the variant and the source-language
    word are recorded as aliases.
+6. A preferred variant (flavour, form, variety the recipe names beyond the
+   specific: "ruokakerma kolme juustoa") binds 'prefer', found like any name
+   or made under the node bound so far, which becomes its fallback.
 
 The resolver never creates SKUs, never changes a unit and never deletes.
 Catalog writes run under CATALOG_LOCK. The AI call runs outside it, and
@@ -79,7 +82,7 @@ def _names(item: dict) -> tuple[str, str]:
 def _unknown_names(items: list[dict], index: dict[str, int]) -> list[str]:
     seen: dict[str, str] = {}
     for item in items:
-        for name in _names(item):
+        for name in (*_names(item), (item.get("preferred") or "").strip()):
             key = norm(name)
             if key and key not in index:
                 seen.setdefault(key, name)
@@ -230,6 +233,15 @@ def _bind(conn, i: int, item: dict, index: dict[str, int], hits: dict[str, int],
             gen_name = conn.execute("SELECT name FROM products WHERE id = ?", (gen_id,)).fetchone()["name"]
             if spec_id != gen_id and norm(specific) != norm(gen_name):
                 pid, specificity = spec_id, "strict"
+    preferred = (item.get("preferred") or "").strip()
+    bound_name = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()["name"]
+    if norm(preferred) and norm(preferred) not in {norm(generic), norm(specific), norm(bound_name)}:
+        # The exact variant the recipe names ("ruokakerma kolme juustoa"):
+        # bound first, with the node above as an acceptable substitute. A new
+        # one is made under the current binding; a known one keeps its parent.
+        pref_id = concept_for(preferred, pid)
+        if pref_id != pid:
+            pid, specificity = pref_id, "prefer"
     if item.get("source_name"):
         add_alias(conn, item["source_name"], pid, "recipe")
     row = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()

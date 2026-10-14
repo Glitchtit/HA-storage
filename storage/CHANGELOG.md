@@ -1,3 +1,9 @@
+## 0.29.0
+
+- Recipe ingredients can prefer a variant: "2 prk ruokakermaa Kolme juustoa" asks for the cheese-flavoured cream first, while plain ruokakerma still counts as a substitute. The recipe stays cookable with the substitute and says so, the shopping list asks for the preferred cream, and cooking uses it first
+- Importing a recipe keeps flavour, form and preparation (Kolme juustoa, grated, honey-marinated, stock cube) as that preferred variant; brand names never count
+- The admin recipe view cycles an ingredient through loose, prefer and strict
+
 ## 0.28.9
 
 - Importing a recipe also tidies the ingredients it already knew: a product sitting one level too high ("Valio ruokakerma" directly under "Kerma") moves down to the ingredient the recipe asks for ("Ruokakerma"), so it counts as in stock
