@@ -1,3 +1,7 @@
+## 0.29.1
+
+- A preferred variant is never taken for the ingredient it refines: "cheddarraaste" (grated cheddar) no longer collapses into "Cheddar", so sliced cheddar stops counting as the grated cheddar a recipe asks for. A wrong match remembered by an earlier import is corrected on the next one
+
 ## 0.29.0
 
 - Recipe ingredients can prefer a variant: "2 prk ruokakermaa Kolme juustoa" asks for the cheese-flavoured cream first, while plain ruokakerma still counts as a substitute. The recipe stays cookable with the substitute and says so, the shopping list asks for the preferred cream, and cooking uses it first

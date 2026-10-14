@@ -131,3 +131,55 @@ def test_endpoint_uses_ai_when_configured(monkeypatch):
         [{"name": "cream x6", "id": cream, "confidence": "high"}]))
     r = client.post("/api/ingredients/resolve", json={"items": [{"name": "cream x6", "amount": 1}]})
     assert r.json()["items"][0]["product_id"] == cream
+
+
+class TestPreferredNeverFoldsIntoItsBinding:
+    """Live finding (2026-10-14): "cheddarraaste" was matched as the same
+    ingredient as Cheddar, so grated and sliced cheddar both counted and the
+    alias made it stick. A preferred variant is narrower than its binding."""
+
+    def _setup(self, tag):
+        cheese = _mk(f"Juusto {tag}", unit="g", kind="concept")
+        cheddar = _mk(f"Cheddar {tag}", unit="g", kind="concept", parent_id=cheese)
+        return cheese, cheddar
+
+    def _item(self, tag):
+        return {"name": f"juusto {tag}", "specific": f"cheddar {tag}",
+                "preferred": f"cheddarraaste {tag}", "amount": 0.5, "unit_text": "pss"}
+
+    def _alias_target(self, tag):
+        row = get_connection().execute(
+            "SELECT product_id FROM product_aliases WHERE alias_norm = ?",
+            (concepts.norm(f"cheddarraaste {tag}"),)).fetchone()
+        return row["product_id"] if row else None
+
+    def test_an_ai_match_on_the_binding_makes_the_variant_instead(self):
+        _, cheddar = self._setup("y1")
+        ai = _FakeAi(lambda prompt: [{"name": n, "id": cheddar, "confidence": "high"}
+                                     for n in _names_in(prompt)])
+        [hit] = _resolve([self._item("y1")], ai)
+        assert hit["specificity"] == "prefer" and hit["product_id"] != cheddar
+        grated = client.get(f"/api/products/{hit['product_id']}").json()
+        assert grated["parent_id"] == cheddar
+        assert self._alias_target("y1") == hit["product_id"]
+
+    def test_a_stale_ai_alias_on_the_binding_is_repointed_and_reused(self):
+        _, cheddar = self._setup("y2")
+        conn = get_connection()
+        concepts.add_alias(conn, "cheddarraaste y2", cheddar, "ai")
+        conn.commit()
+        [first] = _resolve([self._item("y2")], None)
+        [second] = _resolve([self._item("y2")], None)
+        assert first["specificity"] == second["specificity"] == "prefer"
+        assert first["product_id"] == second["product_id"] != cheddar
+        assert self._alias_target("y2") == first["product_id"]
+        kids = [p for p in client.get("/api/products").json() if p.get("parent_id") == cheddar]
+        assert len(kids) == 1
+
+    def test_an_ai_match_to_an_existing_variant_still_binds_it(self):
+        _, cheddar = self._setup("y3")
+        grated = _mk("Raastettu cheddar y3", unit="g", kind="concept", parent_id=cheddar)
+        ai = _FakeAi(lambda prompt: [{"name": n, "id": grated, "confidence": "high"}
+                                     for n in _names_in(prompt) if "raaste" in n])
+        [hit] = _resolve([self._item("y3")], ai)
+        assert (hit["product_id"], hit["specificity"], hit["created"]) == (grated, "prefer", False)

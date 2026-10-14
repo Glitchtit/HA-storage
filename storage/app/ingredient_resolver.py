@@ -34,6 +34,7 @@ import logging
 import sqlite3
 from typing import Any, Callable
 
+import tree
 from concepts import add_alias, concept_index, create_concept, norm
 from locks import CATALOG_LOCK
 from quantity import MASS, UNIT_CATALOG, VOLUME, normalize_unit_text
@@ -239,6 +240,7 @@ def _bind(conn, i: int, item: dict, index: dict[str, int], hits: dict[str, int],
         # The exact variant the recipe names ("ruokakerma kolme juustoa"):
         # bound first, with the node above as an acceptable substitute. A new
         # one is made under the current binding; a known one keeps its parent.
+        _narrower_than(conn, pid, preferred, index, hits)
         pref_id = concept_for(preferred, pid)
         if pref_id != pid:
             pid, specificity = pref_id, "prefer"
@@ -247,3 +249,31 @@ def _bind(conn, i: int, item: dict, index: dict[str, int], hits: dict[str, int],
     row = conn.execute("SELECT name FROM products WHERE id = ?", (pid,)).fetchone()
     result.update(product_id=pid, product_name=row["name"], specificity=specificity)
     return result
+
+
+def _narrower_than(conn, bound: int, preferred: str, index: dict[str, int],
+                   hits: dict[str, int]) -> None:
+    """A preferred variant is narrower than the node it refines, so a match
+    on that node or above it ("cheddarraaste" -> Cheddar, by the AI matcher
+    or an alias it left) is a form taken for the same ingredient. Drop that
+    match, reuse a child of the node with the name if there is one, and
+    repoint an AI-made alias, so the next import finds the variant."""
+    key = norm(preferred)
+    above = {bound, *tree.ancestor_ids(conn, bound)}
+    if hits.get(key) in above:
+        hits.pop(key)
+    if index.get(key) not in above:
+        return
+    index.pop(key)
+    child = next((r["id"] for r in conn.execute(
+        "SELECT id, name FROM products WHERE parent_id = ? AND kind = 'concept' ORDER BY id",
+        (bound,)).fetchall() if norm(r["name"]) == key), None)
+    if child is not None:
+        index[key] = child
+        conn.execute(
+            "UPDATE product_aliases SET product_id = ? WHERE alias_norm = ? AND source = 'ai'",
+            (child, key))
+    else:
+        # concept_for creates the variant; its alias insert then finds this
+        # row gone and writes the new mapping.
+        conn.execute("DELETE FROM product_aliases WHERE alias_norm = ? AND source = 'ai'", (key,))
