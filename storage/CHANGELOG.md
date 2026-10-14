@@ -1,3 +1,7 @@
+## 0.28.8
+
+- A new generic ingredient picks up the specific kinds you already have: importing a recipe that creates "Riisi" moves "Basmatiriisi" and "Jasmiiniriisi" under it, so the recipe sees that rice in stock. Only kinds a recipe could use in place of the plain ingredient move (porridge rice does not count as "Riisi"); unsure matches become link proposals. The concept sweep does the same for the whole catalog
+
 ## 0.28.7
 
 - AI features (optimize, receipt scanning) work with newer Claude models (5.x), which think before answering: the answer text is read past the thinking block, and there is more output room so thinking doesn't cut the answer short

@@ -3,6 +3,8 @@
 place           a concept with nothing under it is merged into the concept it
                 duplicates ("Spaghetti" -> "Spagetti") or moved under the
                 broader concept it is a kind of ("Terttutomaatti" -> "Tomaatti").
+gather          existing top-level concepts that a recipe asking for the
+                concept could use move under it ("Basmatiriisi" -> "Riisi").
 adopt           retail products (SKUs) that ARE the concept move under it.
 assign_groups   a concept takes its descendants' majority aisle group, else
                 its parent's, else one the AI picks from the existing groups.
@@ -261,6 +263,84 @@ def place(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> 
     return stats
 
 
+# ── gather ───────────────────────────────────────────────────────────────
+
+_GATHER_PROMPT = """Each generic ingredient CONCEPT in a household grocery
+catalog has candidate concepts that may belong under it. A candidate belongs
+when a recipe asking for the plain concept can use it without changing the
+dish: "Basmatiriisi" fits a recipe asking for "Riisi", but "Puuroriisi" and
+"Risottoriisi" do not, and "Riisivälipala" is a different thing altogether.
+When unsure, use lower confidence.
+
+Concepts and their candidates (JSON):
+{batch_json}
+
+Return ONLY a JSON array of matches:
+[{{"concept_id": <id>, "candidate_id": <candidate id>, "confidence": "high"|"medium"|"low"}}]
+"""
+
+
+def _variant_candidates(concept, tops: list) -> list[dict]:
+    """Top-level concepts named as a kind of this one: every word of the
+    concept ends a word of the candidate, as a Finnish compound puts its head
+    last ("riisi" in "Basmatiriisi", not in "Riisivälipala")."""
+    words = _words(concept["name"])
+    if not words:
+        return []
+    out = []
+    for c in tops:
+        if c["id"] == concept["id"] or norm(c["name"]) == norm(concept["name"]):
+            continue
+        cand_words = norm(c["name"]).split()
+        if all(any(cw.endswith(w) for cw in cand_words) for w in words):
+            out.append({"id": c["id"], "name": c["name"]})
+    return out[:_MAX_CANDIDATES]
+
+
+def gather(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> dict:
+    """Move existing top-level concepts that are a usable kind of a concept
+    under it, so a loose need for the generic counts their stock. The reverse
+    of place: there a new concept finds its parent, here a new generic finds
+    its variants. A concept that already has a parent is never taken."""
+    from linker import apply_link
+
+    stats = {"gathered": 0, "proposed": 0}
+    tops = conn.execute(
+        "SELECT id, name FROM products WHERE kind = 'concept' AND parent_id IS NULL"
+    ).fetchall()
+    batch = []
+    for cid in concept_ids:
+        concept = _concept(conn, cid)
+        if concept is not None:
+            cands = _variant_candidates(concept, tops)
+            if cands:
+                batch.append({"concept_id": cid, "concept": concept["name"], "candidates": cands})
+    for i in range(0, len(batch), _BATCH):
+        chunk = batch[i:i + _BATCH]
+        offered = {(b["concept_id"], c["id"]) for b in chunk for c in b["candidates"]}
+        rows = _ask(ai, _GATHER_PROMPT.format(batch_json=json.dumps(chunk, ensure_ascii=False)), conn)
+        for row in rows:
+            cid, cand = _int(row.get("concept_id")), _int(row.get("candidate_id"))
+            conf = str(row.get("confidence", "")).lower()
+            if (cid, cand) not in offered or conf not in ("high", "medium"):
+                continue
+            with CATALOG_LOCK:
+                concept, variant = _concept(conn, cid), _concept(conn, cand)
+                if concept is None or variant is None or variant["parent_id"] is not None:
+                    continue
+                try:
+                    if conf == "high":
+                        apply_link(conn, cand, cid, note=f"gathered under {concept['name']}")
+                        stats["gathered"] += 1
+                    elif _propose(conn, cand, cid):
+                        conn.commit()
+                        stats["proposed"] += 1
+                except ValueError as exc:
+                    conn.rollback()
+                    log.warning("Gather %s -> %s refused: %s", cand, cid, exc)
+    return stats
+
+
 # ── aisle groups ─────────────────────────────────────────────────────────
 
 _GROUPS_PROMPT = """Put each grocery ingredient CONCEPT of a household catalog
@@ -423,8 +503,9 @@ def estimate_facts(conn: sqlite3.Connection, needs: list[tuple[int, str]], ai: A
 
 def run_followups(conn: sqlite3.Connection, created: list[int],
                   needs: list[tuple[int, str]], ai: AiFn | None) -> dict:
-    """After one import: place new top-level concepts, adopt SKUs for every
-    new concept, group them, then fill missing facts for every bound need."""
+    """After one import: place new top-level concepts, gather existing
+    variants under every new concept, adopt SKUs for them, group them, then
+    fill missing facts for every bound need."""
     if ai is None:
         return {}
 
@@ -433,6 +514,7 @@ def run_followups(conn: sqlite3.Connection, created: list[int],
 
     top = [c for c in alive(created) if _concept(conn, c)["parent_id"] is None]
     out = {"place": place(conn, top, ai)}
+    out["gather"] = gather(conn, alive(created), ai)
     out["adopt"] = adopt(conn, alive(created), ai)
     out["grouped"] = assign_groups(conn, alive(created), ai)
     out["facts"] = estimate_facts(conn, [(c, d) for c, d in needs if _concept(conn, c)], ai)
@@ -477,12 +559,15 @@ def _isolated(conn: sqlite3.Connection) -> list[int]:
 
 
 def run_sweep(conn: sqlite3.Connection, ai: AiFn | None) -> dict:
-    """Place, then adopt, every concept with nothing under it; group every
+    """Place every concept with nothing under it, gather variants under
+    every concept, adopt SKUs for the childless ones; group every
     ungrouped concept; estimate the facts recipe needs lack; finally merge
     any twins the placement revealed."""
     from concepts import dedup_concepts
 
     out = {"place": place(conn, _isolated(conn), ai)}
+    out["gather"] = gather(conn, [r["id"] for r in conn.execute(
+        "SELECT id FROM products WHERE kind = 'concept' ORDER BY id").fetchall()], ai)
     out["adopt"] = adopt(conn, _isolated(conn), ai)
     # Twins that were both childless could not target each other above; once
     # one of them has adopted products it is an existing concept to merge into.

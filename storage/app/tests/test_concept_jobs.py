@@ -21,8 +21,8 @@ import concepts
 
 client = TestClient(app)
 
-ADOPT, PLACE, GROUPS, FACTS = ("ARE the concept", "have no products under them",
-                               "aisle group", "kitchen facts")
+ADOPT, PLACE, GROUPS, FACTS, GATHER = ("ARE the concept", "have no products under them",
+                                       "aisle group", "kitchen facts", "can use it")
 
 
 def _u(abbr):
@@ -48,7 +48,8 @@ class _Ai:
     function of the prompt). Unrecognised prompts get an empty list."""
 
     def __init__(self, **answers):
-        self.answers = {{"adopt": ADOPT, "place": PLACE, "groups": GROUPS, "facts": FACTS}[k]: v
+        self.answers = {{"adopt": ADOPT, "place": PLACE, "groups": GROUPS, "facts": FACTS,
+                         "gather": GATHER}[k]: v
                         for k, v in answers.items()}
         self.prompts = []
 
@@ -172,6 +173,53 @@ class TestPlace:
         assert [c["id"] for c in _payload(ai.prompts[0])] == [lonely]
 
 
+class TestGather:
+    def test_high_reparents_medium_proposes_and_parented_concepts_stay(self):
+        rice = _mk("Riisi j12", unit="dl", kind="concept")
+        basmati = _mk("Basmatiriisi j12", unit="g", kind="concept")
+        jasmine = _mk("Jasmiiniriisi j12", unit="g", kind="concept")
+        porridge = _mk("Puuroriisi j12", unit="g", kind="concept")
+        grains = _mk("Viljat j12", unit="g", kind="concept")
+        parented = _mk("Pitkäjyväriisi j12", unit="g", kind="concept", parent_id=grains)
+        ai = _Ai(gather=[
+            {"concept_id": rice, "candidate_id": basmati, "confidence": "high"},
+            {"concept_id": rice, "candidate_id": jasmine, "confidence": "medium"},
+            {"concept_id": rice, "candidate_id": porridge, "confidence": "low"},
+            {"concept_id": rice, "candidate_id": parented, "confidence": "high"},
+        ])
+        res = concept_jobs.gather(get_connection(), [rice], ai)
+        assert res == {"gathered": 1, "proposed": 1}
+        assert _get(basmati)["parent_id"] == rice
+        assert _get(jasmine)["parent_id"] is None
+        assert _get(porridge)["parent_id"] is None
+        assert _get(parented)["parent_id"] == grains
+        proposals = client.get("/api/link-proposals").json()
+        assert any(p["product_id"] == jasmine and p["proposed_parent_id"] == rice
+                   for p in proposals)
+        notes = [e["note"] for e in client.get(f"/api/history?product_id={basmati}").json()]
+        assert "gathered under Riisi j12" in notes
+
+    def test_candidates_are_top_level_compounds_ending_in_the_name(self):
+        rice = _mk("Riisi j13", unit="dl", kind="concept")
+        basmati = _mk("Basmatiriisi j13", unit="g", kind="concept")
+        long_grain = _mk("Pitkäjyväinen riisi j13", unit="g", kind="concept")
+        _mk("Riisivälipala j13", unit="kpl", kind="concept")
+        _mk("Villiriisi j13", unit="g", kind="concept", parent_id=rice)
+        _mk("Pirkka basmatiriisi j13 1kg")
+        ai = _Ai(gather=[])
+        concept_jobs.gather(get_connection(), [rice], ai)
+        [batch] = _payload(ai.prompts[0])
+        assert batch["concept_id"] == rice
+        # The test database is shared; other tests' rice concepts are fair candidates too.
+        assert {c["id"] for c in batch["candidates"] if "j13" in c["name"]} == {basmati, long_grain}
+
+    def test_no_candidates_means_no_ai_call(self):
+        lonely = _mk("Mustakumina j14", unit="g", kind="concept")
+        ai = _Ai(gather=[])
+        assert concept_jobs.gather(get_connection(), [lonely], ai) == {"gathered": 0, "proposed": 0}
+        assert ai.prompts == []
+
+
 class TestGroups:
     def test_majority_of_descendants_then_ai(self):
         dairy, baking = _group("Maitotuotteet j5"), _group("Leivonta j5")
@@ -236,3 +284,25 @@ def test_resolve_endpoint_runs_the_follow_ups(monkeypatch):
                     json={"items": [{"name": "guanciale j8", "amount": 150, "unit_text": "g"}]})
     concept = r.json()["items"][0]["product_id"]
     assert _get(sku)["parent_id"] == concept
+
+
+def test_import_of_a_new_generic_gathers_its_existing_variants(monkeypatch):
+    class _Inline:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None, **_):
+            self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+        def start(self):
+            self.target(*self.args, **self.kwargs)
+
+    basmati = _mk("Basmatiriisi j15", unit="g", kind="concept")
+    ai = _Ai(gather=lambda prompt: [
+        {"concept_id": b["concept_id"], "candidate_id": c["id"], "confidence": "high"}
+        for b in _payload(prompt) for c in b["candidates"]])
+    monkeypatch.setattr("routers.products._ai_configured", lambda conn: True)
+    monkeypatch.setattr("ai_client.call_ai_json", ai)
+    monkeypatch.setattr("concept_jobs.threading.Thread", _Inline)
+    r = client.post("/api/ingredients/resolve",
+                    json={"items": [{"name": "riisi j15", "amount": 3.5, "unit_text": "dl"}]})
+    rice = r.json()["items"][0]["product_id"]
+    assert rice != basmati
+    assert _get(basmati)["parent_id"] == rice
