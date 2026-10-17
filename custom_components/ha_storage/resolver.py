@@ -6,13 +6,6 @@ pytest environment. The handler in services.py supplies the product list.
 
 from __future__ import annotations
 
-import re
-
-
-def _starts_a_word(needle: str, haystack: str) -> bool:
-    """True if `needle` occurs in `haystack` at the start of a word."""
-    return re.search(r"(?<!\w)" + re.escape(needle), haystack) is not None
-
 
 def resolve_product_by_name(name: str | None, products: list[dict]) -> tuple[str, dict | list[dict] | None]:
     """Resolve a free-text product name against existing Storage products.
@@ -22,9 +15,10 @@ def resolve_product_by_name(name: str | None, products: list[dict]) -> tuple[str
          concept wins over a SKU of the same name, so "maito" adds the
          generic and the shopping list shows the usual SKU as its buy hint.
       2. Else collect substring candidates (the query appears anywhere in the
-         product name, casefolded). Exactly one that starts at a word
-         boundary -> ("added", {id, name}). A single hit buried mid-word
-         ("egg" in "Reggiano") is too weak to act on -> ("ambiguous", [it]).
+         product name, casefolded). A partial hit is never added on its own,
+         even when it is the only one: "butter" names a word inside "Sundlings
+         butter popcorn", a different product -> ("ambiguous", [it]), so the
+         agent judges it and can retry in Finnish ("voi").
       3. Multiple candidates -> ("ambiguous", [{id, name}, ...]), concepts first.
       4. Zero candidates -> ("not_found", None).
 
@@ -53,12 +47,7 @@ def resolve_product_by_name(name: str | None, products: list[dict]) -> tuple[str
         return ("added", next((slim for p, slim in exact if p.get("kind") == "concept"), exact[0][1]))
     candidates.sort(key=lambda c: c[0].get("kind") != "concept")  # stable: concepts first
     slims = [slim for _, slim in candidates]
-    if len(slims) == 1:
-        only = slims[0]
-        if _starts_a_word(needle, only["name"].casefold()):
-            return ("added", only)
-        return ("ambiguous", slims)
-    if len(slims) > 1:
+    if slims:
         return ("ambiguous", slims)
     return ("not_found", None)
 
@@ -86,22 +75,34 @@ def describe_add_failure(
     if status == "ambiguous" and candidates:
         ranked = sorted(candidates, key=lambda c: counts.get(c["id"], 0), reverse=True)
         listed = "; ".join(f"{c['name']} ({_bought(c['id'])})" for c in ranked[:8])
-        msg = f"'{name}' did not pick out one Storage product. Possible matches: {listed}."
-        bought = [c for c in candidates if counts.get(c["id"])]
-        if len(bought) == 1:
-            msg += (
-                f" The household usually buys {bought[0]['name']}; add that one by"
-                " repeating the add with that full name, without asking, and say"
-                " which product you added."
+        if len(candidates) == 1:
+            msg = (
+                f"'{name}' only partly matches one Storage product: {listed}. Add it"
+                " (by repeating the add with its full name) only if it really is the"
+                " item asked for, not a different product that merely contains the"
+                " word (e.g. butter popcorn is not butter)."
             )
-            return msg
+        else:
+            msg = f"'{name}' did not pick out one Storage product. Possible matches: {listed}."
+            bought = [c for c in candidates if counts.get(c["id"])]
+            if len(bought) == 1:
+                msg += (
+                    f" The household usually buys {bought[0]['name']}; if that is"
+                    " the item asked for, add it by repeating the add with that full"
+                    " name, without asking, and say which product you added."
+                )
+            else:
+                msg += (
+                    " Use best judgement and pick one yourself, without asking: prefer"
+                    " a product bought before, otherwise the plain everyday version of"
+                    " the item over flavoured, processed or mixed products (e.g. plain"
+                    " tomatoes over tomato salsa). Add it by repeating the add with its"
+                    " full name, then briefly say which product you picked."
+                )
         msg += (
-            " Use best judgement and pick one yourself, without asking: prefer a"
-            " product bought before, otherwise the plain everyday version of the"
-            " item over flavoured, processed or mixed products (e.g. plain"
-            " tomatoes over tomato salsa). Add it by repeating the add with its"
-            " full name, then briefly say which product you picked. Ask the user"
-            " only if none of these is plausibly the item."
+            " If none of these is actually the item, retry the add once with the"
+            " Finnish word for it, singular basic form (e.g. butter = voi, milk ="
+            " maito, eggs = kananmuna); ask the user only if that fails too."
         )
     else:
         msg = (

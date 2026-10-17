@@ -38,11 +38,11 @@ def test_exact_match_wins_over_substring():
     assert result == {"id": 4, "name": "Maito"}
 
 
-def test_substring_single_candidate_is_added():
-    # "kevyt" matches only "Kevytmaito" as a substring -> single candidate -> added.
+def test_substring_single_candidate_needs_judgement():
+    # "kevyt" matches only "Kevytmaito": a partial hit is returned, not added.
     status, result = resolve_product_by_name("kevyt", PRODUCTS)
-    assert status == "added"
-    assert result == {"id": 5, "name": "Kevytmaito"}
+    assert status == "ambiguous"
+    assert result == [{"id": 5, "name": "Kevytmaito"}]
 
 
 def test_ambiguous_multiple_candidates():
@@ -129,10 +129,28 @@ def test_single_mid_word_match_needs_confirmation():
     assert result == [{"id": 9, "name": "Pirkka Parhaat Parmigiano Reggiano juustoraaste 80g"}]
 
 
-def test_single_word_start_match_still_added():
-    prods = [_p(9, "Pirkka vapaan kanan ruskea kananmuna 6 kpl")]
-    status, result = resolve_product_by_name("ruskea", prods)
-    assert status == "added"
+def test_single_whole_word_match_is_not_added():
+    # 2026-10-17: Jarvis's "butter" landed on popcorn because it was the only
+    # product containing the word. A different product, so the agent must judge.
+    prods = [_p(1663, "Sundlings butter popcorn 100g"), _p(681, "Voi")]
+    status, result = resolve_product_by_name("butter", prods)
+    assert status == "ambiguous"
+    assert result == [{"id": 1663, "name": "Sundlings butter popcorn 100g"}]
+
+
+def test_single_partial_match_message_offers_finnish_retry():
+    cands = [{"id": 1663, "name": "Sundlings butter popcorn 100g"}]
+    hist = [{"product_id": 1663, "product_name": "Sundlings butter popcorn 100g", "total_amount": 1, "event_count": 1}]
+    msg = describe_add_failure("butter", "ambiguous", cands, hist)
+    assert "only if it really is the item" in msg
+    assert "butter = voi" in msg
+    assert "usually buys Sundlings" not in msg
+
+
+def test_ambiguous_message_offers_finnish_retry():
+    cands = [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]
+    msg = describe_add_failure("x", "ambiguous", cands, [])
+    assert "Finnish word" in msg
 
 
 def test_not_found_suggests_finnish_retry():
