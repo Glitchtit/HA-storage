@@ -1,3 +1,7 @@
+## 0.29.2
+
+- Using or moving stock by hand keeps the opened count right: using one of two opened items leaves one opened, the opened item is used first, and an opened pack moved to another place stays opened there. A product used up in small portions (tenths) now leaves the stock list instead of staying behind as "0 in stock"
+
 ## 0.29.1
 
 - A preferred variant is never taken for the ingredient it refines: "cheddarraaste" (grated cheddar) no longer collapses into "Cheddar", so sliced cheddar stops counting as the grated cheddar a recipe asks for. A wrong match remembered by an earlier import is corrected on the next one
