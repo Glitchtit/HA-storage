@@ -20,6 +20,7 @@ from models import (
     StockSummary,
     StockTransfer,
 )
+from availability import EPS
 from list_clearing import restore_cleared
 from routers.history import log_event
 from routers.shopping import sync_auto_shopping, consume_shopping_for_purchase
@@ -221,14 +222,17 @@ def consume_stock(body: StockConsume):
     remaining = body.amount
     consumed = 0.0
     for entry in entries:
-        if remaining <= 0:
+        if remaining <= EPS:
             break
         take = min(remaining, entry["amount"])
         new_amount = entry["amount"] - take
-        if new_amount <= 0:
+        if new_amount <= EPS:
             conn.execute("DELETE FROM stock WHERE id = ?", (entry["id"],))
         else:
-            conn.execute("UPDATE stock SET amount = ? WHERE id = ?", (new_amount, entry["id"]))
+            # The opened item is the one used first.
+            opened = min(max((entry["amount_opened"] or 0) - take, 0), new_amount)
+            conn.execute("UPDATE stock SET amount = ?, amount_opened = ? WHERE id = ?",
+                         (new_amount, opened, entry["id"]))
         remaining -= take
         consumed += take
 
@@ -403,21 +407,24 @@ def transfer_stock(body: StockTransfer):
     remaining = body.amount
     transferred = 0.0
     for entry in entries:
-        if remaining <= 0:
+        if remaining <= EPS:
             break
         take = min(remaining, entry["amount"])
         new_amount = entry["amount"] - take
-        if new_amount <= 0:
+        opened = entry["amount_opened"] or 0
+        moved_opened = min(opened, take)
+        if new_amount <= EPS:
             conn.execute("DELETE FROM stock WHERE id = ?", (entry["id"],))
         else:
-            conn.execute("UPDATE stock SET amount = ? WHERE id = ?", (new_amount, entry["id"]))
+            conn.execute("UPDATE stock SET amount = ?, amount_opened = ? WHERE id = ?",
+                         (new_amount, min(opened - moved_opened, new_amount), entry["id"]))
 
-        # Create new entry at destination — carry the audit snapshot along.
+        # Create new entry at destination — carry the audit snapshot and the opened share along.
         conn.execute(
             """INSERT INTO stock (product_id, location_id, amount, amount_opened, unit_id,
                best_before_date, best_before_days, purchased_date, price_paid)
-               VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)""",
-            (body.product_id, body.to_location_id, take, entry["unit_id"],
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (body.product_id, body.to_location_id, take, moved_opened, entry["unit_id"],
              entry["best_before_date"], entry["best_before_days"], entry["purchased_date"],
              entry.get("price_paid")),
         )
