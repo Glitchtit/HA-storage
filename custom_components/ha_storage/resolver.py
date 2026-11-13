@@ -1,4 +1,4 @@
-"""Pure, deterministic product-name resolution for the by-name shopping service.
+"""Pure, deterministic name resolution for the by-name shopping and stock services.
 
 No Home Assistant imports live here so the resolver is unit-testable in a bare
 pytest environment. The handler in services.py supplies the product list.
@@ -121,3 +121,71 @@ def describe_add_failure(
             " full name without asking, and say which product you added."
         )
     return msg
+
+
+def match_location(location: str | None, locations: list[dict]) -> dict | None:
+    """The Storage location named `location`: exact name first, else the first
+    whose name or description ("Freezer" / "Pakastin") contains it."""
+    needle = (location or "").strip().casefold()
+    if not needle:
+        return None
+    for loc in locations:
+        if (loc.get("name") or "").casefold() == needle:
+            return loc
+    for loc in locations:
+        if needle in f"{loc.get('name') or ''} {loc.get('description') or ''}".casefold():
+            return loc
+    return None
+
+
+def find_stock(
+    entries: list[dict],
+    locations: list[dict],
+    name: str | None = None,
+    location: str | None = None,
+) -> dict:
+    """What is in stock, one row per product and location, for an agent to read.
+
+    `entries` are /api/stock/entries rows and `locations` /api/locations rows.
+    A name that matches nothing still returns every row (of the location, when
+    given): product names are Finnish, so "fries" finds no "ranskalaiset" and
+    the agent has to pick the product from the list itself.
+    """
+    loc_names = {loc["id"]: loc["name"] for loc in locations}
+    loc = match_location(location, locations)
+    if loc is None and (location or "").strip():
+        return {"error": f"Unknown location '{location}'. Locations: {', '.join(loc_names.values())}."}
+
+    totals: dict[tuple, dict] = {}
+    for entry in entries:
+        if loc is not None and entry.get("location_id") != loc["id"]:
+            continue
+        row = totals.setdefault(
+            (entry["product_id"], entry.get("location_id")),
+            {
+                "product_id": entry["product_id"],
+                "name": entry["product_name"],
+                "location": loc_names.get(entry.get("location_id"), "unknown"),
+                "amount": 0,
+            },
+        )
+        row["amount"] += entry["amount"]
+    rows = sorted(totals.values(), key=lambda r: r["name"].casefold())
+
+    needle = (name or "").strip().casefold()
+    if not needle:
+        return {"stock": rows}
+    hits = [r for r in rows if needle in r["name"].casefold()]
+    if hits:
+        return {
+            "stock": hits,
+            "note": "Product names are Finnish. If none of these is the item asked"
+            " for, search again with the Finnish word for it.",
+        }
+    where = f" in {loc['name']}" if loc is not None else ""
+    return {
+        "stock": rows,
+        "note": f"No product name contains '{name}' (names are Finnish), so this is"
+        f" everything in stock{where}. Pick the product that is the item asked"
+        " for yourself; if none is, say it is not in stock.",
+    }

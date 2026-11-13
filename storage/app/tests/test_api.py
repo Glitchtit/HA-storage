@@ -319,6 +319,21 @@ class TestStock:
         assert r.json()["consumed"] == 2
         assert r.json()["remaining_to_consume"] == 3
 
+    def test_consume_only_from_given_location(self):
+        pid, kpl, loc = self._make_product_with_location()
+        other = next(l["id"] for l in client.get("/api/locations").json() if l["id"] != loc)
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2, "location_id": loc})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 3, "location_id": other})
+        r = client.post("/api/stock/consume",
+                        json={"product_id": pid, "amount": 10, "location_id": other})
+        assert r.json()["consumed"] == 3
+        left = client.get(f"/api/stock/product/{pid}").json()
+        assert [(e["location_id"], e["amount"]) for e in left] == [(loc, 2)]
+        # Nothing left there: a second consume is refused and touches nothing.
+        r = client.post("/api/stock/consume",
+                        json={"product_id": pid, "amount": 1, "location_id": other})
+        assert r.status_code == 400
+
     def test_correct_purchase_reduces_purchase_event(self):
         # Over-scan: one purchase event with amount 2.
         pid, kpl, loc = self._make_product_with_location()

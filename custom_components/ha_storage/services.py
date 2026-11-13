@@ -7,19 +7,21 @@ import logging
 import httpx
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
 from .lookup import async_lookup_product
-from .resolver import resolve_product_by_name
+from .resolver import find_stock, match_location, resolve_product_by_name
 
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_ADD_TO_SHOPPING_LIST = "add_to_shopping_list"
 SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME = "add_to_shopping_list_by_name"
 SERVICE_CONSUME_STOCK = "consume_stock"
+SERVICE_FIND_STOCK = "find_stock"
 SERVICE_RUN_OPTIMIZE = "run_optimize"
 SERVICE_GET_WEEKLY_DIGEST = "get_weekly_digest"
 
@@ -44,6 +46,14 @@ _CONSUME_STOCK_SCHEMA = vol.Schema(
     {
         vol.Required("product_id"): vol.Coerce(int),
         vol.Required("amount"): vol.Coerce(float),
+        vol.Optional("location"): cv.string,
+    }
+)
+
+_FIND_STOCK_SCHEMA = vol.Schema(
+    {
+        vol.Optional("name"): cv.string,
+        vol.Optional("location"): cv.string,
     }
 )
 
@@ -59,10 +69,26 @@ def _coordinators(hass: HomeAssistant) -> list[StorageCoordinator]:
     return [v for k, v in hass.data.get(DOMAIN, {}).items() if isinstance(v, StorageCoordinator)]
 
 
-async def _post(coordinator: StorageCoordinator, path: str, payload: dict) -> None:
+async def _post(coordinator: StorageCoordinator, path: str, payload: dict) -> dict:
     async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
         resp = await client.post(f"{coordinator.addon_url}{path}", json=payload)
         resp.raise_for_status()
+        try:
+            return resp.json()
+        except ValueError:  # an empty body
+            return {}
+
+
+async def _get(coordinator: StorageCoordinator, path: str) -> list[dict]:
+    """GET a Storage list. A failure is a HomeAssistantError, the only kind a
+    voice assistant is told about instead of losing the whole reply."""
+    try:
+        async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
+            resp = await client.get(f"{coordinator.addon_url}{path}")
+            resp.raise_for_status()
+            return resp.json()
+    except (httpx.HTTPError, OSError, ValueError) as err:
+        raise HomeAssistantError(f"Storage could not be reached: {err}") from err
 
 
 def async_register_services(hass: HomeAssistant) -> None:
@@ -125,11 +151,41 @@ def async_register_services(hass: HomeAssistant) -> None:
         await coord.async_request_refresh()
         return {"status": "added", "product": result}
 
-    async def handle_consume(call: ServiceCall) -> None:
+    async def handle_consume(call: ServiceCall) -> dict:
         payload = {"product_id": call.data["product_id"], "amount": call.data["amount"]}
+        where = call.data.get("location")
+        result: dict = {}
         for coord in _coordinators(hass):
-            await _post(coord, "/api/stock/consume", payload)
+            if where:
+                loc = match_location(where, await _get(coord, "/api/locations"))
+                if loc is None:
+                    raise ServiceValidationError(f"Unknown location '{where}'.")
+                # shortcut: Storage before 0.29.3 ignores location_id and takes the
+                # oldest anywhere; check the health version if old add-ons matter.
+                payload["location_id"] = loc["id"]
+            try:
+                result = await _post(coord, "/api/stock/consume", payload)
+            except httpx.HTTPStatusError as err:
+                if err.response.status_code != 400:
+                    raise
+                # Storage's 400: there was nothing of it to take.
+                raise ServiceValidationError(
+                    f"Nothing consumed: product {payload['product_id']} is not in"
+                    f" stock{f' in {where}' if where else ''}."
+                ) from err
             await coord.async_request_refresh()
+        return result
+
+    async def handle_find_stock(call: ServiceCall) -> dict:
+        coords = _coordinators(hass)
+        if not coords:
+            return {"error": "Storage is not set up."}
+        return find_stock(
+            await _get(coords[0], "/api/stock/entries"),
+            await _get(coords[0], "/api/locations"),
+            call.data.get("name"),
+            call.data.get("location"),
+        )
 
     async def handle_optimize(call: ServiceCall) -> None:
         payload: dict = {}
@@ -169,7 +225,18 @@ def async_register_services(hass: HomeAssistant) -> None:
         supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(
-        DOMAIN, SERVICE_CONSUME_STOCK, handle_consume, schema=_CONSUME_STOCK_SCHEMA
+        DOMAIN,
+        SERVICE_CONSUME_STOCK,
+        handle_consume,
+        schema=_CONSUME_STOCK_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_FIND_STOCK,
+        handle_find_stock,
+        schema=_FIND_STOCK_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(
         DOMAIN, SERVICE_RUN_OPTIMIZE, handle_optimize, schema=_RUN_OPTIMIZE_SCHEMA
@@ -187,6 +254,7 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_ADD_TO_SHOPPING_LIST,
         SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME,
         SERVICE_CONSUME_STOCK,
+        SERVICE_FIND_STOCK,
         SERVICE_RUN_OPTIMIZE,
         SERVICE_GET_WEEKLY_DIGEST,
     ):

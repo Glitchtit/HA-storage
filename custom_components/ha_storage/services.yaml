@@ -80,13 +80,42 @@ add_to_shopping_list:
       selector:
         text:
 
+find_stock:
+  name: Find stock
+  description: >-
+    Look up what is in stock at home: which products, how many of each and
+    where. Example: "do we have any eggs?", "what is in the freezer?", "how many
+    bags of fries are left?". Filter by product name, by location, or both;
+    with neither it returns everything. Product names are Finnish. Each row has
+    the product_id that consume_stock needs.
+  fields:
+    name:
+      name: Name
+      description: Word to look for in the product name, best in Finnish (fries = ranskalaiset).
+      required: false
+      example: ranskalaiset
+      selector:
+        text:
+    location:
+      name: Location
+      description: Only this storage location, e.g. Freezer, Fridge or Pantry.
+      required: false
+      example: Freezer
+      selector:
+        text:
+
 consume_stock:
   name: Consume stock
-  description: Consume N of a product from stock (FIFO by best-before date).
+  description: >-
+    Take a product out of stock because it was eaten, used up, finished or
+    thrown away (oldest first). Example: "we ate the fries in the freezer",
+    "consume all the milk", "I used two eggs". Get the product_id and the
+    amount in stock from find_stock first; to consume all of it, pass the whole
+    amount find_stock reports. Returns how many were consumed.
   fields:
     product_id:
       name: Product ID
-      description: Storage product ID to consume from.
+      description: Storage product ID to consume from, as returned by find_stock.
       required: true
       example: 42
       selector:
@@ -101,6 +130,13 @@ consume_stock:
         number:
           min: 0
           mode: box
+    location:
+      name: Location
+      description: Only take from this storage location, e.g. Freezer. Leave out to take the oldest anywhere.
+      required: false
+      example: Freezer
+      selector:
+        text:
 
 get_weekly_digest:
   name: Get weekly digest

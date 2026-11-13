@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.service import async_get_all_descriptions
 
 from .const import (
     CONF_ADDON_URL,
@@ -39,6 +40,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     async_register_services(hass)
+    # llm.py builds its tools from HA's action description cache, which is
+    # otherwise only filled once a frontend asks for it.
+    await async_get_all_descriptions(hass)
     return True
 
 

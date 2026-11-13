@@ -235,6 +235,7 @@ class StockConsume(BaseModel):
     amount: float = 1
     note: str = ""
     spoiled: bool = False
+    location_id: int | None = None  # only take from this location
 
 class StockCorrectPurchase(BaseModel):
     product_id: int

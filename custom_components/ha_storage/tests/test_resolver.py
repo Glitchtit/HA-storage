@@ -208,3 +208,47 @@ def test_ambiguous_candidates_list_concepts_first():
     status, candidates = resolve_product_by_name("kerma", products)
     assert status == "ambiguous"
     assert [c["id"] for c in candidates] == [2, 3, 1]
+
+
+from resolver import find_stock, match_location  # noqa: E402
+
+LOCATIONS = [
+    {"id": 1, "name": "Fridge", "description": "Jääkaappi"},
+    {"id": 3, "name": "Freezer", "description": "Pakastin"},
+]
+ENTRIES = [
+    {"product_id": 728, "product_name": "Oolannin ranskalaiset 500g", "location_id": 3, "amount": 1.0},
+    {"product_id": 728, "product_name": "Oolannin ranskalaiset 500g", "location_id": 3, "amount": 3.0},
+    {"product_id": 9, "product_name": "Taffel Snacks Fries 180g", "location_id": 1, "amount": 1.0},
+    {"product_id": 5, "product_name": "Herne pakaste", "location_id": 3, "amount": 2.0},
+]
+
+
+def test_location_matches_name_then_description():
+    assert match_location("freezer", LOCATIONS)["id"] == 3
+    assert match_location("pakastin", LOCATIONS)["id"] == 3
+    assert match_location("cellar", LOCATIONS) is None
+
+
+def test_stock_is_summed_per_product_and_location():
+    result = find_stock(ENTRIES, LOCATIONS, "ranskalaiset", "Freezer")
+    assert result["stock"] == [
+        {"product_id": 728, "name": "Oolannin ranskalaiset 500g", "location": "Freezer", "amount": 4.0}
+    ]
+
+
+def test_an_english_word_with_no_hit_lists_the_whole_location():
+    # "fries" is not in any freezer product name: the agent gets the freezer to choose from.
+    result = find_stock(ENTRIES, LOCATIONS, "fries", "freezer")
+    assert [r["product_id"] for r in result["stock"]] == [5, 728]
+    assert "everything in stock in Freezer" in result["note"]
+
+
+def test_an_unknown_location_names_the_real_ones():
+    assert find_stock(ENTRIES, LOCATIONS, None, "garage") == {
+        "error": "Unknown location 'garage'. Locations: Fridge, Freezer."
+    }
+
+
+def test_no_filters_returns_everything():
+    assert len(find_stock(ENTRIES, LOCATIONS)["stock"]) == 3

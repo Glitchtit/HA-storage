@@ -214,9 +214,12 @@ def add_stock(body: StockAdd):
 def consume_stock(body: StockConsume):
     """Consume from oldest stock entries (FIFO by best_before_date)."""
     conn = _get_db()
+    where, params = "product_id = ? AND amount > 0", [body.product_id]
+    if body.location_id is not None:
+        where += " AND location_id = ?"
+        params.append(body.location_id)
     entries = conn.execute(
-        "SELECT * FROM stock WHERE product_id = ? AND amount > 0" + _FIFO_ORDER_SQL,
-        (body.product_id,),
+        f"SELECT * FROM stock WHERE {where}" + _FIFO_ORDER_SQL, params
     ).fetchall()
 
     remaining = body.amount

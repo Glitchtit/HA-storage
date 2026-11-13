@@ -1,3 +1,8 @@
+## 0.29.3
+
+- Voice assistants can use the stock: "what is in the freezer?", "consume all the fries in the freezer". The integration (0.6.7) hands Assist a stock lookup and the consume action; verified on Home Assistant 2026.11
+- Stock can be consumed from one location only, so "the bread in the freezer" no longer takes the older loaf from the pantry
+
 ## 0.29.2
 
 - Using or moving stock by hand keeps the opened count right: using one of two opened items leaves one opened, the opened item is used first, and an opened pack moved to another place stays opened there. A product used up in small portions (tenths) now leaves the stock list instead of staying behind as "0 in stock"
