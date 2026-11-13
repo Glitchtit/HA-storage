@@ -14,14 +14,16 @@ from homeassistant.helpers.llm import LLM_API_ASSIST, ActionTool, LLMContext
 from .const import DOMAIN
 
 # The shopping list is not here: it is the todo entity, which Assist already drives.
-ACTIONS = ("find_stock", "consume_stock")
+ACTIONS = ("find_stock", "consume_stock", "add_stock")
 
 PROMPT = (
     "The household's food and supplies are tracked in Storage. When the user says"
     " something was eaten, used up, finished, consumed or thrown away, or asks"
     " what there is at home, that is a Storage instruction and never something"
     " for you to eat: look the item up with ha_storage__find_stock, then take it"
-    " out of stock with ha_storage__consume_stock."
+    " out of stock with ha_storage__consume_stock (spoiled when it went bad)."
+    " Something bought or restocked goes in with ha_storage__add_stock, and"
+    " ha_storage__find_stock with expiring_within_days answers what expires soon."
 )
 
 

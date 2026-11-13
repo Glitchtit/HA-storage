@@ -96,3 +96,65 @@ async def test_nothing_in_stock_is_a_readable_error(consume):
     _Client.consume_status = 400
     with pytest.raises(ServiceValidationError, match="not in stock in freezer"):
         await consume(SimpleNamespace(data={"product_id": 728, "amount": 1, "location": "freezer"}))
+
+
+async def test_spoiled_is_passed_on_as_waste(consume):
+    await consume(SimpleNamespace(data={"product_id": 728, "amount": 1, "spoiled": True}))
+    assert _Client.posts == [{"product_id": 728, "amount": 1, "spoiled": True}]
+
+
+@pytest.fixture
+def add_stock(monkeypatch):
+    """The add_stock handler with Storage's answers faked; yields (handler, posts)."""
+    answers = {
+        "/api/products": [
+            {"id": 7, "name": "Valio maito 1l", "kind": "sku"},
+            {"id": 8, "name": "Maito", "kind": "concept"},
+        ],
+        "/api/locations": [{"id": 1, "name": "Fridge", "description": "Jääkaappi"}],
+        "/api/stats/top-purchased?days=365&limit=100": [],
+    }
+    posts: list = []
+
+    async def fake_get(coord, path):
+        return answers[path]
+
+    async def fake_post(coord, path, payload):
+        posts.append((path, payload))
+        return {"best_before_date": "2026-11-20", "cleared_rows": [{"id": 1}]}
+
+    async def _refresh():
+        return None
+
+    monkeypatch.setattr(services_mod, "_get", fake_get)
+    monkeypatch.setattr(services_mod, "_post", fake_post)
+    monkeypatch.setattr(
+        services_mod, "_coordinators", lambda hass: [SimpleNamespace(async_request_refresh=_refresh)]
+    )
+    hass = SimpleNamespace(services=_Services(), data={})
+    services_mod.async_register_services(hass)
+    return hass.services.handlers[services_mod.SERVICE_ADD_STOCK], posts
+
+
+async def test_a_bought_product_goes_into_stock(add_stock):
+    from datetime import date
+
+    handler, posts = add_stock
+    result = await handler(
+        SimpleNamespace(
+            data={"name": "valio maito 1l", "amount": 2, "location": "fridge", "best_before": date(2026, 11, 20)}
+        )
+    )
+    assert posts == [
+        ("/api/stock/add", {"product_id": 7, "amount": 2, "location_id": 1, "best_before_date": "2026-11-20"})
+    ]
+    assert result["added"] == "Valio maito 1l"
+    assert result["taken_off_shopping_list"] is True
+
+
+async def test_a_vague_name_adds_nothing_and_lists_the_products(add_stock):
+    # "maito" is a generic concept: stock needs the real product, so the agent gets to pick.
+    handler, posts = add_stock
+    with pytest.raises(ServiceValidationError, match="Valio maito 1l"):
+        await handler(SimpleNamespace(data={"name": "maito", "amount": 1}))
+    assert posts == []

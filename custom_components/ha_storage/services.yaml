@@ -87,7 +87,8 @@ find_stock:
     where. Example: "do we have any eggs?", "what is in the freezer?", "how many
     bags of fries are left?". Filter by product name, by location, or both;
     with neither it returns everything. Product names are Finnish. Each row has
-    the product_id that consume_stock needs.
+    the product_id that consume_stock needs and, when known, its earliest
+    best_before date. For "what expires soon?" pass expiring_within_days.
   fields:
     name:
       name: Name
@@ -103,6 +104,56 @@ find_stock:
       example: Freezer
       selector:
         text:
+    expiring_within_days:
+      name: Expiring within days
+      description: Only products whose best-before date is within this many days (0 = today or already past), soonest first.
+      required: false
+      example: 7
+      selector:
+        number:
+          min: 0
+          max: 365
+          mode: box
+
+add_stock:
+  name: Add stock
+  description: >-
+    Put a product into stock because it was bought or restocked. Example: "I
+    bought two cartons of milk", "we got more eggs, put them in the fridge".
+    The product is matched by its Storage name (names are Finnish); a name that
+    is not exact returns the possible products to pick from. Buying something
+    also takes it off the shopping list.
+  fields:
+    name:
+      name: Name
+      description: The product's name in Storage, best in Finnish (milk = maito).
+      required: true
+      example: Valio Eila kevytmaitojuoma 2,5dl
+      selector:
+        text:
+    amount:
+      name: Amount
+      description: How many were bought. Defaults to 1.
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 0
+          mode: box
+    location:
+      name: Location
+      description: Where it was put, e.g. Fridge. Leave out for the product's usual place.
+      required: false
+      example: Fridge
+      selector:
+        text:
+    best_before:
+      name: Best before
+      description: Best-before date, if the user said one. Leave out for the product's usual shelf life.
+      required: false
+      example: "2026-12-01"
+      selector:
+        date:
 
 consume_stock:
   name: Consume stock
@@ -111,7 +162,8 @@ consume_stock:
     thrown away (oldest first). Example: "we ate the fries in the freezer",
     "consume all the milk", "I used two eggs". Get the product_id and the
     amount in stock from find_stock first; to consume all of it, pass the whole
-    amount find_stock reports. Returns how many were consumed.
+    amount find_stock reports. Set spoiled when it went bad, so it counts as
+    waste. Returns how many were consumed.
   fields:
     product_id:
       name: Product ID
@@ -137,6 +189,13 @@ consume_stock:
       example: Freezer
       selector:
         text:
+    spoiled:
+      name: Spoiled
+      description: True when it went bad or expired and was thrown away, instead of being eaten or used.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 get_weekly_digest:
   name: Get weekly digest

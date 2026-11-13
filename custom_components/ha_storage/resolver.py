@@ -143,10 +143,13 @@ def find_stock(
     locations: list[dict],
     name: str | None = None,
     location: str | None = None,
+    expiring_by: str | None = None,
 ) -> dict:
     """What is in stock, one row per product and location, for an agent to read.
 
     `entries` are /api/stock/entries rows and `locations` /api/locations rows.
+    A row's `best_before` is the earliest date among its lots. `expiring_by`
+    (an ISO date) keeps only rows that expire on or before it, soonest first.
     A name that matches nothing still returns every row (of the location, when
     given): product names are Finnish, so "fries" finds no "ranskalaiset" and
     the agent has to pick the product from the list itself.
@@ -170,7 +173,15 @@ def find_stock(
             },
         )
         row["amount"] += entry["amount"]
+        best_before = entry.get("best_before_date")
+        if best_before and best_before < row.get("best_before", "9999"):
+            row["best_before"] = best_before
     rows = sorted(totals.values(), key=lambda r: r["name"].casefold())
+    if expiring_by:
+        rows = sorted(
+            (r for r in rows if r.get("best_before", "9999") <= expiring_by),
+            key=lambda r: r["best_before"],
+        )
 
     needle = (name or "").strip().casefold()
     if not needle:

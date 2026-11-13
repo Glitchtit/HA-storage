@@ -3,23 +3,31 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 import httpx
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN
 from .coordinator import StorageCoordinator
 from .lookup import async_lookup_product
-from .resolver import find_stock, match_location, resolve_product_by_name
+from .resolver import (
+    describe_add_failure,
+    find_stock,
+    match_location,
+    resolve_product_by_name,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_ADD_TO_SHOPPING_LIST = "add_to_shopping_list"
 SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME = "add_to_shopping_list_by_name"
+SERVICE_ADD_STOCK = "add_stock"
 SERVICE_CONSUME_STOCK = "consume_stock"
 SERVICE_FIND_STOCK = "find_stock"
 SERVICE_RUN_OPTIMIZE = "run_optimize"
@@ -47,6 +55,18 @@ _CONSUME_STOCK_SCHEMA = vol.Schema(
         vol.Required("product_id"): vol.Coerce(int),
         vol.Required("amount"): vol.Coerce(float),
         vol.Optional("location"): cv.string,
+        vol.Optional("spoiled", default=False): cv.boolean,
+    }
+)
+
+_ADD_STOCK_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): cv.string,
+        vol.Optional("amount", default=1): vol.All(
+            vol.Coerce(float), vol.Range(min=0, min_included=False)
+        ),
+        vol.Optional("location"): cv.string,
+        vol.Optional("best_before"): cv.date,
     }
 )
 
@@ -54,6 +74,9 @@ _FIND_STOCK_SCHEMA = vol.Schema(
     {
         vol.Optional("name"): cv.string,
         vol.Optional("location"): cv.string,
+        vol.Optional("expiring_within_days"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=365)
+        ),
     }
 )
 
@@ -153,6 +176,8 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_consume(call: ServiceCall) -> dict:
         payload = {"product_id": call.data["product_id"], "amount": call.data["amount"]}
+        if call.data.get("spoiled"):
+            payload["spoiled"] = True  # counted as waste, not as eaten
         where = call.data.get("location")
         result: dict = {}
         for coord in _coordinators(hass):
@@ -180,12 +205,56 @@ def async_register_services(hass: HomeAssistant) -> None:
         coords = _coordinators(hass)
         if not coords:
             return {"error": "Storage is not set up."}
+        days = call.data.get("expiring_within_days")
         return find_stock(
             await _get(coords[0], "/api/stock/entries"),
             await _get(coords[0], "/api/locations"),
             call.data.get("name"),
             call.data.get("location"),
+            None if days is None else (dt_util.now().date() + timedelta(days=days)).isoformat(),
         )
+
+    async def handle_add_stock(call: ServiceCall) -> dict:
+        """Put a bought product into stock, found by name the way a shopping add is."""
+        coords = _coordinators(hass)
+        if not coords:
+            raise HomeAssistantError("Storage is not set up.")
+        coord = coords[0]
+        name = call.data["name"]
+        # Stock sits on real products, never on a generic concept ("Maito").
+        skus = [p for p in await _get(coord, "/api/products") if p.get("kind") != "concept"]
+        status, match = resolve_product_by_name(name, skus)
+        if status != "added":
+            try:
+                history = await _get(coord, "/api/stats/top-purchased?days=365&limit=100")
+            except HomeAssistantError:
+                history = []
+            raise ServiceValidationError(describe_add_failure(name, status, match, history))
+
+        payload = {"product_id": match["id"], "amount": call.data["amount"]}
+        where = call.data.get("location")
+        if where:
+            locations = await _get(coord, "/api/locations")
+            loc = match_location(where, locations)
+            if loc is None:
+                raise ServiceValidationError(
+                    f"Unknown location '{where}'. Locations:"
+                    f" {', '.join(l['name'] for l in locations)}."
+                )
+            payload["location_id"] = loc["id"]
+        if call.data.get("best_before"):
+            payload["best_before_date"] = call.data["best_before"].isoformat()
+        try:
+            lot = await _post(coord, "/api/stock/add", payload)
+        except (httpx.HTTPError, OSError) as err:
+            raise HomeAssistantError(f"Storage did not add the stock: {err}") from err
+        await coord.async_request_refresh()
+        return {
+            "added": match["name"],
+            "amount": payload["amount"],
+            "best_before": lot.get("best_before_date"),
+            "taken_off_shopping_list": bool(lot.get("cleared_rows")),
+        }
 
     async def handle_optimize(call: ServiceCall) -> None:
         payload: dict = {}
@@ -233,6 +302,13 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_ADD_STOCK,
+        handle_add_stock,
+        schema=_ADD_STOCK_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_FIND_STOCK,
         handle_find_stock,
         schema=_FIND_STOCK_SCHEMA,
@@ -253,6 +329,7 @@ def async_unregister_services(hass: HomeAssistant) -> None:
     for svc in (
         SERVICE_ADD_TO_SHOPPING_LIST,
         SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME,
+        SERVICE_ADD_STOCK,
         SERVICE_CONSUME_STOCK,
         SERVICE_FIND_STOCK,
         SERVICE_RUN_OPTIMIZE,

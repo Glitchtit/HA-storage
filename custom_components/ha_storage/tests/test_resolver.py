@@ -252,3 +252,27 @@ def test_an_unknown_location_names_the_real_ones():
 
 def test_no_filters_returns_everything():
     assert len(find_stock(ENTRIES, LOCATIONS)["stock"]) == 3
+
+
+DATED = [
+    {"product_id": 1, "product_name": "Kananmuna 6kpl", "location_id": 1, "amount": 1.0, "best_before_date": "2026-11-20"},
+    {"product_id": 1, "product_name": "Kananmuna 6kpl", "location_id": 1, "amount": 1.0, "best_before_date": "2026-11-15"},
+    {"product_id": 2, "product_name": "Jogurtti", "location_id": 1, "amount": 2.0, "best_before_date": "2026-11-10"},
+    {"product_id": 3, "product_name": "Riisi", "location_id": 1, "amount": 1.0, "best_before_date": None},
+    {"product_id": 4, "product_name": "Voi", "location_id": 1, "amount": 1.0, "best_before_date": "2026-12-24"},
+]
+
+
+def test_a_row_carries_its_earliest_best_before():
+    rows = {r["product_id"]: r for r in find_stock(DATED, LOCATIONS)["stock"]}
+    assert rows[1]["best_before"] == "2026-11-15"
+    assert "best_before" not in rows[3]
+
+
+def test_expiring_by_keeps_only_what_expires_by_then_soonest_first():
+    result = find_stock(DATED, LOCATIONS, expiring_by="2026-11-18")
+    # The yoghurt is already past its date, the eggs are next; no date and later dates drop out.
+    assert [(r["name"], r["best_before"]) for r in result["stock"]] == [
+        ("Jogurtti", "2026-11-10"),
+        ("Kananmuna 6kpl", "2026-11-15"),
+    ]
