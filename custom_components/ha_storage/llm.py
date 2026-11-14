@@ -7,11 +7,14 @@ fries" as small talk.
 
 from __future__ import annotations
 
+import json
+
 from homeassistant.components.llm import LLMTools
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.llm import LLM_API_ASSIST, ActionTool, LLMContext
 
 from .const import DOMAIN
+from .once import once
 
 # The shopping list is not here: it is the todo entity, which Assist already drives.
 ACTIONS = ("find_stock", "consume_stock", "add_stock")
@@ -26,6 +29,19 @@ PROMPT = (
     " ha_storage__find_stock with expiring_within_days answers what expires soon."
 )
 
+# Everything else changes something, and must not do it twice on a replay.
+READ_ONLY = ('find_stock',)
+
+
+class OnceTool(ActionTool):
+    """An action that changes something: a replayed call gets the first result."""
+
+    async def async_call(self, hass, tool_input, llm_context):
+        key = f"{self.name} {json.dumps(tool_input.tool_args, sort_keys=True, default=str)}"
+        return await once(
+            key, lambda: ActionTool.async_call(self, hass, tool_input, llm_context)
+        )
+
 
 @callback
 def async_get_tools(
@@ -35,7 +51,7 @@ def async_get_tools(
     if api_id != LLM_API_ASSIST:
         return None
     tools = [
-        ActionTool(hass, DOMAIN, action)
+        (ActionTool if action in READ_ONLY else OnceTool)(hass, DOMAIN, action)
         for action in ACTIONS
         if hass.services.has_service(DOMAIN, action)
     ]
