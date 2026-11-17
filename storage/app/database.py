@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS products (
     density_g_ml            REAL,
     piece_weight_g          REAL,
     facts_meta              TEXT,
+    ai_enriched_at          TEXT,
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -635,10 +636,17 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("density_g_ml", "REAL"),
         ("piece_weight_g", "REAL"),
         ("facts_meta", "TEXT"),
+        ("ai_enriched_at", "TEXT"),
     ):
         if col not in product_cols:
             conn.execute(f"ALTER TABLE products ADD COLUMN {col} {ddl}")
             log.info("Added %s column to products.", col)
+    # The enrichment queue is for products created from now on; the catalog
+    # as it stood at the upgrade is left to the Optimize page. The flag and
+    # the stamps commit together, so an interrupted start simply redoes it.
+    if not conn.execute("SELECT 1 FROM _meta WHERE key = 'ai_enriched_backfill_v1'").fetchone():
+        conn.execute("UPDATE products SET ai_enriched_at = datetime('now') WHERE ai_enriched_at IS NULL")
+        conn.execute("INSERT INTO _meta (key, value) VALUES ('ai_enriched_backfill_v1', datetime('now'))")
 
     # ── Concept identity (2026-10, phase 2): ingredient raw text + review ─
     ri_cols = {r["name"] for r in conn.execute("PRAGMA table_info(recipe_ingredients)").fetchall()}
@@ -858,7 +866,10 @@ _OPTIONS_CONFIG_MAP = {
     "claude_model": "claude_model",
     "scraper_url": "scraper_url",
     "optimize_batch_size": "optimize_batch_size",
+    "house_rules": "ai_house_rules",
 }
+# Options whose empty value means "use the default" rather than "unchanged".
+_CLEARABLE_OPTIONS = {"house_rules"}
 
 
 def sync_from_options(conn: sqlite3.Connection) -> None:
@@ -878,6 +889,11 @@ def sync_from_options(conn: sqlite3.Connection) -> None:
     synced = 0
     for opt_key, config_key in _OPTIONS_CONFIG_MAP.items():
         val = opts.get(opt_key)
+        if opt_key in _CLEARABLE_OPTIONS and val == "":
+            # Emptied in the options form: back to the built-in default.
+            conn.execute("DELETE FROM config WHERE key = ?", (config_key,))
+            synced += 1
+            continue
         if val is None or val == "":
             continue
         conn.execute(

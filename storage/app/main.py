@@ -29,7 +29,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 # Ensure app loggers are not silenced if uvicorn reconfigures the root level
-for _mod in ("optimizer", "ai_client", "main"):
+for _mod in ("enrich", "ai_client", "main"):
     logging.getLogger(_mod).setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -247,6 +247,9 @@ def periodic_sync_once() -> dict:
         sku_finder.start()
     except Exception as exc:  # noqa: BLE001 — never break the sync loop
         log.warning("Product search did not start: %s", exc)
+    # Products the AI could not place when they were created: try again.
+    import enrich
+    enrich.start()
     return result
 
 

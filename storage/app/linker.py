@@ -14,7 +14,6 @@ import json
 import logging
 import re
 import sqlite3
-import threading
 
 from ai_client import CONFIDENCE, INT, arr, call_ai_json, capped, nullable, obj
 from locks import CATALOG_LOCK
@@ -78,26 +77,6 @@ def apply_link(conn: sqlite3.Connection, product_id: int, parent_id: int, *, not
         conn.commit()
 
 
-def maybe_link_after_purchase(conn: sqlite3.Connection, product_id: int) -> None:
-    """Fire a background link attempt for an unparented, childless product
-    when autoplace is enabled. A purchase is a fresh signal the tree may want
-    it categorised. Best-effort; never raises — every caller (stock add,
-    receipt commit) must be able to trust this can't fail their write."""
-    try:
-        prod = conn.execute(
-            "SELECT parent_id, kind FROM products WHERE id = ?", (product_id,)
-        ).fetchone()
-        if not prod or prod["parent_id"] is not None or prod["kind"] != "sku":
-            return
-        from routers.products import _autoplace_enabled  # lazy: avoid import cycle
-        if _autoplace_enabled(conn):
-            threading.Thread(
-                target=link_async, args=(product_id,), daemon=True
-            ).start()
-    except Exception as exc:
-        log.warning("maybe_link_after_purchase(%s) failed: %s", product_id, exc)
-
-
 def _candidate_nodes(conn: sqlite3.Connection) -> list[dict]:
     """Nodes a product may be placed under: every concept."""
     return [
@@ -108,31 +87,11 @@ def _candidate_nodes(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
-# Products with a link attempt running in some thread. Create-time autoplace
-# and purchase-time linking used to race on the same product and link it two
-# or three times in the same second.
-_inflight: set[int] = set()
-_inflight_lock = threading.Lock()
-
-
-def claim(product_id: int) -> bool:
-    """Reserve product_id for one link attempt; False if one is running."""
-    with _inflight_lock:
-        if product_id in _inflight:
-            return False
-        _inflight.add(product_id)
-        return True
-
-
-def release(product_id: int) -> None:
-    with _inflight_lock:
-        _inflight.discard(product_id)
-
-
 def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: bool = True) -> dict:
     linked: list[int] = []
     proposed: list[int] = []
     unmatched: list[int] = []
+    ai_error: str | None = None  # set when the AI was needed and failed
 
     todo: list[dict] = []
     for pid in product_ids:
@@ -143,7 +102,7 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
             continue
         todo.append({"id": row["id"], "name": row["name"]})
     if not todo:
-        return {"linked": linked, "proposed": proposed, "unmatched": unmatched}
+        return {"linked": linked, "proposed": proposed, "unmatched": unmatched, "ai_error": ai_error}
 
     # Nodes are computed for the WHOLE catalog, not just this batch: a
     # category and its own SKU are frequently orphaned together (e.g. a full
@@ -194,6 +153,7 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
         except Exception as exc:
             log.warning("Linker AI call failed: %s", exc)
             result = None
+            ai_error = str(exc)
         matched_ids: set[int] = set()
         if isinstance(result, list):
             valid_products = {t["id"] for t in still}
@@ -233,7 +193,7 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
     else:
         unmatched.extend(t["id"] for t in still)
 
-    return {"linked": linked, "proposed": proposed, "unmatched": unmatched}
+    return {"linked": linked, "proposed": proposed, "unmatched": unmatched, "ai_error": ai_error}
 
 
 def run_reconcile(conn: sqlite3.Connection) -> dict:
@@ -272,23 +232,3 @@ def run_reconcile(conn: sqlite3.Connection) -> dict:
         "facts_backfilled": backfilled,
         "merged": len(merged),
     }
-
-
-def link_async(product_id: int) -> None:
-    """Background variant with its own connection (thread-safe). Skips the
-    product when another link attempt for it is already running."""
-    if not claim(product_id):
-        return
-    try:
-        from main import DB_PATH
-        from database import get_db
-
-        conn = get_db(DB_PATH)
-        try:
-            link_products(conn, [product_id])
-        finally:
-            conn.close()
-    except Exception as exc:
-        log.warning("Async link for product %d failed: %s", product_id, exc)
-    finally:
-        release(product_id)

@@ -35,7 +35,7 @@ const EMPTY_FORM = {
   location_id: null,
   product_group_id: null,
   unit_id: null,
-  default_best_before_days: 0,
+  default_best_before_days: '',
   min_stock_amount: 0,
   unit_price: null,
   picture_filename: null,
@@ -369,8 +369,9 @@ function ProductForm({ form, setForm, groups, locations, units, products }) {
           type="number"
           min={0}
           className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-          value={form.default_best_before_days ?? 0}
-          onChange={(e) => field('default_best_before_days', Number(e.target.value))}
+          value={form.default_best_before_days ?? ''}
+          placeholder="Filled in by AI"
+          onChange={(e) => field('default_best_before_days', e.target.value === '' ? '' : Number(e.target.value))}
         />
       </div>
 
@@ -515,6 +516,8 @@ function CreateModal({ onClose, onCreated, groups, locations, units, products })
       const { picture_filename, uploaded: up } = await resolvePictureForSave(form);
       uploaded = up;
       const { pictureFile, ...payload } = form;
+      // Left empty: Storage's placeholder, which the AI then fills in.
+      if (payload.default_best_before_days === '') delete payload.default_best_before_days;
       await createProduct({ ...payload, picture_filename });
       onCreated();
       onClose();
@@ -875,6 +878,7 @@ function ProductHistorySection({ productId }) {
 function DetailPanel({ product, groups, locations, units, products, onClose, onSaved }) {
   const [detail, setDetail] = useState(null);
   const [form, setForm] = useState(null);
+  const [loadedForm, setLoadedForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
@@ -883,7 +887,7 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
     try {
       const { data } = await getProduct(product.id);
       setDetail(data);
-      setForm({
+      const loaded = {
         name: data.name,
         description: data.description ?? '',
         parent_id: data.parent_id,
@@ -903,7 +907,9 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
         pack_count: data.pack_count ?? null,
         density_g_ml: data.density_g_ml ?? null,
         piece_weight_g: data.piece_weight_g ?? null,
-      });
+      };
+      setForm(loaded);
+      setLoadedForm(loaded);
     } catch (err) {
       console.error('Load product failed', err);
     }
@@ -918,8 +924,15 @@ function DetailPanel({ product, groups, locations, units, products, onClose, onS
     try {
       const { picture_filename, uploaded: up } = await resolvePictureForSave(form);
       uploaded = up;
-      const { pictureFile, ...payload } = form;
-      await updateProduct(product.id, { ...payload, picture_filename });
+      const { pictureFile, ...rest } = form;
+      // Only what the person changed: an unchanged field sent back would
+      // undo a value set meanwhile and mark the stale one as set by hand.
+      const changes = Object.fromEntries(
+        Object.entries(rest).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(loadedForm?.[k])),
+      );
+      if (changes.default_best_before_days === '') changes.default_best_before_days = null;
+      if (picture_filename !== (detail.picture_filename ?? null)) changes.picture_filename = picture_filename;
+      if (Object.keys(changes).length) await updateProduct(product.id, changes);
       // Product write succeeded — now safe to drop the replaced/removed old file.
       const original = detail.picture_filename;
       if (original && original !== picture_filename) {

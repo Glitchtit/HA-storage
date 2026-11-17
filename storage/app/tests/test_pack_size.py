@@ -95,3 +95,16 @@ class TestEnsurePackFacts:
             "content_amount": 450, "content_unit_id": units["g"]})
         body = r.json()
         assert body["content_amount"] == 450 and body["facts_meta"]["content"] == "manual"
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("Sprite zero 6x0,33l", ("Sprite zero 0,33l", 6)),
+    ("Pepsi Max 24 x 330ml tlk", ("Pepsi Max 330ml tlk", 24)),
+    ("Valio jogurtti 4×200 g mansikka", ("Valio jogurtti 200 g mansikka", 4)),
+    ("Pirkka babypinaatti 65g", None),
+    ("Pumpulipuikko 200kpl", None),
+    ("", None),
+])
+def test_single_unit_name(name, expected):
+    from pack_size import single_unit_name
+    assert single_unit_name(name) == expected

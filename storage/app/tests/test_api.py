@@ -1600,91 +1600,6 @@ class TestExpiryMigration:
         assert row["best_before_date"] == original_date
 
 
-class TestOptimizeUngroupedOnly:
-    def test_400_when_no_ungrouped_products(self):
-        from main import get_connection
-        conn = get_connection()
-        # Force every active product to have a non-null product_group_id.
-        # Use the first existing product group as a sentinel.
-        grp = conn.execute("SELECT id FROM product_groups LIMIT 1").fetchone()
-        if not grp:
-            cur = conn.execute(
-                "INSERT INTO product_groups (name) VALUES ('TestGroupForUngrouped')"
-            )
-            gid = cur.lastrowid
-        else:
-            gid = grp["id"]
-        # Snapshot then bulk-assign so all active products are grouped.
-        before = conn.execute(
-            "SELECT id, product_group_id FROM products WHERE active = 1"
-        ).fetchall()
-        conn.execute(
-            "UPDATE products SET product_group_id = ? WHERE active = 1 AND product_group_id IS NULL",
-            (gid,),
-        )
-        conn.commit()
-        try:
-            r = client.post("/api/ai/optimize", json={"ungrouped_only": True})
-            assert r.status_code == 400
-            assert "ungrouped" in r.json()["detail"].lower()
-        finally:
-            for row in before:
-                conn.execute(
-                    "UPDATE products SET product_group_id = ? WHERE id = ?",
-                    (row["product_group_id"], row["id"]),
-                )
-            conn.commit()
-
-    def test_route_picks_up_ungrouped_products(self, monkeypatch):
-        # Stub the thread target so the test does not actually call the AI.
-        from routers import ai as ai_mod
-        captured: dict = {}
-
-        def fake_run(task_id, product_ids, enforced_categories):
-            captured["product_ids"] = product_ids
-            with ai_mod._tasks_lock:
-                ai_mod._tasks[task_id]["status"] = "done"
-                ai_mod._tasks[task_id]["finished_at"] = 0.0
-                ai_mod._running_task_id = None
-
-        monkeypatch.setattr(ai_mod, "_run_optimize_task", fake_run)
-        # Also stub Thread so it runs synchronously.
-        import threading as _th
-        class _Sync:
-            def __init__(self, target, args=(), daemon=True, name=""):
-                self._t, self._a = target, args
-            def start(self):
-                self._t(*self._a)
-        monkeypatch.setattr(_th, "Thread", _Sync)
-
-        from main import get_connection
-        conn = get_connection()
-        # Create one guaranteed-ungrouped product
-        kpl_row = conn.execute("SELECT id FROM units LIMIT 1").fetchone()
-        kpl = kpl_row["id"]
-        cur = conn.execute(
-            "INSERT INTO products (name, active, unit_id, product_group_id) "
-            "VALUES ('UngroupedProbe', 1, ?, NULL)",
-            (kpl,),
-        )
-        new_pid = cur.lastrowid
-        conn.commit()
-
-        try:
-            r = client.post("/api/ai/optimize", json={"ungrouped_only": True})
-            assert r.status_code == 200
-            assert isinstance(captured.get("product_ids"), list)
-            assert new_pid in captured["product_ids"]
-            # Every captured id must be ungrouped at time of the call
-            assert all(isinstance(i, int) for i in captured["product_ids"])
-        finally:
-            conn.execute("DELETE FROM products WHERE id = ?", (new_pid,))
-            conn.commit()
-            with ai_mod._tasks_lock:
-                ai_mod._running_task_id = None
-
-
-
 class TestRemovedHaSyncRoutes:
     def test_shopping_ha_sync_gone(self):
         # Path may be intercepted by /shopping-list/{item_id} template → 405; either is "gone".
@@ -2541,78 +2456,6 @@ class TestShoppingReconcile:
         assert r["applied"] == [] and r["skipped"] == [item["id"]]
 
 
-class TestAutoPlacement:
-    """Newly created ungrouped products are AI-categorised in the background."""
-
-    def _make_ungrouped(self):
-        kpl = next(u["id"] for u in client.get("/api/units").json()
-                   if u["abbreviation"] == "kpl")
-        return {"name": f"AutoPlace_{id(self)}", "unit_id": kpl}
-
-    class _Sync:
-        def __init__(self, target, args=(), daemon=True, name=""):
-            self._t, self._a = target, args
-        def start(self):
-            self._t(*self._a)
-
-    def test_fires_run_optimize_for_new_product(self, monkeypatch):
-        captured = {}
-        def fake_opt(conn, *, product_ids=None, **k):
-            captured["product_ids"] = product_ids
-            return {"updated": len(product_ids or [])}
-        def no_ai(prompt, conn, **k):
-            # Linker runs first now; keep it from making a real (slow, retried)
-            # AI call so this stays a fast, deterministic unit test — it
-            # should find nothing and fall through to the optimizer fallback.
-            raise ValueError("AI offline")
-        monkeypatch.setattr("optimizer.run_optimize", fake_opt)
-        monkeypatch.setattr("linker.call_ai_json", no_ai)
-        monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
-        monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
-
-        r = client.post("/api/products", json=self._make_ungrouped())
-        assert r.status_code == 201
-        assert captured["product_ids"] == [r.json()["id"]]
-
-    def test_a_product_the_linker_places_is_still_enriched(self, monkeypatch):
-        """Placing a product in the tree gives it no group, location or shelf
-        life; the optimizer pass must follow either way."""
-        captured = {}
-        def fake_opt(conn, *, product_ids=None, **k):
-            captured.update(product_ids=product_ids, link=k.get("link"))
-            return {"updated": 0}
-        monkeypatch.setattr("optimizer.run_optimize", fake_opt)
-        monkeypatch.setattr("linker.link_products", lambda conn, ids, **k: {
-            "linked": list(ids), "proposed": [], "unmatched": []})
-        monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
-        monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
-
-        r = client.post("/api/products", json=self._make_ungrouped())
-        assert r.status_code == 201
-        assert captured == {"product_ids": [r.json()["id"]], "link": False}
-
-    def test_create_succeeds_when_autoplace_raises(self, monkeypatch):
-        def boom(*a, **k):
-            raise RuntimeError("ai down")
-        monkeypatch.setattr("optimizer.run_optimize", boom)
-        monkeypatch.setattr("linker.call_ai_json", boom)
-        monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
-        monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
-        r = client.post("/api/products", json=self._make_ungrouped())
-        assert r.status_code == 201
-
-    def test_skipped_when_ai_not_configured(self, monkeypatch):
-        # Default test env has no AI keys → _ai_configured False → no thread.
-        called = {"n": 0}
-        class _Spy(self._Sync):
-            def start(s):
-                called["n"] += 1
-        monkeypatch.setattr("routers.products.threading.Thread", _Spy)
-        r = client.post("/api/products", json=self._make_ungrouped())
-        assert r.status_code == 201
-        assert called["n"] == 0
-
-
 # ── Finance stats (stock value + purchase costs) ───────────────────────────
 
 class TestFinanceStats:
@@ -2813,6 +2656,18 @@ class TestFinanceStats:
 
 # ── AI expiry fix ───────────────────────────────────────────────────────────
 
+def _fix_expiry(conn, pid, days, prompts=None):
+    """Run the shelf-life-only enrichment for one product, with a fake AI
+    that answers `days`."""
+    import enrich
+
+    def ai(prompt, conn_, **kw):
+        if prompts is not None:
+            prompts.append(prompt)
+        return [{"id": pid, "group_id": None, "location_id": None, "best_before_days": days}]
+    return enrich.run(conn, ai, product_ids=[pid], fields=("shelf_life",))
+
+
 class TestExpiryFix:
     """Focused AI pass: fix default_best_before_days + rebase inherited lots."""
 
@@ -2852,19 +2707,12 @@ class TestExpiryFix:
         return conn, pid, inherited_lot, manual_lot
 
     def test_nonperishable_gets_zero_and_lot_date_cleared(self, monkeypatch):
-        import optimizer
         conn, pid, inherited_lot, manual_lot = self._make_product_with_lots(
             "Vanish tahranpoistaja EXPIRYTEST"
         )
         prompts = []
-
-        def fake_ai(prompt, conn_, **kw):
-            prompts.append(prompt)
-            return {str(pid): 0}
-
-        monkeypatch.setattr("optimizer.call_ai_json", fake_ai)
         try:
-            result = optimizer.run_expiry_fix(conn, product_ids=[pid])
+            result = _fix_expiry(conn, pid, 0, prompts)
             assert result["updated"] >= 1
             row = conn.execute(
                 "SELECT default_best_before_days FROM products WHERE id = ?", (pid,)
@@ -2884,21 +2732,17 @@ class TestExpiryFix:
             assert manual["best_before_date"] == "2026-06-15"
             assert manual["best_before_days"] == 14
             # Prompt must explain the 0 = no-expiry convention
-            assert any("Return 0" in p and "expiry" in p.lower() for p in prompts)
+            assert any("0 means it does not expire" in p for p in prompts)
         finally:
             conn.execute("DELETE FROM products WHERE id = ?", (pid,))
             conn.commit()
 
     def test_shelf_stable_food_gets_longer_date(self, monkeypatch):
-        import optimizer
         conn, pid, inherited_lot, manual_lot = self._make_product_with_lots(
             "Rummo fusilli EXPIRYTEST"
         )
-        monkeypatch.setattr(
-            "optimizer.call_ai_json", lambda prompt, c, **kw: {str(pid): 1095}
-        )
         try:
-            optimizer.run_expiry_fix(conn, product_ids=[pid])
+            _fix_expiry(conn, pid, 1095)
             row = conn.execute(
                 "SELECT default_best_before_days FROM products WHERE id = ?", (pid,)
             ).fetchone()
@@ -2914,15 +2758,11 @@ class TestExpiryFix:
             conn.commit()
 
     def test_absurd_values_clamped_and_unknown_skipped(self, monkeypatch):
-        import optimizer
         conn, pid, inherited_lot, _ = self._make_product_with_lots(
             "Outo tuote EXPIRYTEST"
         )
-        monkeypatch.setattr(
-            "optimizer.call_ai_json", lambda prompt, c, **kw: {str(pid): -5}
-        )
         try:
-            optimizer.run_expiry_fix(conn, product_ids=[pid])
+            _fix_expiry(conn, pid, -5)
             row = conn.execute(
                 "SELECT default_best_before_days FROM products WHERE id = ?", (pid,)
             ).fetchone()
@@ -2932,38 +2772,10 @@ class TestExpiryFix:
             conn.execute("DELETE FROM products WHERE id = ?", (pid,))
             conn.commit()
 
-    def test_fix_expiry_endpoint(self, monkeypatch):
-        from routers import ai as ai_mod
-        import threading as _th
-
-        class _Sync:
-            def __init__(self, target, args=(), daemon=True, name=""):
-                self._t, self._a = target, args
-            def start(self):
-                self._t(*self._a)
-
-        monkeypatch.setattr(_th, "Thread", _Sync)
-        import optimizer
-        monkeypatch.setattr(
-            optimizer, "run_expiry_fix",
-            lambda conn, emit=None, product_ids=None: {"updated": 3},
-        )
-        r = client.post("/api/ai/fix-expiry")
-        assert r.status_code == 200
-        task_id = r.json()["task_id"]
-        r = client.get(f"/api/ai/optimize/{task_id}")
-        assert r.status_code == 200
-        assert r.json()["status"] == "done"
-        assert r.json()["updated"] == 3
-        with ai_mod._tasks_lock:
-            ai_mod._running_task_id = None
-
     def test_legacy_60day_lot_rebased_even_when_default_unchanged(self, monkeypatch):
         """A lot snapshotted at the historic 60d creation default must be
         rebased even when the product default was already fixed by an earlier
         optimize run (old == new, lot snapshot == 60)."""
-        import optimizer
-        from main import get_connection
         conn, pid, _, _ = self._make_product_with_lots(
             "Legacy60 EXPIRYTEST", default_days=540
         )
@@ -2977,11 +2789,8 @@ class TestExpiryFix:
         )
         legacy_lot = cur.lastrowid
         conn.commit()
-        monkeypatch.setattr(
-            "optimizer.call_ai_json", lambda prompt, c, **kw: {str(pid): 540}
-        )
         try:
-            optimizer.run_expiry_fix(conn, product_ids=[pid])
+            _fix_expiry(conn, pid, 540)
             lot = conn.execute(
                 "SELECT best_before_date, best_before_days FROM stock WHERE id = ?",
                 (legacy_lot,),

@@ -24,7 +24,7 @@
 - **Recipes against real stock** — availability converts units (a 2 kg flour bag counts as about 33 dl) and counts everything under each ingredient. Cooking deducts the stock, and missing amounts go to the shopping list without doubling rows.
 - **A shopping list that keeps itself** — products below their minimum stock are added and shrunk every 5 minutes, each row says which product to buy and how many packages, and buying clears the rows it covers. Named bundles ("Taco night") add several products at once, and a generic item with no product gets one found on K-Ruoka through the Scraper add-on.
 - **Insights** — stock value by product group, monthly spend with a 12-month trend, waste, top consumed and purchased, lots expiring this week and products predicted to run out in 14 days.
-- **AI with Gemini, Claude or Ollama** — Optimize assigns aisle groups, locations and best-before days in batches, new generic items are placed in the tree in the background, and a receipt photo can be read into stock (Claude only).
+- **AI with Gemini, Claude or Ollama** — every new product gets its aisle group, storage location and best-before days on its own, picked from the groups and locations you have; Optimize re-checks the rest of the catalog without touching values you set by hand. New generic items are placed in the tree in the background, and a receipt photo can be read into stock (Claude only).
 - **Grocy import** — Settings can pull barcodes and stock amounts from an existing Grocy install into the barcode queue, where the Scraper creates the products.
 
 ## 📸 Screenshots
@@ -65,6 +65,7 @@
 | `ollama_url` / `ollama_model` | `""` / `llama3` | Address of an Ollama server and the model to use |
 | `scraper_url` | `""` | Scraper add-on URL; empty finds it automatically |
 | `optimize_batch_size` | `100` | Products sent to the AI per Optimize batch (10–200) |
+| `house_rules` | `""` | How your household stores things, in your own words, for the AI ("Drinks go in the fridge. Eggs go in the pantry."). Empty uses a built-in default |
 | `debug` | `false` | Verbose logging |
 
 The options are copied into Storage's settings at start, and the **Settings** tab writes to the same values; the latest change wins.

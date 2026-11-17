@@ -85,7 +85,7 @@ export default function Optimize() {
         <div>
           <h2 className="text-xl font-semibold text-white">AI Optimize</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Assigns aisle groups, locations and best-before dates using AI, then links loose products under matching concepts.
+            Re-checks the aisle group, storage location and best-before days of your products using AI, then links loose products under matching generic items.
           </p>
         </div>
         <button
@@ -101,12 +101,14 @@ export default function Optimize() {
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 text-sm text-gray-300 space-y-1">
         <div className="font-medium text-white">What this does</div>
         <ul className="list-disc list-inside space-y-0.5 text-gray-400">
-          <li>Phase 1 - AI assigns each product an aisle category</li>
-          <li>Phase 2 - AI assigns storage locations, best-before days, and merges genuine multi-packs into their base product</li>
-          <li>Finally the linker places unparented products under matching concepts</li>
+          <li>New products are filled in on their own when they are created. This page is for the rest of the catalog</li>
+          <li>The AI picks a group from your product groups and a place from your storage locations. It never invents new ones</li>
+          <li>Values you set by hand are never overwritten</li>
+          <li>A multi-pack (6x0,33l) is merged into its single-unit product when that product exists</li>
+          <li>Finally the linker places loose products under matching generic items</li>
         </ul>
         <p className="text-gray-400 text-xs pt-1">
-          Optimize never deletes products, recipe ingredients or existing groupings. Configure your AI provider in Settings first.
+          Optimize never deletes recipe ingredients or existing groupings. Configure your AI provider in the add-on options first.
         </p>
       </div>
 
@@ -119,9 +121,9 @@ export default function Optimize() {
             className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
           />
           <div>
-            <div className="text-sm font-medium text-white">Ungrouped only</div>
+            <div className="text-sm font-medium text-white">Only fill in what is missing</div>
             <p className="text-xs text-gray-400 mt-0.5">
-              Only optimize products that currently have no product group. The AI is seeded with the existing groups and slots each ungrouped product into the best-fitting one — nothing else is changed.
+              Only look at products that lack a group, a storage location or best-before days, and fill in just those. Nothing that is already set is changed.
             </p>
           </div>
         </label>
@@ -129,9 +131,9 @@ export default function Optimize() {
 
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
         <div>
-          <div className="font-medium text-white text-sm">Enforced Categories</div>
+          <div className="font-medium text-white text-sm">Your product groups</div>
           <p className="text-xs text-gray-400 mt-0.5">
-            The AI will strongly prefer these categories and create them as product groups even if no products are assigned. Use Finnish names.
+            Groups added here are created right away, and the AI can then pick them. It only ever uses groups that exist. Use Finnish names.
           </p>
         </div>
         {categories.length > 0 && (

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -32,8 +31,14 @@ KINDS = ("concept", "sku")
 _FACT_FIELDS = ("content_amount", "content_unit_id", "pack_count", "density_g_ml", "piece_weight_g")
 
 
+# Attributes the AI fills in (enrich.py). Changed through the API, they are
+# the user's: marked "manual" in facts_meta and never overwritten again.
+_ATTR_KEYS = {"product_group_id": "group", "location_id": "location",
+              "default_best_before_days": "shelf_life"}
+
+
 def _fact_key(field: str) -> str:
-    return "content" if field.startswith("content_") else field
+    return _ATTR_KEYS.get(field) or ("content" if field.startswith("content_") else field)
 
 
 def _infer_kind(kind: str | None) -> str:
@@ -106,40 +111,15 @@ def _ai_configured(conn) -> bool:
 
 
 def _autoplace_enabled(conn) -> bool:
-    """Whether freshly created, ungrouped products should be AI-categorised at
-    create time. Requires the `autoplace_on_create` config key to be on (default
-    on) AND a usable AI provider configured."""
+    """Whether freshly created products should be placed and filled in by the
+    AI on their own. Requires the `autoplace_on_create` config key to be on
+    (default on) AND a usable AI provider configured."""
     row = conn.execute(
         "SELECT value FROM config WHERE key = 'autoplace_on_create'"
     ).fetchone()
     toggle_on = row is None or str(row["value"]).strip().lower() not in (
         "0", "false", "no", "off")
     return toggle_on and _ai_configured(conn)
-
-
-def _autoplace_product(product_id: int) -> None:
-    """Background, best-effort: place a just-created product in the tree via
-    the linker, then let the AI optimizer fill its group, location and shelf
-    life. Storage owns this, so no caller has to ask for an optimize after
-    creating a product. Opens its OWN connection."""
-    import linker
-
-    if not linker.claim(product_id):
-        return
-    try:
-        from main import DB_PATH
-        from database import get_db
-        from optimizer import run_optimize
-        conn = get_db(DB_PATH)
-        try:
-            linker.link_products(conn, [product_id])
-            run_optimize(conn, product_ids=[product_id], link=False)
-        finally:
-            conn.close()
-    except Exception as exc:
-        log.warning("Auto-placement for product %d failed: %s", product_id, exc)
-    finally:
-        linker.release(product_id)
 
 
 # ── List / Get ─────────────────────────────────────────────────────────────
@@ -330,13 +310,15 @@ def create_product(body: ProductCreate):
         new = conn.execute("SELECT * FROM products WHERE id = ?", (new["id"],)).fetchone()
     except Exception as exc:
         log.warning("Pack-size parse for product %d failed: %s", new["id"], exc)
-    # New brands scanned during shopping arrive ungrouped; place them under the
-    # right type-parent so the catalog (and future exact matching) stays tidy.
-    # Best-effort, off the request path — never blocks or fails the create.
-    if new["parent_id"] is None and new["product_group_id"] is None and _autoplace_enabled(conn):
-        threading.Thread(
-            target=_autoplace_product, args=(new["id"],), daemon=True
-        ).start()
+    # Storage places and fills in every product it creates, so no caller has
+    # to ask for an optimize afterwards. Best-effort, off the request path —
+    # never blocks or fails the create.
+    if new["kind"] == "sku":
+        import enrich
+        enrich.start()
+    elif new["parent_id"] is None and _autoplace_enabled(conn):
+        from concept_jobs import schedule_followups
+        schedule_followups([new["id"]], [])
     return new
 
 
@@ -382,7 +364,7 @@ def update_product(product_id: int, body: ProductUpdate):
             tree.prepare_parent(conn, product_id, updates["parent_id"])
 
         changed_facts = {
-            f: updates[f] for f in _FACT_FIELDS
+            f: updates[f] for f in (*_FACT_FIELDS, *_ATTR_KEYS)
             if f in updates and updates[f] != existing[f]
         }
         if changed_facts:

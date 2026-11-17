@@ -1,6 +1,6 @@
 """Merge one product into another without losing any reference.
 
-Used by POST /products/{id}/merge, the optimizer's multi-pack normalisation
+Used by POST /products/{id}/merge, the multi-pack normalisation in enrich.py
 and the concept dedup sweep. Everything that points at the source — recipe
 ingredients, shopping rows, children, lots, barcodes, history, store
 availability, bundle items, legacy conversion rows, aliases — is re-pointed at

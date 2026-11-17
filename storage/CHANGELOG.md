@@ -1,3 +1,19 @@
+## 0.30.0
+
+- New products are placed and filled in by one background queue. A newly scanned product now costs two AI calls instead of six, and several products scanned in a row share those two calls. A product the AI could not reach is tried again by itself within minutes
+- The AI picks the aisle group and the storage location only from the ones that exist; it no longer invents product groups. Add a group on the Optimize page (or under Product groups) and it can be picked from then on. A catalog with no groups at all starts with the aisles the Stock app sorts by
+- Values you set by hand are kept: change a product's group, location or best-before days yourself and neither Optimize nor the queue will overwrite it. (This starts now: values edited before this version are not known to be yours until you edit them again)
+- Optimize has two modes: re-check everything, or "Only fill in what is missing", which looks only at products that lack a group, a location or best-before days
+- Multi-packs are recognised from the name ("6x0,33l") instead of by the AI, and merged into the single-unit product only when a product with exactly that name exists
+- New add-on option `house_rules`: tell the AI in your own words where your household keeps things. The built-in default still puts drinks in the fridge
+- An optimize that hits an AI error stops and says why instead of skipping batches
+- A store check that knows no price keeps the last known price of a product that is in stock, so prices no longer disappear after an availability sweep
+- A generic item created by hand is connected like one created by a recipe import (placed, grouped, and matching products moved under it)
+- Saving a product in Storage sends only the fields you changed, so it no longer puts back values that were filled in while the panel was open, and only those fields count as set by hand
+- The best-before field of a new product can be left empty; the AI then fills it in (it used to save 0, "never expires")
+- Buying a product that is not under a generic item yet gives the linker another try, as before
+- A product the AI cannot answer for no longer holds up the products after it; a change you save while an optimize runs is kept; merging multi-packs keeps the stock value right
+
 ## 0.29.6
 
 - AI answers are held to a fixed shape by the provider itself (Claude, Gemini and Ollama structured output) for product linking, generic-item upkeep, ingredient matching, the product search for generic items and the shopping-trip matching. Answers that used to be dropped because the JSON came back wrapped in prose or in the wrong shape no longer are. A model or server that does not support this is asked the old way

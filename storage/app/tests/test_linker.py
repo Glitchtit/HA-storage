@@ -280,17 +280,6 @@ class TestRoleAwareLinking:
         assert conn.execute("SELECT parent_id FROM products WHERE id = ?",
                             (sku,)).fetchone()["parent_id"] is None
 
-    def test_inflight_guard_skips_second_attempt(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr("linker.link_products", lambda conn, ids, **k: calls.append(ids))
-        sku = _mk("Inflight sku r2")
-        assert linker.claim(sku) is True
-        linker.link_async(sku)  # another attempt is running -> skipped
-        assert calls == []
-        linker.release(sku)
-        linker.link_async(sku)
-        assert calls == [[sku]]
-
     def test_sweep_places_skus_not_concepts(self, monkeypatch):
         asked = []
 

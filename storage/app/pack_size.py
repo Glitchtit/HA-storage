@@ -55,6 +55,19 @@ def parse_pack_size(name: str) -> dict:
     return out
 
 
+def single_unit_name(name: str) -> tuple[str, int] | None:
+    """The name of one unit of a multipack and how many it holds:
+    "Sprite zero 6x0,33l" -> ("Sprite zero 0,33l", 6). None when the name has
+    no multipack token."""
+    name = (name or "").replace("\xa0", " ")
+    matches = list(_MULTI_RE.finditer(name))
+    if not matches:
+        return None
+    m = matches[-1]  # as parse_pack_size: the last token is the most specific
+    single = re.sub(r"^\d+\s*[x×]\s*", "", m.group(0))
+    return name[:m.start()] + single + name[m.end():], int(m.group(1))
+
+
 def ensure_pack_facts(conn: sqlite3.Connection, product_id: int) -> bool:
     """Store parsed content / pack_count on a SKU whose facts are still empty.
 

@@ -112,8 +112,11 @@ def set_product_availability(product_id: int, body: list[AvailabilityEntry]):
             VALUES (?, ?, ?, ?, ?, datetime('now'), 'scraper')
             ON CONFLICT(product_id, store_id) DO UPDATE SET
                 available      = excluded.available,
-                price          = excluded.price,
-                price_currency = excluded.price_currency,
+                -- "in stock" from a check that knows no price keeps the last
+                -- known one; "not in stock" clears it
+                price          = CASE WHEN excluded.price IS NULL AND excluded.available = 1
+                                      THEN product_availability.price ELSE excluded.price END,
+                price_currency = COALESCE(excluded.price_currency, product_availability.price_currency),
                 checked_at     = excluded.checked_at,
                 source         = excluded.source
             """,

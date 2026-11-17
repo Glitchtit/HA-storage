@@ -191,10 +191,10 @@ def add_stock(body: StockAdd):
     conn.commit()
     log.info("Added %.1f to stock for product %d (purchased=%s, bb_days=%d).",
              body.amount, body.product_id, purchased_date, bb_days)
-    # Best-effort background linking: a purchase of a still-unparented, still-
-    # childless product is a fresh signal the tree may want it categorised.
-    import linker
-    linker.maybe_link_after_purchase(conn, body.product_id)
+    # Best-effort: a purchase is a fresh signal that a product still loose in
+    # the tree wants a place, and anything the AI missed gets another try.
+    import enrich
+    enrich.requeue_loose(conn, [body.product_id])
     entry = conn.execute("SELECT * FROM stock WHERE id = ?", (cur.lastrowid,)).fetchone()
     try:
         cleared = consume_shopping_for_purchase(conn, body.product_id, body.amount, unit_id, cur.lastrowid)

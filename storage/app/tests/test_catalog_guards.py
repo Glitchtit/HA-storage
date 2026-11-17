@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from main import app, get_connection
 
 import linker
-import optimizer
 import tree
 from locks import CATALOG_LOCK
 
@@ -57,25 +56,6 @@ def test_receipt_matcher_suggests_skus_only():
     sku = _mk("Chiquita banaani g2 1kg")
     [line] = match_lines_to_products([{"raw_text": "BANAANI G2"}], get_connection())
     assert line.get("suggested_product_id") in (sku, None)
-
-
-def test_optimize_gives_a_concept_its_aisle_group_and_nothing_else(monkeypatch):
-    loc = client.post("/api/locations", json={"name": "Kuivakaappi g3"}).json()["id"]
-    concept = _mk("Hiiva g3", unit="g", kind="concept")
-
-    def fake(prompt, conn, **kw):
-        if '"category"' in prompt and "location_id" not in prompt:
-            return {str(concept): {"category": "Leivonta g3"}}
-        return {str(concept): {"location_id": loc, "best_before_days": 5, "pack_size": 6,
-                               "base_product_name": "Hiivapala g3"}}
-
-    monkeypatch.setattr("optimizer.call_ai_json", fake)
-    optimizer.run_optimize(get_connection(), product_ids=[concept], link=False)
-    after = client.get(f"/api/products/{concept}").json()
-    groups = {g["id"]: g["name"] for g in client.get("/api/product-groups").json()}
-    assert groups[after["product_group_id"]] == "Leivonta g3"
-    assert after["name"] == "Hiiva g3" and after["location_id"] is None
-    assert after["default_best_before_days"] == 60
 
 
 def test_shopping_sync_leaves_no_open_transaction():

@@ -77,7 +77,6 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
     conn = _get_db()
     added = 0
     errors: list[str] = []
-    purchased_product_ids: set[int] = set()
     purchases: list[tuple[int, float, int, int]] = []
     for idx, line in enumerate(body.lines):
         try:
@@ -134,7 +133,6 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
                 unit_price=price_paid,
             )
             added += 1
-            purchased_product_ids.add(line.product_id)
             purchases.append((line.product_id, line.amount, unit_id, cur.lastrowid))
         except Exception as exc:
             errors.append(f"Line {idx}: {exc}")
@@ -161,14 +159,8 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
             conn.rollback()
             log.warning("Receipt commit: minimum-stock sync failed: %s", exc)
 
-    # Best-effort background linking, same trigger /stock/add uses: a
-    # receipt purchase of a still-unparented, still-childless product is a
-    # fresh signal the tree may want it categorised.
-    try:
-        import linker
-        for product_id in purchased_product_ids:
-            linker.maybe_link_after_purchase(conn, product_id)
-    except Exception as exc:
-        log.warning("Receipt commit: post-commit linker trigger failed: %s", exc)
+    # Best-effort, same trigger /stock/add uses.
+    import enrich
+    enrich.requeue_loose(conn, [line.product_id for line in body.lines if line.product_id])
 
     return {"added": added, "failed": len(errors), "errors": errors, "cleared_rows": cleared}
