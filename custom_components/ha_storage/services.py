@@ -83,7 +83,7 @@ _FIND_STOCK_SCHEMA = vol.Schema(
 _RUN_OPTIMIZE_SCHEMA = vol.Schema(
     {
         vol.Optional("product_ids"): vol.All(cv.ensure_list, [vol.Coerce(int)]),
-        vol.Optional("fresh_seed", default=False): cv.boolean,
+        vol.Optional("only_missing", default=False): cv.boolean,
     }
 )
 
@@ -260,8 +260,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         payload: dict = {}
         if "product_ids" in call.data:
             payload["product_ids"] = call.data["product_ids"]
-        if call.data.get("fresh_seed"):
-            payload["fresh_seed"] = True
+        if call.data.get("only_missing"):
+            payload["ungrouped_only"] = True
         for coord in _coordinators(hass):
             await _post(coord, "/api/ai/optimize", payload)
             await coord.async_request_refresh()

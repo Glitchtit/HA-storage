@@ -12,6 +12,7 @@
 - Saving a product in Storage sends only the fields you changed, so it no longer puts back values that were filled in while the panel was open, and only those fields count as set by hand
 - The best-before field of a new product can be left empty; the AI then fills it in (it used to save 0, "never expires")
 - Buying a product that is not under a generic item yet gives the linker another try, as before
+- Integration 0.6.10: the `ha_storage.run_optimize` action drops the "Fresh seed" option, which did nothing, and gains "Only fill in what is missing"
 - A product the AI cannot answer for no longer holds up the products after it; a change you save while an optimize runs is kept; merging multi-packs keeps the stock value right
 
 ## 0.29.6

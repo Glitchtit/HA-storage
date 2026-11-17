@@ -207,18 +207,21 @@ get_weekly_digest:
 
 run_optimize:
   name: Run AI optimize
-  description: Trigger the Storage AI optimize background job. 409 if already running.
+  description: >-
+    Start the Storage AI optimize job: re-check the aisle group, storage location
+    and best-before days of products. Values set by hand are never overwritten.
+    New products are filled in on their own and need no call. 409 if already running.
   fields:
     product_ids:
       name: Product IDs
-      description: Optional list of product IDs to optimize. If omitted, runs full optimize.
+      description: Optional list of product IDs to re-check. If omitted, every product is re-checked.
       required: false
       example: "[12, 34]"
       selector:
         object:
-    fresh_seed:
-      name: Fresh seed
-      description: Reseed all category data before running.
+    only_missing:
+      name: Only fill in what is missing
+      description: Only look at products that lack a group, a location or best-before days, and fill in just those.
       required: false
       default: false
       selector:
