@@ -1640,7 +1640,7 @@ class TestOptimizeUngroupedOnly:
         from routers import ai as ai_mod
         captured: dict = {}
 
-        def fake_run(task_id, product_ids, enforced_categories, fresh_seed=False):
+        def fake_run(task_id, product_ids, enforced_categories):
             captured["product_ids"] = product_ids
             with ai_mod._tasks_lock:
                 ai_mod._tasks[task_id]["status"] = "done"
@@ -2573,6 +2573,23 @@ class TestAutoPlacement:
         r = client.post("/api/products", json=self._make_ungrouped())
         assert r.status_code == 201
         assert captured["product_ids"] == [r.json()["id"]]
+
+    def test_a_product_the_linker_places_is_still_enriched(self, monkeypatch):
+        """Placing a product in the tree gives it no group, location or shelf
+        life; the optimizer pass must follow either way."""
+        captured = {}
+        def fake_opt(conn, *, product_ids=None, **k):
+            captured.update(product_ids=product_ids, link=k.get("link"))
+            return {"updated": 0}
+        monkeypatch.setattr("optimizer.run_optimize", fake_opt)
+        monkeypatch.setattr("linker.link_products", lambda conn, ids, **k: {
+            "linked": list(ids), "proposed": [], "unmatched": []})
+        monkeypatch.setattr("routers.products._autoplace_enabled", lambda conn: True)
+        monkeypatch.setattr("routers.products.threading.Thread", self._Sync)
+
+        r = client.post("/api/products", json=self._make_ungrouped())
+        assert r.status_code == 201
+        assert captured == {"product_ids": [r.json()["id"]], "link": False}
 
     def test_create_succeeds_when_autoplace_raises(self, monkeypatch):
         def boom(*a, **k):

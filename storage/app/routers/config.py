@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from ai_client import DEFAULT_MODELS
 from models import ConfigEntry
 
 router = APIRouter(tags=["config"])
@@ -36,11 +37,11 @@ def get_ai_config():
     return {
         "provider": _val("ai_provider", "gemini"),
         "api_key": _val("gemini_api_key"),
-        "model": _val("gemini_model", "gemini-2.0-flash"),
+        "model": _val("gemini_model", DEFAULT_MODELS["gemini"]),
         "ollama_url": _val("ollama_url"),
-        "ollama_model": _val("ollama_model", "llama3"),
+        "ollama_model": _val("ollama_model", DEFAULT_MODELS["ollama"]),
         "claude_api_key": _val("claude_api_key"),
-        "claude_model": _val("claude_model", "claude-3-5-haiku-20241022"),
+        "claude_model": _val("claude_model", DEFAULT_MODELS["claude"]),
     }
 
 
@@ -56,16 +57,16 @@ def get_ai_key():
     provider = _val("ai_provider", "gemini")
     # For Ollama/Claude providers, return empty key without 404 so old clients degrade gracefully
     if provider == "ollama":
-        return {"api_key": "", "model": _val("ollama_model", "llama3")}
+        return {"api_key": "", "model": _val("ollama_model", DEFAULT_MODELS["ollama"])}
     if provider == "claude":
-        return {"api_key": _val("claude_api_key"), "model": _val("claude_model", "claude-3-5-haiku-20241022")}
+        return {"api_key": _val("claude_api_key"), "model": _val("claude_model", DEFAULT_MODELS["claude"])}
 
     api_key = _val("gemini_api_key")
     if not api_key:
         raise HTTPException(404, "Gemini API key not configured")
     return {
         "api_key": api_key,
-        "model": _val("gemini_model", "gemini-2.0-flash"),
+        "model": _val("gemini_model", DEFAULT_MODELS["gemini"]),
     }
 
 

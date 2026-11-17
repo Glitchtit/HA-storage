@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from ai_client import DEFAULT_MODELS
 from database import get_db, init_db, sync_from_options
 from models import HealthResponse
 
@@ -128,7 +129,7 @@ def _seed_config(conn):
     DB rows, which means the most-recent write wins.
     """
     api_key = os.getenv("GEMINI_API_KEY", "")
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_MODEL") or DEFAULT_MODELS["gemini"]
     if api_key:
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('gemini_api_key', ?)",

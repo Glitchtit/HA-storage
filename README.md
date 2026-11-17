@@ -60,11 +60,11 @@
 | Option | Default | Description |
 |--------|---------|-------------|
 | `ai_provider` | `gemini` | AI used for Optimize, item placement and receipts: `gemini`, `claude` or `ollama` |
-| `gemini_api_key` / `gemini_model` | `""` / `gemini-2.0-flash` | Gemini API key and model |
-| `claude_api_key` / `claude_model` | `""` / `claude-3-5-haiku-20241022` | Claude API key and model; reading receipt photos needs Claude |
+| `gemini_api_key` / `gemini_model` | `""` / `gemini-3.6-flash` | Gemini API key and model |
+| `claude_api_key` / `claude_model` | `""` / `claude-haiku-5-5` | Claude API key and model; reading receipt photos needs Claude |
 | `ollama_url` / `ollama_model` | `""` / `llama3` | Address of an Ollama server and the model to use |
 | `scraper_url` | `""` | Scraper add-on URL; empty finds it automatically |
-| `optimize_batch_size` | `100` | Products sent to the AI per Optimize batch (10–500) |
+| `optimize_batch_size` | `100` | Products sent to the AI per Optimize batch (10–200) |
 | `debug` | `false` | Verbose logging |
 
 The options are copied into Storage's settings at start, and the **Settings** tab writes to the same values; the latest change wins.

@@ -101,12 +101,8 @@ def _ai_configured(conn) -> bool:
     """True only when the active AI provider has the credential it needs — no
     point spawning an auto-placement thread that will just fail (and it keeps
     the test suite, which has no keys, from making live calls)."""
-    from ai_client import _get_ai_config
-    cfg = _get_ai_config(conn)
-    provider = cfg.get("provider", "gemini")
-    needed = {"gemini": "gemini_api_key", "claude": "claude_api_key",
-              "ollama": "ollama_url"}.get(provider, "gemini_api_key")
-    return bool(cfg.get(needed))
+    from ai_client import _get_ai_config, is_configured
+    return is_configured(_get_ai_config(conn))
 
 
 def _autoplace_enabled(conn) -> bool:
@@ -123,8 +119,9 @@ def _autoplace_enabled(conn) -> bool:
 
 def _autoplace_product(product_id: int) -> None:
     """Background, best-effort: place a just-created product in the tree via
-    the linker; if the linker finds nothing, fall back to the AI optimizer
-    (which also assigns a product group). Opens its OWN connection."""
+    the linker, then let the AI optimizer fill its group, location and shelf
+    life. Storage owns this, so no caller has to ask for an optimize after
+    creating a product. Opens its OWN connection."""
     import linker
 
     if not linker.claim(product_id):
@@ -135,9 +132,8 @@ def _autoplace_product(product_id: int) -> None:
         from optimizer import run_optimize
         conn = get_db(DB_PATH)
         try:
-            res = linker.link_products(conn, [product_id])
-            if not res["linked"] and not res["proposed"]:
-                run_optimize(conn, product_ids=[product_id], link=False)
+            linker.link_products(conn, [product_id])
+            run_optimize(conn, product_ids=[product_id], link=False)
         finally:
             conn.close()
     except Exception as exc:

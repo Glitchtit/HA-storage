@@ -1,3 +1,13 @@
+## 0.29.5
+
+- AI optimize no longer multiplies stock. A multi-pack with no single-unit product to merge into was renamed and its stock multiplied by the pack size, on every run after the scraper's Update put the store name back (one six-pack became 6, then 36). Such a pack now stays its own product; Storage already knows from the name how many pieces a pack holds
+- A multi-pack merge that fails no longer undoes the location, shelf life and group that the same run had just given other products
+- A "pack" of more than 24 (200 cotton swabs) is no longer merged into another product
+- A wrong API key or a retired AI model stops an optimize at once and the log says why, instead of retrying every batch four times and finishing as "done"; rate limits wait as long as the provider asks
+- New products always get their group, location and shelf life from Storage itself, also when they were placed under a generic item straight away. Stock 2.14.7 no longer asks for a second optimize, so a newly scanned product costs half the AI calls
+- Default AI models are current ones: `gemini-3.6-flash` and `claude-haiku-5-5` (the old defaults were retired by their providers). A model you chose yourself is kept
+- Optimize batch size is limited to 10–200 products per AI call; larger batches cut the answer off
+
 ## 0.29.4
 
 - Stock added before a product had a storage place no longer stays in the wrong place (it landed in Bathroom): when AI optimize picks the product's place, its stock moves there too. With no place known, new stock now goes to the first place created (Fridge) every time instead of an arbitrary one

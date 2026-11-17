@@ -78,7 +78,6 @@ def _run_optimize_task(
     task_id: str,
     product_ids: list[int] | None,
     enforced_categories: list[str] | None,
-    fresh_seed: bool = False,
 ) -> None:
     global _running_task_id
 
@@ -95,7 +94,6 @@ def _run_optimize_task(
             product_ids=product_ids,
             emit=emit,
             enforced_categories=enforced_categories or None,
-            fresh_seed=fresh_seed,
         )
 
         with _tasks_lock:
@@ -204,7 +202,6 @@ def start_optimize(body: dict[str, Any] = None):  # type: ignore[assignment]
         body = {}
 
     product_ids: list[int] | None = body.get("product_ids") or None
-    fresh_seed: bool = bool(body.get("fresh_seed", False))
     ungrouped_only: bool = bool(body.get("ungrouped_only", False))
 
     # When ungrouped_only is set (and no explicit product_ids), restrict the
@@ -257,7 +254,7 @@ def start_optimize(body: dict[str, Any] = None):  # type: ignore[assignment]
 
     t = threading.Thread(
         target=_run_optimize_task,
-        args=(task_id, product_ids, enforced_categories, fresh_seed),
+        args=(task_id, product_ids, enforced_categories),
         daemon=True,
         name=f"optimizer-{task_id}",
     )

@@ -17,7 +17,7 @@ import sqlite3
 import time
 from typing import Any, Callable
 
-from ai_client import call_ai_json, _get_ai_config, get_batch_size
+from ai_client import AiConfigError, call_ai_json, _get_ai_config, get_batch_size
 from merge import merge_products
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,10 @@ _SHELF_LIFE_GUIDE = (
 
 # Anything above 10 years is an AI hallucination; treat 0..3650 as sane.
 _MAX_BB_DAYS = 3650
+
+# A "pack" of more than this is package contents (200 cotton swabs), not a
+# consumer multi-pack.
+_MAX_PACK_MULTIPLIER = 24
 
 # The hardcoded default every product was created with before the AI ever
 # saw it (database.py column default, scraper StorageClient). Lots carrying
@@ -204,6 +208,8 @@ def _phase1_categories(
         )
         try:
             mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
+        except AiConfigError:
+            raise  # every batch would fail the same way
         except Exception as exc:
             log("AI category batch %d failed: %s", batch_idx + 1, exc)
             continue
@@ -324,6 +330,8 @@ def _phase2_details(
 
         try:
             mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
+        except AiConfigError:
+            raise  # every batch would fail the same way
         except Exception as exc:
             log("AI details batch %d failed: %s", batch_idx + 1, exc)
             continue
@@ -352,93 +360,47 @@ def _phase2_details(
                 info = {}
 
             # --- Pack normalisation ---
-            pack_size = info.get("pack_size")
-            if pack_size:
+            # A genuine multi-pack is merged into its existing single-unit SKU,
+            # and its barcode then adds pack_size units per scan. With no such
+            # SKU it stays its own product: pack_size.py already records how
+            # many pieces a package holds, so renaming it or multiplying its
+            # stock would count the pack twice (and again on every run).
+            try:
+                pack_size = int(info.get("pack_size") or 0)
+            except (TypeError, ValueError):
+                pack_size = 0
+            base_name = info.get("base_product_name")
+            base_product = (
+                name_to_product.get(base_name.strip()) if isinstance(base_name, str) else None
+            )
+            if pack_size > _MAX_PACK_MULTIPLIER:
+                # Almost certainly package contents ("cotton swabs 200 kpl").
+                log("  ~ pack_size=%d for '%s' exceeds cap (%d) — not a multi-pack.",
+                    pack_size, product.get("name"), _MAX_PACK_MULTIPLIER)
+            elif pack_size > 1 and base_product and int(base_product["id"]) != product_id:
                 try:
-                    pack_size = int(pack_size)
-                except (TypeError, ValueError):
-                    pack_size = None
-
-            if pack_size and pack_size > 1:
-                # Safety cap: pack_size > 24 almost certainly describes package contents
-                # (e.g. "cotton swabs 200 kpl", "tea bags 100 kpl"), not a consumer
-                # multi-pack. Cap at 24 to avoid inflating stock wildly if the AI errs.
-                _MAX_PACK_MULTIPLIER = 24
-                if pack_size > _MAX_PACK_MULTIPLIER:
-                    log(
-                        "  ~ pack_size=%d for '%s' exceeds cap (%d) — skipping stock multiply.",
-                        pack_size, product.get("name"), _MAX_PACK_MULTIPLIER,
+                    conn.execute(
+                        "UPDATE barcodes SET pack_size = ? WHERE product_id = ?",
+                        (pack_size, product_id),
                     )
-                    pack_size = 1  # disable multiplication for this product
-
-                base_name = info.get("base_product_name")
-                if base_name and isinstance(base_name, str):
-                    base_name = base_name.strip()
-                    base_product = name_to_product.get(base_name)
-                    if base_product and int(base_product["id"]) != product_id:
-                        base_pid = int(base_product["id"])
-                        try:
-                            # A scan of this barcode now adds pack_size base
-                            # units, and a held multi-pack becomes pack_size
-                            # base units; merge.py then moves everything else
-                            # (ingredients, rows, history) without losing it.
-                            conn.execute(
-                                "UPDATE barcodes SET pack_size = ? WHERE product_id = ?",
-                                (pack_size, product_id),
-                            )
-                            if pack_size > 1:
-                                conn.execute(
-                                    "UPDATE stock SET amount = amount * ?, "
-                                    "amount_opened = COALESCE(amount_opened, 0) * ? "
-                                    "WHERE product_id = ?",
-                                    (pack_size, pack_size, product_id),
-                                )
-                            merge_products(conn, product_id, base_pid)
-                            log("  -> Merged multi-pack '%s' into '%s' (pack=%d).",
-                                product.get("name"), base_name, pack_size)
-                            updated += 1
-                            continue
-                        except Exception as exc:
-                            conn.rollback()
-                            log("  ! Could not merge '%s' into '%s': %s",
-                                product.get("name"), base_name, exc)
-                    elif not base_product or int(base_product["id"]) == product_id:
-                        # Rename in place and multiply stock × pack_size
-                        if base_name and base_name != product.get("name"):
-                            try:
-                                conn.execute("SAVEPOINT pack_rename")
-                                conn.execute(
-                                    "UPDATE products SET name = ? WHERE id = ?",
-                                    (base_name, product_id),
-                                )
-                                # Multiply existing stock entries in-place
-                                if pack_size > 1:
-                                    stock_rows = conn.execute(
-                                        "SELECT id, amount FROM stock WHERE product_id = ?",
-                                        (product_id,),
-                                    ).fetchall()
-                                    for se in stock_rows:
-                                        new_amount = float(se["amount"]) * pack_size
-                                        conn.execute(
-                                            "UPDATE stock SET amount = ? WHERE id = ?",
-                                            (new_amount, se["id"]),
-                                        )
-                                        log("  -> Updated stock to %.0f (%.0f×%d) for '%s'.",
-                                            new_amount, float(se["amount"]), pack_size, base_name)
-                                conn.execute("RELEASE pack_rename")
-                                conn.commit()
-                                log("  -> Renamed '%s' -> '%s' (multi-pack normalised).",
-                                    product.get("name"), base_name)
-                                name_to_product[base_name] = {**product, "name": base_name}
-                                name_to_product.pop(product.get("name", ""), None)
-                                updated += 1
-                            except Exception as exc:
-                                log("  ! Could not rename '%s': %s", product.get("name"), exc)
-                                try:
-                                    conn.execute("ROLLBACK TO pack_rename")
-                                    conn.execute("RELEASE pack_rename")
-                                except Exception:
-                                    conn.rollback()
+                    conn.execute(
+                        "UPDATE stock SET amount = amount * ?, "
+                        "amount_opened = COALESCE(amount_opened, 0) * ? "
+                        "WHERE product_id = ?",
+                        (pack_size, pack_size, product_id),
+                    )
+                    # merge.py moves everything else (ingredients, rows,
+                    # history) without losing it, and commits.
+                    merge_products(conn, product_id, int(base_product["id"]))
+                    name_to_product.pop(product.get("name", ""), None)
+                    log("  -> Merged multi-pack '%s' into '%s' (pack=%d).",
+                        product.get("name"), base_product["name"], pack_size)
+                    updated += 1
+                    continue
+                except Exception as exc:
+                    conn.rollback()
+                    log("  ! Could not merge '%s' into '%s': %s",
+                        product.get("name"), base_product["name"], exc)
 
             # --- Location ---
             loc_id = info.get("location_id")
@@ -492,7 +454,9 @@ def _phase2_details(
                 except Exception as exc:
                     log("  ! Could not set product_group for '%s': %s", product.get("name"), exc)
 
-        conn.commit()
+            # Per product, so a failed merge further on undoes only itself.
+            conn.commit()
+
         log(
             "Details batch %d/%d done.",
             batch_idx + 1, -(-len(products) // batch_size),
@@ -511,7 +475,6 @@ def run_optimize(
     product_ids: list[int] | None = None,
     emit: Callable[[str], None] | None = None,
     enforced_categories: list[str] | None = None,
-    fresh_seed: bool = False,
     link: bool = True,
 ) -> dict[str, int]:
     """Run the AI enrichment pipeline.
@@ -520,8 +483,6 @@ def run_optimize(
     *product_ids* = [...] → only those products
     *emit*                → optional callable streaming log lines to the UI
     *enforced_categories* → category names the AI must prefer; always created
-    *fresh_seed*          → accepted for API compatibility, ignored (there is
-                            no parent naming to seed any more)
     *link*                → finish with the linker: the reconcile sweep for a
                             full run, link_products for an explicit list
 
@@ -536,12 +497,15 @@ def run_optimize(
     cfg = _get_ai_config(conn)
     batch_size = get_batch_size(conn)
     log("Batch size: %d product(s) per AI call.", batch_size)
-    if fresh_seed:
-        log("Fresh naming no longer applies: optimize does not create parent products.")
 
     all_products = _load_products(conn)
     locations = _load_locations(conn)
-    name_to_product = {p.get("name", ""): p for p in all_products}
+    # Merge targets: live retail products only. A concept shares its name with
+    # what a model calls the "base product" and must never be one.
+    name_to_product = {
+        p.get("name", ""): p for p in all_products
+        if p.get("kind", "sku") == "sku" and p.get("active")
+    }
     if product_ids is None:
         products = [p for p in all_products if p.get("kind", "sku") == "sku"]
     else:
@@ -680,6 +644,8 @@ def run_expiry_fix(
 
         try:
             mapping = call_ai_json(prompt, conn, cfg=cfg, emit=log)
+        except AiConfigError:
+            raise  # every batch would fail the same way
         except Exception as exc:
             log("Expiry batch %d failed: %s", batch_idx + 1, exc)
             continue

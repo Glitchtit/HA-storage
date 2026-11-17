@@ -68,7 +68,7 @@ export default function Optimize() {
   const handleStart = async () => {
     setError(''); setLogs([]); setUpdated(0); setStatus('running');
     try {
-      const { data } = await startOptimize(null, false, ungroupedOnly);
+      const { data } = await startOptimize(null, ungroupedOnly);
       setTaskId(data.task_id);
       startPolling(data.task_id);
     } catch (err) {

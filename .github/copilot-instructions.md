@@ -31,7 +31,7 @@ SQLite database at `/data/storage.db`.
 ```json
 {
   "gemini_api_key": "",           // Centralized AI key for all apps
-  "gemini_model": "gemini-2.0-flash",
+  "gemini_model": "gemini-3.6-flash",
   "debug": false
 }
 ```
