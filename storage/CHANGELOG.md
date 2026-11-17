@@ -1,3 +1,7 @@
+## 0.29.4
+
+- Stock added before a product had a storage place no longer stays in the wrong place (it landed in Bathroom): when AI optimize picks the product's place, its stock moves there too. With no place known, new stock now goes to the first place created (Fridge) every time instead of an arbitrary one
+
 ## 0.29.3
 
 - Voice assistants can use the stock: "what is in the freezer?", "consume all the fries in the freezer". The integration (0.6.7) hands Assist a stock lookup and the consume action; verified on Home Assistant 2026.11

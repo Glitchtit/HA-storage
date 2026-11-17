@@ -104,3 +104,17 @@ class TestLinkStep:
         assert calls == []
         optimizer.run_optimize(get_connection(), product_ids=[pid])
         assert calls == [[pid]]
+
+
+class TestLocationFollowsStock:
+    def test_stock_added_before_location_moves_with_it(self, monkeypatch):
+        locs = {l["name"]: l["id"] for l in client.get("/api/locations").json()}
+        target = max(locs.values())  # not the fallback (lowest id)
+        pid = _mk("Spagetti 1kg o9")
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1})
+        conn = get_connection()
+        fallback = conn.execute("SELECT location_id FROM stock WHERE product_id = ?", (pid,)).fetchone()["location_id"]
+        assert fallback == min(locs.values())
+        monkeypatch.setattr("optimizer.call_ai_json", _fake_ai({str(pid): {"location_id": target}}))
+        optimizer.run_optimize(conn, product_ids=[pid], link=False)
+        assert conn.execute("SELECT location_id FROM stock WHERE product_id = ?", (pid,)).fetchone()["location_id"] == target

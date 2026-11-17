@@ -128,7 +128,7 @@ def add_stock(body: StockAdd):
     unit_id = body.unit_id or product["unit_id"]
     location_id = body.location_id or product["location_id"]
     if not location_id:
-        loc = conn.execute("SELECT id FROM locations LIMIT 1").fetchone()
+        loc = conn.execute("SELECT id FROM locations ORDER BY id LIMIT 1").fetchone()
         location_id = loc["id"] if loc else None
     if not location_id:
         raise HTTPException(400, "No location specified and no default location exists")

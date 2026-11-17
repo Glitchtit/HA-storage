@@ -448,6 +448,13 @@ def _phase2_details(
                         "UPDATE products SET location_id = ? WHERE id = ?",
                         (int(loc_id), product_id),
                     )
+                    # Stock added before the product had a location sits in the
+                    # arbitrary fallback location; move it to the real one.
+                    if not product.get("location_id"):
+                        conn.execute(
+                            "UPDATE stock SET location_id = ? WHERE product_id = ?",
+                            (int(loc_id), product_id),
+                        )
                     log("  -> Set location '%s' for '%s'.",
                         location_names.get(int(loc_id), loc_id), product.get("name"))
                     updated += 1
