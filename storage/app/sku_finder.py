@@ -34,6 +34,7 @@ from typing import Any, Callable
 import httpx
 
 import tree
+from ai_client import CONFIDENCE, INT, nullable, obj
 from concepts import aliases_of, norm
 from facts import Catalog
 from locks import CATALOG_LOCK
@@ -68,6 +69,9 @@ Store products (JSON): {hits_json}
 
 Return ONLY JSON: {{"index": <index of the product or null>, "confidence": "high"|"medium"|"low"}}
 """
+
+
+_PICK_SCHEMA = obj(index=nullable(INT), confidence=CONFIDENCE)
 
 
 def _result(status: str, *, found: int | None = None, detail: str = "", stop: bool = False) -> dict:
@@ -185,7 +189,7 @@ def find_for(conn: sqlite3.Connection, concept_id: int, scraper: Any,
         return _result("no_hits")
 
     try:
-        answer = ai(_pick_prompt(conn, concept, hits), conn)
+        answer = ai(_pick_prompt(conn, concept, hits), conn, schema=_PICK_SCHEMA)
     except Exception as exc:  # noqa: BLE001 — an AI failure is an outage
         return _result("error", detail=f"ai: {exc}", stop=True)
     index = _int(answer.get("index")) if isinstance(answer, dict) else None

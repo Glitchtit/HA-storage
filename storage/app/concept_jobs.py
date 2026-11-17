@@ -31,6 +31,7 @@ from difflib import SequenceMatcher
 from typing import Any, Callable
 
 import tree
+from ai_client import CONFIDENCE, INT, NUM, arr, capped, enum, nullable, obj
 from concepts import norm
 from locks import CATALOG_LOCK
 from quantity import COUNT, MASS, VOLUME, plausible_density
@@ -42,12 +43,20 @@ _BATCH = 15
 _MAX_CANDIDATES = 25
 
 
-def _ask(ai: AiFn | None, prompt: str, conn: sqlite3.Connection) -> list[dict]:
+_ADOPT_SCHEMA = arr(obj(concept_id=INT, product_id=INT, confidence=CONFIDENCE))
+_PLACE_SCHEMA = arr(obj(id=INT, relation=enum("same", "kind_of", "none"),
+                        target_id=nullable(INT), confidence=CONFIDENCE))
+_GATHER_SCHEMA = arr(obj(concept_id=INT, candidate_id=INT, confidence=CONFIDENCE))
+_GROUPS_SCHEMA = arr(obj(id=INT, group_id=nullable(INT)))
+_FACTS_SCHEMA = arr(obj(id=INT, density_g_ml=nullable(NUM), piece_weight_g=nullable(NUM)))
+
+
+def _ask(ai: AiFn | None, prompt: str, conn: sqlite3.Connection, schema: dict) -> list[dict]:
     """Rows of the AI's JSON array answer; [] on any failure."""
     if ai is None:
         return []
     try:
-        answer = ai(prompt, conn)
+        answer = ai(prompt, conn, schema=schema)
     except Exception as exc:
         log.warning("Concept AI call failed: %s", exc)
         return []
@@ -149,7 +158,8 @@ def adopt(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> 
     for i in range(0, len(batch), _BATCH):
         chunk = batch[i:i + _BATCH]
         offered = {(b["concept_id"], c["id"]) for b in chunk for c in b["candidates"]}
-        rows = _ask(ai, _ADOPT_PROMPT.format(batch_json=json.dumps(chunk, ensure_ascii=False)), conn)
+        rows = _ask(ai, _ADOPT_PROMPT.format(batch_json=json.dumps(chunk, ensure_ascii=False)),
+                    conn, _ADOPT_SCHEMA)
         for row in rows:
             cid, sku = _int(row.get("concept_id")), _int(row.get("product_id"))
             conf = str(row.get("confidence", "")).lower()
@@ -224,16 +234,16 @@ def place(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) -> 
     names = {r["id"]: r for r in conn.execute(
         "SELECT id, name, parent_id FROM products WHERE kind = 'concept'").fetchall()}
     todo_ids = {t["id"] for t in todo}
-    existing = [
+    existing = capped([
         {"id": cid, "name": r["name"],
          **({"parent": names[r["parent_id"]]["name"]} if r["parent_id"] in names else {})}
         for cid, r in sorted(names.items()) if cid not in todo_ids
-    ][:1500]
+    ], 1500, "Concept placement targets")
     for i in range(0, len(todo), _BATCH):
         chunk = todo[i:i + _BATCH]
         rows = _ask(ai, _PLACE_PROMPT.format(
             todo_json=json.dumps(chunk, ensure_ascii=False),
-            existing_json=json.dumps(existing, ensure_ascii=False)), conn)
+            existing_json=json.dumps(existing, ensure_ascii=False)), conn, _PLACE_SCHEMA)
         asked = {t["id"] for t in chunk}
         offered = {e["id"] for e in existing}
         for row in rows:
@@ -325,7 +335,8 @@ def gather(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | None) ->
     for i in range(0, len(batch), _BATCH):
         chunk = batch[i:i + _BATCH]
         offered = {(b["concept_id"], c["id"]) for b in chunk for c in b["candidates"]}
-        rows = _ask(ai, _GATHER_PROMPT.format(batch_json=json.dumps(chunk, ensure_ascii=False)), conn)
+        rows = _ask(ai, _GATHER_PROMPT.format(batch_json=json.dumps(chunk, ensure_ascii=False)),
+                    conn, _GATHER_SCHEMA)
         for row in rows:
             cid, cand = _int(row.get("concept_id")), _int(row.get("candidate_id"))
             conf = str(row.get("confidence", "")).lower()
@@ -405,7 +416,7 @@ def assign_groups(conn: sqlite3.Connection, concept_ids: list[int], ai: AiFn | N
         chunk = ask[i:i + 50]
         rows = _ask(ai, _GROUPS_PROMPT.format(
             concepts_json=json.dumps(chunk, ensure_ascii=False),
-            groups_json=json.dumps(group_list, ensure_ascii=False)), conn)
+            groups_json=json.dumps(group_list, ensure_ascii=False)), conn, _GROUPS_SCHEMA)
         asked = {c["id"] for c in chunk}
         with CATALOG_LOCK:
             for row in rows:
@@ -476,7 +487,7 @@ def estimate_facts(conn: sqlite3.Connection, needs: list[tuple[int, str]], ai: A
     written = 0
     for i in range(0, len(items), 50):
         rows = _ask(ai, _FACTS_PROMPT.format(
-            items_json=json.dumps(items[i:i + 50], ensure_ascii=False)), conn)
+            items_json=json.dumps(items[i:i + 50], ensure_ascii=False)), conn, _FACTS_SCHEMA)
         with CATALOG_LOCK:
             for row in rows:
                 cid = _int(row.get("id"))

@@ -16,7 +16,7 @@ import re
 import sqlite3
 import threading
 
-from ai_client import call_ai_json
+from ai_client import CONFIDENCE, INT, arr, call_ai_json, capped, nullable, obj
 from locks import CATALOG_LOCK
 from pack_size import ensure_pack_facts
 from routers.history import log_event
@@ -48,6 +48,9 @@ under that parent):
 Return ONLY a JSON array:
 [{{"product_id": <id>, "parent_id": <node id or null>, "confidence": "high"|"medium"|"low"}}]
 """
+
+
+_LINK_SCHEMA = arr(obj(product_id=INT, parent_id=nullable(INT), confidence=CONFIDENCE))
 
 
 def _norm(name: str) -> str:
@@ -184,10 +187,10 @@ def link_products(conn: sqlite3.Connection, product_ids: list[int], *, use_ai: b
     if still and use_ai and nodes:
         prompt = _LINK_PROMPT.format(
             products_json=json.dumps(still, ensure_ascii=False),
-            nodes_json=json.dumps(nodes[:500], ensure_ascii=False),
+            nodes_json=json.dumps(capped(nodes, 500, "Linker nodes"), ensure_ascii=False),
         )
         try:
-            result = call_ai_json(prompt, conn)
+            result = call_ai_json(prompt, conn, schema=_LINK_SCHEMA)
         except Exception as exc:
             log.warning("Linker AI call failed: %s", exc)
             result = None

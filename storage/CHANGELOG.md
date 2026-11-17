@@ -1,3 +1,9 @@
+## 0.29.6
+
+- AI answers are held to a fixed shape by the provider itself (Claude, Gemini and Ollama structured output) for product linking, generic-item upkeep, ingredient matching, the product search for generic items and the shopping-trip matching. Answers that used to be dropped because the JSON came back wrapped in prose or in the wrong shape no longer are. A model or server that does not support this is asked the old way
+- An AI answer that was cut off at the output limit is reported as such instead of being asked for again three more times
+- A warning is logged when the catalog has more generic items than fit in one AI prompt, since the ones left out can never be matched
+
 ## 0.29.5
 
 - AI optimize no longer multiplies stock. A multi-pack with no single-unit product to merge into was renamed and its stock multiplied by the pack size, on every run after the scraper's Update put the store name back (one six-pack became 6, then 36). Such a pack now stays its own product; Storage already knows from the name how many pieces a pack holds

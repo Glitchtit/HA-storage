@@ -149,3 +149,182 @@ def test_default_models_are_current():
 def test_batch_size_is_clamped(stored, expected):
     conn = _config_db(**({"optimize_batch_size": stored} if stored is not None else {}))
     assert ai_client.get_batch_size(conn) == expected
+
+
+# ── output schema: the provider enforces the shape, with a way back ───────
+
+import sys
+import types
+
+ROWS = ai_client.arr(ai_client.obj(id=ai_client.INT))
+WRAPPED = {"type": "object", "properties": {"items": ROWS},
+           "required": ["items"], "additionalProperties": False}
+
+
+@pytest.fixture(autouse=True)
+def _forget_refused_schemas():
+    ai_client._schema_refused.clear()
+
+
+def _gemini_script(monkeypatch, *responses):
+    """Like _script, but keeps each request body."""
+    bodies = []
+    queue = iter(responses)
+
+    def post(url, **kw):
+        bodies.append(kw["json"])
+        answer = next(queue)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(ai_client.requests, "post", post)
+    monkeypatch.setattr(ai_client.time, "sleep", lambda s: None)
+    return bodies
+
+
+def test_gemini_gets_the_schema_and_the_caller_gets_its_list(monkeypatch):
+    bodies = _gemini_script(monkeypatch, _R(text='{"items": [{"id": 1}]}'))
+    assert ai_client.call_ai_json("hi", None, cfg=CFG, schema=ROWS) == [{"id": 1}]
+    assert bodies[0]["generationConfig"]["responseJsonSchema"] == WRAPPED
+
+
+def test_an_object_schema_is_sent_as_is(monkeypatch):
+    schema = ai_client.obj(index=ai_client.nullable(ai_client.INT))
+    bodies = _gemini_script(monkeypatch, _R(text='{"index": null}'))
+    assert ai_client.call_ai_json("hi", None, cfg=CFG, schema=schema) == {"index": None}
+    assert bodies[0]["generationConfig"]["responseJsonSchema"] == schema
+
+
+def test_a_rejected_schema_is_dropped_and_remembered(monkeypatch):
+    bodies = _gemini_script(monkeypatch, _R(400, text="unknown field"),
+                            _R(text='[{"id": 1}]'), _R(text='[{"id": 2}]'))
+    assert ai_client.call_ai_json("hi", None, cfg=CFG, schema=ROWS) == [{"id": 1}]
+    assert ai_client.call_ai_json("hi", None, cfg=CFG, schema=ROWS) == [{"id": 2}]
+    assert ["responseJsonSchema" in b["generationConfig"] for b in bodies] == [True, False, False]
+
+
+def test_a_400_that_is_not_about_the_schema_is_a_config_error(monkeypatch):
+    bodies = _gemini_script(monkeypatch, _R(400, text="API key not valid"),
+                            _R(400, text="API key not valid"))
+    with pytest.raises(ai_client.AiConfigError, match="API key not valid"):
+        ai_client.call_ai_json("hi", None, cfg=CFG, schema=ROWS)
+    assert len(bodies) == 2 and not ai_client._schema_refused
+
+
+def test_a_400_without_a_schema_is_still_a_config_error(monkeypatch):
+    bodies = _gemini_script(monkeypatch, _R(400, text="bad request"))
+    with pytest.raises(ai_client.AiConfigError):
+        ai_client.call_ai_json("hi", None, cfg=CFG)
+    assert len(bodies) == 1
+
+
+class _Cut(_R):
+    def json(self):
+        return {"candidates": [{"finishReason": "MAX_TOKENS",
+                                "content": {"parts": [{"text": '{"items": [{"id"'}]}}]}
+
+
+def test_a_cut_off_answer_is_not_asked_for_again(monkeypatch):
+    bodies = _gemini_script(monkeypatch, _Cut())
+    with pytest.raises(ai_client.AiTruncated):
+        ai_client.call_ai_json("hi", None, cfg=CFG, schema=ROWS)
+    assert len(bodies) == 1
+
+
+class _Empty(_R):
+    def json(self):
+        return {"promptFeedback": {"blockReason": "SAFETY"}}
+
+
+def test_an_empty_answer_says_why(monkeypatch):
+    _gemini_script(monkeypatch, *[_Empty()] * 4)
+    with pytest.raises(ValueError, match="SAFETY"):
+        ai_client.call_ai_json("hi", None, cfg=CFG, schema=ROWS)
+
+
+def _fake_anthropic(monkeypatch, *answers):
+    """A stand-in anthropic module: messages.create records its kwargs and
+    returns (or raises) each answer in turn."""
+    seen = []
+    queue = iter(answers)
+
+    class _Messages:
+        def create(self, **kw):
+            seen.append(kw)
+            answer = next(queue)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    class Anthropic:
+        def __init__(self, **kw):
+            self.messages = _Messages()
+
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=Anthropic))
+    monkeypatch.setattr(ai_client.time, "sleep", lambda s: None)
+    return seen
+
+
+def _claude_answer(text, stop_reason="end_turn"):
+    return types.SimpleNamespace(
+        stop_reason=stop_reason,
+        content=[types.SimpleNamespace(type="thinking", thinking=""),
+                 types.SimpleNamespace(type="text", text=text)],
+        usage=types.SimpleNamespace(input_tokens=3, output_tokens=4))
+
+
+CLAUDE = {"provider": "claude", "claude_api_key": "SECRET-KEY", "claude_model": "claude-x"}
+
+
+class _Refused(Exception):
+    status_code = 400
+    response = types.SimpleNamespace(status_code=400, text="output_config: unknown", headers={})
+
+
+def test_claude_gets_the_schema(monkeypatch):
+    seen = _fake_anthropic(monkeypatch, _claude_answer('{"items": [{"id": 7}]}'))
+    assert ai_client.call_ai_json("hi", None, cfg=CLAUDE, schema=ROWS) == [{"id": 7}]
+    assert seen[0]["output_config"] == {"format": {"type": "json_schema", "schema": WRAPPED}}
+    assert seen[0]["model"] == "claude-x"
+
+
+def test_claude_without_schema_support_falls_back_to_prose_parsing(monkeypatch):
+    seen = _fake_anthropic(monkeypatch, _Refused(),
+                           _claude_answer('Here you go:\n```json\n[{"id": 7}]\n```'))
+    assert ai_client.call_ai_json("hi", None, cfg=CLAUDE, schema=ROWS) == [{"id": 7}]
+    assert "output_config" in seen[0] and "output_config" not in seen[1]
+
+
+def test_claude_cut_off_at_max_tokens_is_truncation(monkeypatch):
+    seen = _fake_anthropic(monkeypatch, _claude_answer('{"items": [', stop_reason="max_tokens"))
+    with pytest.raises(ai_client.AiTruncated):
+        ai_client.call_ai_json("hi", None, cfg=CLAUDE, schema=ROWS)
+    assert len(seen) == 1
+
+
+def test_ollama_gets_the_schema_as_format(monkeypatch):
+    bodies = []
+
+    class _O(_R):
+        def json(self):
+            return {"message": {"content": '{"items": []}'}, "done_reason": "stop"}
+
+    def post(url, **kw):
+        bodies.append(kw["json"])
+        return _O()
+
+    monkeypatch.setattr(ai_client.requests, "post", post)
+    cfg = {"provider": "ollama", "ollama_url": "http://o", "ollama_model": "llama3"}
+    assert ai_client.call_ai_json("hi", None, cfg=cfg, schema=ROWS) == []
+    assert bodies[0]["format"] == WRAPPED
+    assert ai_client.call_ai_json("hi", None, cfg=cfg) == {"items": []}
+    assert bodies[1]["format"] == "json"
+
+
+def test_capping_a_prompt_list_is_logged(caplog):
+    with caplog.at_level("WARNING"):
+        assert ai_client.capped([1, 2, 3], 2, "Things") == [1, 2]
+        assert ai_client.capped([1, 2], 2, "Things") == [1, 2]
+    assert [r.message for r in caplog.records] == [
+        "Things: only 2 of 3 fit in the AI prompt; the rest cannot be matched"]

@@ -35,6 +35,7 @@ import sqlite3
 from typing import Any, Callable
 
 import tree
+from ai_client import CONFIDENCE, INT, STR, arr, capped, nullable, obj
 from concepts import add_alias, concept_index, create_concept, norm
 from locks import CATALOG_LOCK
 from quantity import MASS, UNIT_CATALOG, VOLUME, normalize_unit_text
@@ -131,6 +132,9 @@ def _catalog_for_prompt(conn: sqlite3.Connection) -> list[dict]:
     return out
 
 
+_MATCH_SCHEMA = arr(obj(name=STR, id=nullable(INT), confidence=CONFIDENCE))
+
+
 def match_with_ai(conn: sqlite3.Connection, names: list[str], ai: AiFn | None,
                   catalog: list[dict]) -> dict[str, int]:
     """normalized name -> concept id for every high-confidence AI match
@@ -140,10 +144,10 @@ def match_with_ai(conn: sqlite3.Connection, names: list[str], ai: AiFn | None,
         return {}
     prompt = _MATCH_PROMPT.format(
         names_json=json.dumps(names, ensure_ascii=False),
-        concepts_json=json.dumps(catalog[:1500], ensure_ascii=False),
+        concepts_json=json.dumps(capped(catalog, 1500, "Ingredient match concepts"), ensure_ascii=False),
     )
     try:
-        answer = ai(prompt, conn)
+        answer = ai(prompt, conn, schema=_MATCH_SCHEMA)
     except Exception as exc:
         log.warning("Ingredient AI match failed: %s", exc)
         return {}

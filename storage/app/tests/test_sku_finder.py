@@ -81,7 +81,7 @@ class _Scraper:
 
 
 def _ai(index=0, confidence="high", prompts=None):
-    def call(prompt, conn):
+    def call(prompt, conn, **kw):
         if prompts is not None:
             prompts.append(prompt)
         return {"index": index, "confidence": confidence}
@@ -204,7 +204,7 @@ class TestFindFor:
         res = sku_finder.find_for(get_connection(), concept, _Scraper(hits, fail="add"), _ai())
         assert (res["status"], res["stop"]) == ("error", True)
 
-        def broken(prompt, conn):
+        def broken(prompt, conn, **kw):
             raise RuntimeError("quota")
         res = sku_finder.find_for(get_connection(), concept, _Scraper(hits), broken)
         assert (res["status"], res["stop"]) == ("error", True)
@@ -354,7 +354,7 @@ class TestOutages:
             sku_finder._outage_until = 0.0
             sku_finder.run_pending(conn, _Scraper(fail="search"), _ai())
 
-        def broken(prompt, conn):
+        def broken(prompt, conn, **kw):
             raise RuntimeError("quota")
         sku_finder._outage_until = 0.0
         sku_finder.run_pending(conn, _Scraper({"käsite o1a": [_hit("Tuote o1a", "9000000000127")]}),

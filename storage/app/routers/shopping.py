@@ -8,7 +8,7 @@ import math
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from ai_client import call_ai_json
+from ai_client import CONFIDENCE, INT, arr, call_ai_json, obj
 from consumption_stats import compute_cadence_suggestions, compute_proposal
 from facts import Catalog
 from list_clearing import apply_purchase
@@ -390,6 +390,9 @@ Rules:
 """
 
 
+_RECONCILE_SCHEMA = arr(obj(shopping_row_id=INT, bought_product_id=INT, confidence=CONFIDENCE))
+
+
 @router.post("/shopping-list/reconcile", response_model=ReconcileResponse)
 def reconcile_shopping(body: ReconcileRequest):
     """Propose cross-brand fulfillments for a finished shopping session.
@@ -448,7 +451,7 @@ def reconcile_shopping(body: ReconcileRequest):
     prompt = _RECONCILE_PROMPT.format(shopping_json=shopping_json, basket_json=basket_json)
 
     try:
-        result = call_ai_json(prompt, conn)
+        result = call_ai_json(prompt, conn, schema=_RECONCILE_SCHEMA)
     except Exception as exc:  # AI offline / unconfigured — finish must not fail.
         log.warning("Reconcile AI call failed: %s", exc)
         return {"proposals": [], "ai_available": False}

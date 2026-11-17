@@ -38,6 +38,61 @@ class AiConfigError(ValueError):
     or retired model, a malformed request. Trying again cannot help."""
 
 
+class AiTruncated(ValueError):
+    """The answer was cut off at the output limit. The same request would be
+    cut off again; the caller should ask for less (a smaller batch)."""
+
+
+# ---------------------------------------------------------------------------
+# Output schemas (JSON Schema, the subset every provider accepts)
+# ---------------------------------------------------------------------------
+
+INT = {"type": "integer"}
+NUM = {"type": "number"}
+STR = {"type": "string"}
+CONFIDENCE = {"type": "string", "enum": ["high", "medium", "low"]}
+
+
+def obj(**props: dict) -> dict:
+    """A closed object with every property required."""
+    return {"type": "object", "properties": props, "required": list(props),
+            "additionalProperties": False}
+
+
+def arr(item: dict) -> dict:
+    return {"type": "array", "items": item}
+
+
+def nullable(schema: dict) -> dict:
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
+def enum(*values: str) -> dict:
+    return {"type": "string", "enum": list(values)}
+
+
+def capped(items: list, limit: int, what: str) -> list:
+    """items[:limit], with a warning when something was left out: what is
+    cut from a prompt can never be chosen by the model."""
+    if len(items) > limit:
+        logger.warning("%s: only %d of %d fit in the AI prompt; the rest cannot be matched",
+                       what, limit, len(items))
+    return items[:limit]
+
+
+def _wrap(schema: dict | None) -> tuple[dict | None, bool]:
+    """Providers want an object at the top; a caller may want a list back.
+    Returns (schema to send, whether the answer must be unwrapped)."""
+    if schema and schema.get("type") == "array":
+        return obj(items=schema), True
+    return schema, False
+
+
+# (provider, model) pairs that answered HTTP 400 to a request carrying a
+# schema: an older model or server. They get plain JSON mode from then on.
+_schema_refused: set[tuple[str, str]] = set()
+
+
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
@@ -78,12 +133,12 @@ def get_batch_size(conn: sqlite3.Connection) -> int:
 # Raw provider calls
 # ---------------------------------------------------------------------------
 
-def _call_gemini(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
+def _call_gemini(prompt: str, api_key: str, model: str, schema: dict | None = None) -> tuple[str, dict]:
     url = f"{_GEMINI_BASE_URL}{model}:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"response_mime_type": "application/json"},
-    }
+    config: dict = {"responseMimeType": "application/json"}
+    if schema is not None:
+        config["responseJsonSchema"] = schema
+    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config}
     # The key goes in a header: in the URL, any request error would print it
     # into the add-on log.
     resp = requests.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=300)
@@ -101,22 +156,31 @@ def _call_gemini(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
             stats["in"], stats["out"],
             usage.get("totalTokenCount", "?"),
         )
-    return data["candidates"][0]["content"]["parts"][0]["text"], stats
+    candidate = (data.get("candidates") or [{}])[0]
+    if candidate.get("finishReason") == "MAX_TOKENS":
+        raise AiTruncated("Gemini answer was cut off at the output limit")
+    parts = (candidate.get("content") or {}).get("parts") or []
+    if not parts:
+        why = candidate.get("finishReason") or data.get("promptFeedback") or "no candidates"
+        raise ValueError(f"Gemini returned no answer ({why})")
+    return parts[0]["text"], stats
 
 
-def _call_ollama(prompt: str, url: str, model: str) -> tuple[str, dict]:
+def _call_ollama(prompt: str, url: str, model: str, schema: dict | None = None) -> tuple[str, dict]:
     resp = requests.post(
         f"{url}/api/chat",
         json={
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "format": "json",
+            "format": schema if schema is not None else "json",
             "stream": False,
         },
         timeout=300,
     )
     resp.raise_for_status()
     data = resp.json()
+    if data.get("done_reason") == "length":
+        raise AiTruncated("Ollama answer was cut off at the output limit")
     prompt_tokens = data.get("prompt_eval_count") or 0
     output_tokens = data.get("eval_count") or 0
     total_ns = data.get("total_duration")
@@ -134,18 +198,24 @@ def _claude_response_text(response) -> str:
     Newer models think by default, so content[0] may be a thinking block.
     """
     if response.stop_reason == "max_tokens":
-        logger.warning("Claude response hit max_tokens; output may be truncated")
+        raise AiTruncated("Claude answer was cut off at max_tokens")
+    if response.stop_reason == "refusal":
+        raise ValueError("Claude declined the request")
     return "".join(b.text for b in response.content if b.type == "text")
 
 
-def _call_claude(prompt: str, api_key: str, model: str) -> tuple[str, dict]:
+def _call_claude(prompt: str, api_key: str, model: str, schema: dict | None = None) -> tuple[str, dict]:
     import anthropic as _anthropic  # optional dependency
 
     client = _anthropic.Anthropic(api_key=api_key, max_retries=0)  # we retry ourselves
+    extra = {}
+    if schema is not None:
+        extra["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
     response = client.messages.create(
         model=model,
         max_tokens=16000,
         messages=[{"role": "user", "content": prompt}],
+        **extra,
     )
     usage = response.usage
     stats = {"in": usage.input_tokens, "out": usage.output_tokens}
@@ -293,6 +363,8 @@ def _with_retries(label: str, attempt_fn: Any) -> Any:
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             return attempt_fn()
+        except AiTruncated:
+            raise
         except Exception as exc:
             if not _retryable(exc):
                 raise AiConfigError(f"{label} refused the request ({_refusal(exc)})") from exc
@@ -303,12 +375,22 @@ def _with_retries(label: str, attempt_fn: Any) -> Any:
     raise ValueError(f"AI call failed after {_MAX_RETRIES} attempts: {last_exc}") from last_exc
 
 
+def _call_provider(provider: str, prompt: str, cfg: dict[str, str],
+                   schema: dict | None) -> tuple[str, dict]:
+    if provider == "ollama":
+        return _call_ollama(prompt, cfg["ollama_url"], cfg["ollama_model"], schema)
+    if provider == "claude":
+        return _call_claude(prompt, cfg["claude_api_key"], cfg["claude_model"], schema)
+    return _call_gemini(prompt, cfg["gemini_api_key"], cfg["gemini_model"], schema)
+
+
 def call_ai_json(
     prompt: str,
     conn: sqlite3.Connection,
     *,
     cfg: dict[str, str] | None = None,
     emit: Any = None,
+    schema: dict | None = None,
 ) -> Any:
     """Call the configured AI provider and parse the response as JSON.
 
@@ -316,11 +398,17 @@ def call_ai_json(
     it is fetched from *conn* on every call.
     *emit* optional callable(str) — receives a formatted token/timing line on
     each successful call.
+    *schema* JSON Schema of the value wanted back (build it with obj/arr/…).
+    The provider then enforces the shape. A list schema is sent wrapped in an
+    object and unwrapped again, so the caller gets its list. A provider or
+    model that rejects the schema (HTTP 400) is asked again without it and
+    not offered one again, so the prompt must still describe the shape.
 
     Raises AiConfigError when the provider is not configured or refuses the
-    request (bad key, retired model): retrying cannot help. Transient errors
-    and JSON parse failures are retried up to _MAX_RETRIES times with back-off,
-    then raise ValueError.
+    request (bad key, retired model): retrying cannot help. AiTruncated when
+    the answer hit the output limit: ask for less. Transient errors and JSON
+    parse failures are retried up to _MAX_RETRIES times with back-off, then
+    raise ValueError.
     """
     if cfg is None:
         cfg = _get_ai_config(conn)
@@ -329,22 +417,33 @@ def call_ai_json(
     if not is_configured(cfg):
         raise AiConfigError(f"AI provider {provider!r} is not configured")
     model_name = cfg.get(f"{provider}_model") or cfg.get("gemini_model")
+    wire_schema, wrapped = _wrap(schema)
+    key = (provider, model_name)
 
     def attempt() -> Any:
         t0 = time.time()
-        if provider == "ollama":
-            raw, stats = _call_ollama(prompt, cfg["ollama_url"], cfg["ollama_model"])
-        elif provider == "claude":
-            raw, stats = _call_claude(prompt, cfg["claude_api_key"], cfg["claude_model"])
-        else:
-            raw, stats = _call_gemini(prompt, cfg["gemini_api_key"], cfg["gemini_model"])
+        sent = wire_schema if key not in _schema_refused else None
+        try:
+            raw, stats = _call_provider(provider, prompt, cfg, sent)
+        except Exception as exc:
+            if sent is None or _status(exc) != 400:
+                raise
+            # Raises again when the schema was not what the provider minded
+            # (Gemini answers a bad key with 400 too).
+            raw, stats = _call_provider(provider, prompt, cfg, None)
+            sent = None
+            _schema_refused.add(key)
+            logger.warning("%s (%s) rejected the output schema; continuing without it: %s",
+                           provider.capitalize(), model_name, _refusal(exc))
         wall_ms = round((time.time() - t0) * 1000)
 
-        sanitized = _strip_control_chars(raw)
-        # Extract JSON for providers that may wrap in prose/fences.
-        if provider in ("claude", "ollama"):
-            sanitized = _extract_json(sanitized)
-        result = json.loads(sanitized)
+        text = _strip_control_chars(raw)
+        # Without an enforced schema Claude and Ollama may wrap JSON in prose.
+        if sent is None and provider in ("claude", "ollama"):
+            text = _extract_json(text)
+        result = json.loads(text)
+        if wrapped and isinstance(result, dict) and isinstance(result.get("items"), list):
+            result = result["items"]
 
         if emit:
             # Ollama provides native inference time; others use wall clock.
