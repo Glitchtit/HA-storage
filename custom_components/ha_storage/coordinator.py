@@ -56,6 +56,17 @@ class StorageCoordinator(DataUpdateCoordinator):
                     client.get(f"{self.addon_url}/api/stats/digest"),
                     return_exceptions=True,
                 )
+                # Group names for the shopping todo's per-group counts. Optional too:
+                # without them every row counts under "Other".
+                try:
+                    groups_resp = await client.get(f"{self.addon_url}/api/product-groups")
+                    group_names = (
+                        {g["id"]: g["name"] for g in groups_resp.json()}
+                        if groups_resp.status_code == 200 else {}
+                    )
+                except (httpx.HTTPError, OSError, ValueError) as exc:
+                    _LOGGER.debug("Product group fetch failed: %s", exc)
+                    group_names = {}
                 # The digest endpoint is optional — addons older than 0.12.0 don't
                 # have it. Don't fail the whole refresh on its absence; just leave
                 # the digest-derived sensors at their defaults.
@@ -107,6 +118,7 @@ class StorageCoordinator(DataUpdateCoordinator):
                     "low_stock_count": low_stock,
                     "shopping_pending_count": shopping_pending,
                     "digest": digest_data,
+                    "product_groups": group_names,
                 }
         except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
             raise UpdateFailed(

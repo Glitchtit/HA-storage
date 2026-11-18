@@ -60,3 +60,25 @@ def test_a_generic_row_names_the_product_to_buy():
     assert todo_summary(_item(300, need), {7: "Tomaatti"}) == "Tomaatti 500g 300 g"
     own = {**_display("1", None, "package"), "buy_product_id": 7, "buy_product_name": "Maito"}
     assert todo_summary(_item(1, own), {7: "Maito"}) == "Maito"
+
+
+def test_shopping_groups_count_open_rows_per_group():
+    from summary import shopping_groups
+
+    products = [
+        {"id": 1, "product_group_id": 10},
+        {"id": 2, "product_group_id": 10},
+        {"id": 3, "product_group_id": 20},
+        {"id": 4, "product_group_id": None},  # generic row, picked SKU 3
+        {"id": 5, "product_group_id": None},
+    ]
+    names = {10: "Maitotuotteet", 20: "Juomat"}
+    items = [
+        {"product_id": 1, "done": False},
+        {"product_id": 2, "done": False},
+        {"product_id": 3, "done": True},
+        {"product_id": 4, "done": False, "display": {"buy_product_id": 3}},
+        {"product_id": 5, "done": False},
+    ]
+    assert shopping_groups(items, products, names) == {"Maitotuotteet": 2, "Juomat": 1, "Other": 1}
+    assert list(shopping_groups(items, products, names))[0] == "Maitotuotteet"

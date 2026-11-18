@@ -23,3 +23,23 @@ def todo_summary(item: dict, product_names: dict[int, str]) -> str:
         return f"{name} {display['qty_text']}"
     amount = item.get("amount") or 1
     return name if float(amount) == 1 else f"{name} ×{_amount_text(amount)}"
+
+
+def shopping_groups(items: list[dict], products: list[dict], group_names: dict[int, str]) -> dict[str, int]:
+    """Open shopping rows per product group, {"Maitotuotteet": 3, ...}, most rows first.
+
+    A row takes its product's group. A generic row whose product has none takes the
+    group of the product Storage picked to buy. Rows with no group at all count under
+    "Other", so the counts always add up to the open rows.
+    """
+    group_of = {p["id"]: p.get("product_group_id") for p in products}
+    counts: dict[str, int] = {}
+    for it in items:
+        if it.get("done"):
+            continue
+        gid = group_of.get(it["product_id"])
+        if gid is None:
+            gid = group_of.get((it.get("display") or {}).get("buy_product_id"))
+        name = group_names.get(gid, "Other") if gid is not None else "Other"
+        counts[name] = counts.get(name, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))

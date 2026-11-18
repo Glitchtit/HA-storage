@@ -23,7 +23,7 @@ from .const import DOMAIN
 from .coordinator import StorageCoordinator
 from .lookup import async_lookup_product
 from .resolver import describe_add_failure, resolve_product_by_name
-from .summary import todo_summary
+from .summary import shopping_groups, todo_summary
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +69,12 @@ class StorageShoppingListTodo(CoordinatorEntity, TodoListEntity):
         self._attr_unique_id = f"{entry.entry_id}_shopping_list"
         self._attr_name = "Storage Shopping List"
         self._attr_icon = "mdi:cart"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Open rows per product group, for dashboards that show the list by aisle."""
+        data = self.coordinator.data
+        return {"groups": shopping_groups(data.get("shopping", []), data.get("products", []), data.get("product_groups", {}))}
 
     @property
     def todo_items(self) -> list[TodoItem]:
