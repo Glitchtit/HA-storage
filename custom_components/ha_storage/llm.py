@@ -17,7 +17,7 @@ from .const import DOMAIN
 from .once import once
 
 # The shopping list is not here: it is the todo entity, which Assist already drives.
-ACTIONS = ("find_stock", "consume_stock", "add_stock")
+ACTIONS = ("find_stock", "consume_stock", "undo_consume", "add_stock")
 
 PROMPT = (
     "The household's food and supplies are tracked in Storage. When the user says"
@@ -27,6 +27,9 @@ PROMPT = (
     " out of stock with ha_storage__consume_stock (spoiled when it went bad)."
     " When the user says only N are left, consume the amount in stock minus N,"
     " never N itself."
+    " When the user says that was wrong, misheard or to undo it,"
+    " ha_storage__undo_consume puts the last consume back; to fix the amount,"
+    " undo and then consume the right amount."
     " Something bought or restocked goes in with ha_storage__add_stock, and"
     " ha_storage__find_stock with expiring_within_days answers what expires soon."
 )

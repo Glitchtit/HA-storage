@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 
@@ -11,6 +12,7 @@ from models import (
     StockAdd,
     StockAddResult,
     StockConsume,
+    StockUndoConsume,
     StockCorrectPurchase,
     StockEntry,
     StockEntryUpdate,
@@ -224,10 +226,12 @@ def consume_stock(body: StockConsume):
 
     remaining = body.amount
     consumed = 0.0
+    taken = []  # each lot as it was before, so undo_consume can put it back
     for entry in entries:
         if remaining <= EPS:
             break
         take = min(remaining, entry["amount"])
+        taken.append({"row": dict(entry), "take": take})
         new_amount = entry["amount"] - take
         if new_amount <= EPS:
             conn.execute("DELETE FROM stock WHERE id = ?", (entry["id"],))
@@ -259,6 +263,7 @@ def consume_stock(body: StockConsume):
         amount=consumed,
         note=body.note,
         unit_price=event_price,
+        undo=json.dumps(taken),
     )
     conn.commit()
 
@@ -266,6 +271,53 @@ def consume_stock(body: StockConsume):
              consumed, body.product_id, remaining)
     sync_auto_shopping(conn)
     return {"consumed": consumed, "remaining_to_consume": remaining}
+
+
+@router.post("/stock/consume/undo", status_code=200)
+def undo_consume(body: StockUndoConsume):
+    """Put back the latest consume (or spoil) of the last `within_minutes`, as if it
+    never happened: its lots return as they were and its history row goes."""
+    conn = _get_db()
+    where = "h.event_type IN ('consume', 'spoil') AND h.undo IS NOT NULL AND h.created_at >= datetime('now', ?)"
+    params: list = [f"-{body.within_minutes} minutes"]
+    if body.product_id is not None:
+        where += " AND h.product_id = ?"
+        params.append(body.product_id)
+    event = conn.execute(
+        "SELECT h.*, p.name AS product_name FROM stock_history h"
+        f" JOIN products p ON p.id = h.product_id WHERE {where} ORDER BY h.id DESC LIMIT 1",
+        params,
+    ).fetchone()
+    if not event:
+        raise HTTPException(404, f"Nothing was consumed in the last {body.within_minutes} minutes")
+    try:
+        for lot in json.loads(event["undo"]):
+            row, take = lot["row"], lot["take"]
+            now = conn.execute("SELECT amount FROM stock WHERE id = ?", (row["id"],)).fetchone()
+            if now:
+                conn.execute(
+                    "UPDATE stock SET amount = amount + ?, amount_opened = ? WHERE id = ?",
+                    (take, min(row["amount_opened"] or 0, now["amount"] + take), row["id"]),
+                )
+            else:  # the consume used the lot up; ids are never reused, so it comes back as itself
+                vals = {**row, "amount": take, "amount_opened": min(row["amount_opened"] or 0, take)}
+                conn.execute(
+                    f"INSERT INTO stock ({', '.join(vals)}) VALUES ({', '.join('?' * len(vals))})",
+                    list(vals.values()),
+                )
+        conn.execute("DELETE FROM stock_history WHERE id = ?", (event["id"],))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    log.info("Undid %s of %.1f from product %d.", event["event_type"], event["amount"], event["product_id"])
+    sync_auto_shopping(conn)
+    return {
+        "product_id": event["product_id"],
+        "product": event["product_name"],
+        "restored": event["amount"],
+        "was_spoiled": event["event_type"] == "spoil",
+    }
 
 
 @router.post("/stock/correct-purchase", status_code=200)

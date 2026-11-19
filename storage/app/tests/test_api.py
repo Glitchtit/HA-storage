@@ -334,6 +334,30 @@ class TestStock:
                         json={"product_id": pid, "amount": 1, "location_id": other})
         assert r.status_code == 400
 
+    def test_undo_consume_puts_the_lots_back_as_they_were(self):
+        pid, kpl, loc = self._make_product_with_location()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 2, "best_before_date": "2030-01-01"})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 5, "best_before_date": "2030-06-01"})
+        before = client.get(f"/api/stock/product/{pid}").json()
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 3})  # uses lot 1 up, 1 from lot 2
+        r = client.post("/api/stock/consume/undo", json={"product_id": pid})
+        assert r.status_code == 200
+        assert r.json()["restored"] == 3
+        assert client.get(f"/api/stock/product/{pid}").json() == before
+        events = client.get(f"/api/history/product/{pid}").json()
+        assert [e["event_type"] for e in events if e["event_type"] in ("consume", "spoil")] == []
+        # The same consume cannot be undone twice.
+        assert client.post("/api/stock/consume/undo", json={"product_id": pid}).status_code == 404
+
+    def test_undo_consume_takes_only_the_latest(self):
+        pid, kpl, loc = self._make_product_with_location()
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 10})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 4, "spoiled": True})
+        r = client.post("/api/stock/consume/undo", json={"product_id": pid})
+        assert r.json()["restored"] == 4 and r.json()["was_spoiled"] is True
+        assert sum(e["amount"] for e in client.get(f"/api/stock/product/{pid}").json()) == 9
+
     def test_correct_purchase_reduces_purchase_event(self):
         # Over-scan: one purchase event with amount 2.
         pid, kpl, loc = self._make_product_with_location()
@@ -1640,7 +1664,7 @@ class TestHistory:
     def test_purchase_event_created(self):
         pid, *_ = self._make()
         client.post("/api/stock/add", json={"product_id": pid, "amount": 4})
-        events = client.get(f"/api/history?product_id={pid}").json()
+        events = client.get(f"/api/history/product/{pid}").json()
         assert any(e["event_type"] == "purchase" and e["amount"] == 4 for e in events)
 
     def test_consume_event_created(self):
@@ -1716,7 +1740,7 @@ class TestHistory:
     def test_delete_history_entry(self):
         pid, *_ = self._make()
         client.post("/api/stock/add", json={"product_id": pid, "amount": 1})
-        events = client.get(f"/api/history?product_id={pid}").json()
+        events = client.get(f"/api/history/product/{pid}").json()
         eid = events[0]["id"]
         r = client.delete(f"/api/history/{eid}")
         assert r.status_code == 204

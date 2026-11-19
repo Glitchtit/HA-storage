@@ -25,7 +25,9 @@ def test_a_replayed_call_runs_once_and_both_callers_get_the_result():
             once_mod.once("consume 728", consume), once_mod.once("consume 728", consume)
         )
 
-    assert asyncio.run(burst()) == [{"consumed": 1}, {"consumed": 1}]
+    first, replay = asyncio.run(burst())
+    assert first == {"consumed": 1}
+    assert replay == {"consumed": 1, "repeat": once_mod.REPEAT_NOTE}
     assert runs == [1]
 
 

@@ -115,6 +115,24 @@ find_stock:
           max: 365
           mode: box
 
+undo_consume:
+  name: Undo consume
+  description: >-
+    Put back the latest consume_stock of the last hour, as if it never
+    happened: the stock returns as it was and the consumption leaves the
+    history. Use it when the user says that was wrong, misheard or to undo it.
+    To fix the amount, undo and then consume the right amount. Returns the
+    product and how many were put back.
+  fields:
+    product_id:
+      name: Product ID
+      description: Only undo a consume of this product. Leave out to undo the latest consume of any product.
+      required: false
+      example: 42
+      selector:
+        number:
+          mode: box
+
 add_stock:
   name: Add stock
   description: >-

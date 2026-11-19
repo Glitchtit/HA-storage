@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS stock_history (
     stock_id         INTEGER,
     note             TEXT DEFAULT '',
     unit_price       REAL,
+    undo             TEXT,  -- consume/spoil: JSON of the lots it took, so it can be put back
     created_at       TEXT DEFAULT (datetime('now'))
 );
 
@@ -523,6 +524,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE stock_history ADD COLUMN unit_price REAL")
         conn.commit()
         log.info("Added unit_price column to stock_history.")
+    if "undo" not in history_cols:
+        conn.execute("ALTER TABLE stock_history ADD COLUMN undo TEXT")
+        conn.commit()
+        log.info("Added undo column to stock_history.")
 
     # Per-ingredient specificity: 'loose' (default — substituting a child of the
     # linked parent product is acceptable) or 'strict' (the recipe needs that

@@ -24,4 +24,16 @@ async def once(key: str, call: Callable[[], Awaitable]):
         del _recent[old]
     if key not in _recent:
         _recent[key] = (now, asyncio.ensure_future(call()))
-    return await asyncio.shield(_recent[key][1])
+        return await asyncio.shield(_recent[key][1])
+    result = await asyncio.shield(_recent[key][1])
+    if not isinstance(result, dict):
+        return result
+    # Tell the assistant, so a real second "I took one" is not swallowed unheard.
+    return {**result, "repeat": REPEAT_NOTE}
+
+
+REPEAT_NOTE = (
+    f"This exact call was made less than {WINDOW} seconds ago and was not done"
+    " again. If the user really meant it twice, say so and repeat it after a"
+    " moment."
+)

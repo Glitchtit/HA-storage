@@ -16,7 +16,7 @@ pytest.importorskip("homeassistant")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from homeassistant.exceptions import ServiceValidationError  # noqa: E402
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError  # noqa: E402
 
 from ha_storage import services as services_mod  # noqa: E402
 
@@ -36,6 +36,7 @@ class _Response:
 class _Client:
     posts: list[dict] = []
     consume_status = 200
+    down = False
 
     def __init__(self, *args, **kwargs):
         pass
@@ -50,7 +51,11 @@ class _Client:
         return _Response([{"id": 3, "name": "Freezer", "description": "Pakastin"}])
 
     async def post(self, url, json=None):
+        if _Client.down:
+            raise httpx.ConnectError("Storage is restarting")
         _Client.posts.append(json)
+        if url.endswith("/undo"):
+            return _Response({"product": "Pepsi Max", "restored": 3}, _Client.consume_status)
         return _Response({"consumed": json["amount"], "remaining_to_consume": 0}, _Client.consume_status)
 
 
@@ -67,7 +72,7 @@ class _Services:
 
 @pytest.fixture
 def consume(monkeypatch):
-    _Client.posts, _Client.consume_status = [], 200
+    _Client.posts, _Client.consume_status, _Client.down = [], 200, False
     monkeypatch.setattr(services_mod.httpx, "AsyncClient", _Client)
 
     async def _refresh():
@@ -77,7 +82,9 @@ def consume(monkeypatch):
     monkeypatch.setattr(services_mod, "_coordinators", lambda hass: [coordinator])
     hass = SimpleNamespace(services=_Services(), data={})
     services_mod.async_register_services(hass)
-    return hass.services.handlers[services_mod.SERVICE_CONSUME_STOCK]
+    handler = hass.services.handlers[services_mod.SERVICE_CONSUME_STOCK]
+    handler.undo = hass.services.handlers[services_mod.SERVICE_UNDO_CONSUME]
+    return handler
 
 
 async def test_a_location_name_becomes_its_id(consume):
@@ -101,6 +108,36 @@ async def test_nothing_in_stock_is_a_readable_error(consume):
 async def test_spoiled_is_passed_on_as_waste(consume):
     await consume(SimpleNamespace(data={"product_id": 728, "amount": 1, "spoiled": True}))
     assert _Client.posts == [{"product_id": 728, "amount": 1, "spoiled": True}]
+
+
+async def test_storage_down_is_an_error_the_assistant_can_read(consume):
+    _Client.down = True
+    with pytest.raises(HomeAssistantError, match="Storage did not consume"):
+        await consume(SimpleNamespace(data={"product_id": 728, "amount": 1}))
+
+
+async def test_no_storage_set_up_is_never_a_silent_success(consume, monkeypatch):
+    monkeypatch.setattr(services_mod, "_coordinators", lambda hass: [])
+    with pytest.raises(HomeAssistantError, match="not set up"):
+        await consume(SimpleNamespace(data={"product_id": 728, "amount": 1}))
+
+
+@pytest.mark.parametrize("amount", [0, -2])
+def test_an_amount_of_zero_or_less_is_refused_with_a_reason(amount):
+    with pytest.raises(services_mod.vol.Invalid, match="do not consume"):
+        services_mod._CONSUME_STOCK_SCHEMA({"product_id": 728, "amount": amount})
+
+
+async def test_undo_puts_back_the_latest_consume(consume):
+    result = await consume.undo(SimpleNamespace(data={"product_id": 728}))
+    assert result == {"product": "Pepsi Max", "restored": 3}
+    assert _Client.posts == [{"product_id": 728}]
+
+
+async def test_undo_with_nothing_to_undo_says_so(consume):
+    _Client.consume_status = 404
+    with pytest.raises(ServiceValidationError, match="nothing to undo"):
+        await consume.undo(SimpleNamespace(data={}))
 
 
 @pytest.fixture

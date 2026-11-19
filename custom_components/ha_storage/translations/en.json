@@ -29,6 +29,10 @@
     "run_optimize": {
       "name": "Run AI optimize",
       "description": "Trigger the Storage AI optimize background job."
+    },
+    "undo_consume": {
+      "name": "Undo consume",
+      "description": "Put back the latest consume of the last hour."
     }
   }
 }

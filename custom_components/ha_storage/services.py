@@ -29,6 +29,7 @@ SERVICE_ADD_TO_SHOPPING_LIST = "add_to_shopping_list"
 SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME = "add_to_shopping_list_by_name"
 SERVICE_ADD_STOCK = "add_stock"
 SERVICE_CONSUME_STOCK = "consume_stock"
+SERVICE_UNDO_CONSUME = "undo_consume"
 SERVICE_FIND_STOCK = "find_stock"
 SERVICE_RUN_OPTIMIZE = "run_optimize"
 SERVICE_GET_WEEKLY_DIGEST = "get_weekly_digest"
@@ -53,11 +54,21 @@ _ADD_BY_NAME_SCHEMA = vol.Schema(
 _CONSUME_STOCK_SCHEMA = vol.Schema(
     {
         vol.Required("product_id"): vol.Coerce(int),
-        vol.Required("amount"): vol.Coerce(float),
+        # A 0 would come back as "not in stock" and be read as "it is all gone".
+        vol.Required("amount"): vol.All(
+            vol.Coerce(float),
+            vol.Range(
+                min=0,
+                min_included=False,
+                msg="amount must be more than 0; when nothing changed, do not consume",
+            ),
+        ),
         vol.Optional("location"): cv.string,
         vol.Optional("spoiled", default=False): cv.boolean,
     }
 )
+
+_UNDO_CONSUME_SCHEMA = vol.Schema({vol.Optional("product_id"): vol.Coerce(int)})
 
 _ADD_STOCK_SCHEMA = vol.Schema(
     {
@@ -179,8 +190,11 @@ def async_register_services(hass: HomeAssistant) -> None:
         if call.data.get("spoiled"):
             payload["spoiled"] = True  # counted as waste, not as eaten
         where = call.data.get("location")
+        coords = _coordinators(hass)
+        if not coords:  # never let an empty result read as "done"
+            raise HomeAssistantError("Storage is not set up.")
         result: dict = {}
-        for coord in _coordinators(hass):
+        for coord in coords:
             if where:
                 loc = match_location(where, await _get(coord, "/api/locations"))
                 if loc is None:
@@ -198,7 +212,29 @@ def async_register_services(hass: HomeAssistant) -> None:
                     f"Nothing consumed: product {payload['product_id']} is not in"
                     f" stock{f' in {where}' if where else ''}."
                 ) from err
+            except (httpx.HTTPError, OSError) as err:
+                raise HomeAssistantError(f"Storage did not consume the stock: {err}") from err
             await coord.async_request_refresh()
+        return result
+
+    async def handle_undo_consume(call: ServiceCall) -> dict:
+        """Put back the latest consume of the last hour (of one product, if given)."""
+        coords = _coordinators(hass)
+        if not coords:
+            raise HomeAssistantError("Storage is not set up.")
+        payload = {k: call.data[k] for k in ("product_id",) if k in call.data}
+        try:
+            result = await _post(coords[0], "/api/stock/consume/undo", payload)
+        except httpx.HTTPStatusError as err:
+            if err.response.status_code != 404:
+                raise HomeAssistantError(f"Storage did not undo the consume: {err}") from err
+            raise ServiceValidationError(
+                "Nothing was consumed in the last hour"
+                f"{' of that product' if payload else ''}, so there is nothing to undo."
+            ) from err
+        except (httpx.HTTPError, OSError) as err:
+            raise HomeAssistantError(f"Storage did not undo the consume: {err}") from err
+        await coords[0].async_request_refresh()
         return result
 
     async def handle_find_stock(call: ServiceCall) -> dict:
@@ -298,6 +334,13 @@ def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_CONSUME_STOCK,
         handle_consume,
         schema=_CONSUME_STOCK_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UNDO_CONSUME,
+        handle_undo_consume,
+        schema=_UNDO_CONSUME_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(

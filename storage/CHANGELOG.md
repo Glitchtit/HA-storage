@@ -1,3 +1,10 @@
+## 0.31.0
+
+- A consume can be undone: `POST /api/stock/consume/undo` puts the latest consume (or spoil) of the last hour back exactly as it was, lots and best-before dates included, and removes it from the history. Consumes from before this version cannot be undone
+- Integration 0.6.13: voice assistants can undo a consume ("no, I only took two" undoes and consumes the right amount) with the new `ha_storage.undo_consume` action; "only 3 left" consumes the amount in stock minus 3
+- Integration 0.6.13: a consume while the add-on is down or restarting now tells the assistant so instead of breaking its reply, a consume before Storage is set up is an error instead of a silent success, and an amount of 0 is refused with a reason instead of "not in stock"
+- Integration 0.6.13: when a voice assistant sends the same consume or add twice within 10 seconds, it is still done once, but the assistant is now told, so it can ask if you really meant two
+
 ## 0.30.1
 
 - When the AI gives a product its storage location, only the stock that was sitting in the fallback location (because the product had none) moves there. Stock you put somewhere else yourself, by voice or by moving it, stays where it is. Stock you deliberately put in the fallback location (the first location) still moves

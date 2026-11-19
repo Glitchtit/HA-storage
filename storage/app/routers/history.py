@@ -31,6 +31,7 @@ def log_event(
     stock_id: int | None = None,
     note: str = "",
     unit_price: float | None = None,
+    undo: str | None = None,
 ) -> None:
     """Insert a stock_history row. Caller is responsible for commit().
 
@@ -46,9 +47,9 @@ def log_event(
         return
     conn.execute(
         "INSERT INTO stock_history "
-        "(product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note, unit_price) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note or "", unit_price),
+        "(product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note, unit_price, undo) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (product_id, event_type, amount, unit_id, location_id, from_location_id, stock_id, note or "", unit_price, undo),
     )
 
 
