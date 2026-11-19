@@ -234,6 +234,16 @@ class TestWhatGetsWritten:
         enrich.run(conn, _ai({pid: {"location_id": target}}), product_ids=[pid])
         assert conn.execute("SELECT location_id FROM stock WHERE product_id = ?", (pid,)).fetchone()["location_id"] == target
 
+    def test_placement_moves_only_stock_in_the_fallback_location(self):
+        locs = _locations()
+        pid = _mk("Ruisleipa 500g e12")
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1, "location_id": locs[1]})
+        client.post("/api/stock/add", json={"product_id": pid, "amount": 1})  # fallback
+        conn = get_connection()
+        enrich.run(conn, _ai({pid: {"location_id": locs[-1]}}), product_ids=[pid])
+        rows = conn.execute("SELECT location_id FROM stock WHERE product_id = ? ORDER BY id", (pid,)).fetchall()
+        assert [r["location_id"] for r in rows] == [locs[1], locs[-1]]  # put there on purpose: kept
+
     def test_shelf_life_only_touches_nothing_else(self):
         gid = _group("Mausteet e13")
         pid = _mk("Kaneli e13")

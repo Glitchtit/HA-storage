@@ -1,3 +1,7 @@
+## 0.30.1
+
+- When the AI gives a product its storage location, only the stock that was sitting in the fallback location (because the product had none) moves there. Stock you put somewhere else yourself, by voice or by moving it, stays where it is. Stock you deliberately put in the fallback location (the first location) still moves
+
 ## 0.30.0
 
 - New products are placed and filled in by one background queue. A newly scanned product now costs two AI calls instead of six, and several products scanned in a row share those two calls. A product the AI could not reach is tried again by itself within minutes

@@ -21,6 +21,7 @@ from models import (
     ReceiptParseRequest,
     ReceiptParseResponse,
 )
+from database import fallback_location_id
 from facts import Catalog
 from list_clearing import apply_purchase
 from receipt_parser import match_lines_to_products, parse_receipt
@@ -91,13 +92,10 @@ def commit_receipt_endpoint(body: ReceiptCommitRequest):
 
             location_id = line.location_id or product["location_id"]
             if location_id is None:
-                fallback = conn.execute(
-                    "SELECT id FROM locations ORDER BY id LIMIT 1"
-                ).fetchone()
-                if not fallback:
+                location_id = fallback_location_id(conn)
+                if location_id is None:
                     errors.append(f"Line {idx}: no locations defined")
                     continue
-                location_id = fallback["id"]
 
             unit_id = line.unit_id or product["unit_id"]
             best_before = None
