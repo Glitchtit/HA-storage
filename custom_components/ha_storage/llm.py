@@ -25,6 +25,8 @@ PROMPT = (
     " what there is at home, that is a Storage instruction and never something"
     " for you to eat: look the item up with ha_storage__find_stock, then take it"
     " out of stock with ha_storage__consume_stock (spoiled when it went bad)."
+    " When the user says only N are left, consume the amount in stock minus N,"
+    " never N itself."
     " Something bought or restocked goes in with ha_storage__add_stock, and"
     " ha_storage__find_stock with expiring_within_days answers what expires soon."
 )
