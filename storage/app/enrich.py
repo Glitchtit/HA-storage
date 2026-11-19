@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ai_client import INT, AiConfigError, AiTruncated, arr, get_batch_size, nullable, obj
+from database import fallback_location_id
 from locks import CATALOG_LOCK
 from merge import merge_products
 from pack_size import single_unit_name
@@ -361,9 +362,10 @@ def _apply(conn: sqlite3.Connection, product: dict, decision: dict,
             [*columns.values(), pid])
         if "location_id" in sets and not product["location_id"]:
             # Stock added before the product had a location sits in the
-            # arbitrary fallback location; move it to the real one.
-            conn.execute("UPDATE stock SET location_id = ? WHERE product_id = ?",
-                         (sets["location_id"], pid))
+            # arbitrary fallback location; move it to the real one. Lots put
+            # elsewhere on purpose (by voice, by hand) stay where they are.
+            conn.execute("UPDATE stock SET location_id = ? WHERE product_id = ? AND location_id = ?",
+                         (sets["location_id"], pid, fallback_location_id(conn)))
         if decision["days"] is not None:
             rebased = _rebase_inherited_stock_dates(
                 conn, pid, int(product["default_best_before_days"] or 0), decision["days"])

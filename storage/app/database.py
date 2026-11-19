@@ -316,6 +316,12 @@ def _row_factory(cursor: sqlite3.Cursor, row: tuple) -> dict:
     return dict(zip(cols, row))
 
 
+def fallback_location_id(conn: sqlite3.Connection) -> int | None:
+    """The location stock goes to when neither the caller nor the product names one."""
+    row = conn.execute("SELECT id FROM locations ORDER BY id LIMIT 1").fetchone()
+    return row["id"] if row else None
+
+
 def get_db(db_path: str | Path) -> sqlite3.Connection:
     """Open (or create) the database and return a connection."""
     conn = sqlite3.connect(str(db_path), check_same_thread=False)

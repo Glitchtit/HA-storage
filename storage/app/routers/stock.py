@@ -21,6 +21,7 @@ from models import (
     StockTransfer,
 )
 from availability import EPS
+from database import fallback_location_id
 from list_clearing import restore_cleared
 from routers.history import log_event
 from routers.shopping import sync_auto_shopping, consume_shopping_for_purchase
@@ -128,8 +129,7 @@ def add_stock(body: StockAdd):
     unit_id = body.unit_id or product["unit_id"]
     location_id = body.location_id or product["location_id"]
     if not location_id:
-        loc = conn.execute("SELECT id FROM locations ORDER BY id LIMIT 1").fetchone()
-        location_id = loc["id"] if loc else None
+        location_id = fallback_location_id(conn)
     if not location_id:
         raise HTTPException(400, "No location specified and no default location exists")
 
