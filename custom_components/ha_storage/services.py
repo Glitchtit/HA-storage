@@ -30,6 +30,7 @@ SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME = "add_to_shopping_list_by_name"
 SERVICE_ADD_STOCK = "add_stock"
 SERVICE_CONSUME_STOCK = "consume_stock"
 SERVICE_UNDO_CONSUME = "undo_consume"
+SERVICE_UNDO_ADD_STOCK = "undo_add_stock"
 SERVICE_FIND_STOCK = "find_stock"
 SERVICE_RUN_OPTIMIZE = "run_optimize"
 SERVICE_GET_WEEKLY_DIGEST = "get_weekly_digest"
@@ -69,6 +70,7 @@ _CONSUME_STOCK_SCHEMA = vol.Schema(
 )
 
 _UNDO_CONSUME_SCHEMA = vol.Schema({vol.Optional("product_id"): vol.Coerce(int)})
+_UNDO_ADD_STOCK_SCHEMA = vol.Schema({vol.Required("stock_id"): vol.Coerce(int)})
 
 _ADD_STOCK_SCHEMA = vol.Schema(
     {
@@ -237,6 +239,42 @@ def async_register_services(hass: HomeAssistant) -> None:
         await coords[0].async_request_refresh()
         return result
 
+    async def handle_undo_add_stock(call: ServiceCall) -> dict:
+        """Take a lot added in the last hour back out, purchase record included.
+
+        Shopping-list rows the purchase ticked off are not put back.
+        """
+        coords = _coordinators(hass)
+        if not coords:
+            raise HomeAssistantError("Storage is not set up.")
+        coord = coords[0]
+        stock_id = call.data["stock_id"]
+        lot = next((e for e in await _get(coord, "/api/stock/entries") if e.get("id") == stock_id), None)
+        if lot is None:
+            raise ServiceValidationError("That stock is no longer there, so there is nothing to undo.")
+        bought = next(
+            (h for h in await _get(coord, f"/api/history/product/{lot['product_id']}")
+             if h.get("event_type") == "purchase" and h.get("stock_id") == stock_id),
+            None,
+        )
+        when = dt_util.parse_datetime(str((bought or {}).get("created_at") or ""))
+        if bought is None or when is None or dt_util.utcnow() - when.replace(
+            tzinfo=when.tzinfo or dt_util.UTC
+        ) > timedelta(hours=1):
+            raise ServiceValidationError("Only stock added in the last hour can be undone.")
+        if lot["amount"] < bought["amount"]:
+            raise ServiceValidationError(
+                "Some of it was already used, so it cannot be undone; consume the rest instead."
+            )
+        try:
+            async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
+                for path in (f"/api/stock/{stock_id}", f"/api/history/{bought['id']}"):
+                    (await client.delete(f"{coord.addon_url}{path}")).raise_for_status()
+        except (httpx.HTTPError, OSError) as err:
+            raise HomeAssistantError(f"Storage did not undo the add: {err}") from err
+        await coord.async_request_refresh()
+        return {"removed": lot.get("product_name"), "amount": lot["amount"]}
+
     async def handle_find_stock(call: ServiceCall) -> dict:
         coords = _coordinators(hass)
         if not coords:
@@ -287,6 +325,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         await coord.async_request_refresh()
         return {
             "added": match["name"],
+            "stock_id": lot.get("id"),
             "amount": payload["amount"],
             "best_before": lot.get("best_before_date"),
             "taken_off_shopping_list": bool(lot.get("cleared_rows")),
@@ -345,6 +384,13 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_UNDO_ADD_STOCK,
+        handle_undo_add_stock,
+        schema=_UNDO_ADD_STOCK_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_ADD_STOCK,
         handle_add_stock,
         schema=_ADD_STOCK_SCHEMA,
@@ -374,6 +420,8 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_ADD_TO_SHOPPING_LIST_BY_NAME,
         SERVICE_ADD_STOCK,
         SERVICE_CONSUME_STOCK,
+        SERVICE_UNDO_CONSUME,
+        SERVICE_UNDO_ADD_STOCK,
         SERVICE_FIND_STOCK,
         SERVICE_RUN_OPTIMIZE,
         SERVICE_GET_WEEKLY_DIGEST,

@@ -133,6 +133,24 @@ undo_consume:
         number:
           mode: box
 
+undo_add_stock:
+  name: Undo add stock
+  description: >-
+    Take stock added in the last hour back out, as if it was never bought: the
+    lot and its purchase record are removed. Use it when the user says an
+    add_stock was wrong, misheard or to undo it; to fix the product or amount,
+    undo and then add the right one. Refused once some of it was used.
+    Shopping-list rows the purchase ticked off are not put back.
+  fields:
+    stock_id:
+      name: Stock ID
+      description: The stock_id from the add_stock result.
+      required: true
+      example: 123
+      selector:
+        number:
+          mode: box
+
 add_stock:
   name: Add stock
   description: >-

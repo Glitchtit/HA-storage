@@ -33,6 +33,13 @@
     "undo_consume": {
       "name": "Undo consume",
       "description": "Put back the latest consume of the last hour."
+    },
+    "undo_add_stock": {
+      "name": "Undo add stock",
+      "description": "Take stock added in the last hour back out, purchase record included.",
+      "fields": {
+        "stock_id": {"name": "Stock ID", "description": "The stock_id from the add_stock result."}
+      }
     }
   }
 }
