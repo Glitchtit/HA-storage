@@ -7,6 +7,7 @@ ones are still being answered: one "I took a Red Bull" consumed two.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 from collections.abc import Awaitable, Callable
 
@@ -26,10 +27,13 @@ async def once(key: str, call: Callable[[], Awaitable]):
         _recent[key] = (now, asyncio.ensure_future(call()))
         return await asyncio.shield(_recent[key][1])
     result = await asyncio.shield(_recent[key][1])
-    if not isinstance(result, dict):
+    # HA's tools return a ToolResult whose data is the dict.
+    data = getattr(result, "data", result)
+    if not isinstance(data, dict):
         return result
     # Tell the assistant, so a real second "I took one" is not swallowed unheard.
-    return {**result, "repeat": REPEAT_NOTE}
+    noted = {**data, "repeat": REPEAT_NOTE}
+    return noted if data is result else dataclasses.replace(result, data=noted)
 
 
 REPEAT_NOTE = (

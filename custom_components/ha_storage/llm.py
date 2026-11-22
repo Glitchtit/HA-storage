@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 
+import voluptuous as vol
+
 from homeassistant.components.llm import LLMTools
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.llm import LLM_API_ASSIST, ActionTool, LLMContext
+from homeassistant.helpers.llm import LLM_API_ASSIST, ActionTool, LLMContext, ToolResult
 
 from .const import DOMAIN
+from . import confirm
 from .once import once
 
 # The shopping list is not here: it is the todo entity, which Assist already drives.
@@ -33,19 +36,42 @@ PROMPT = (
     " Something bought or restocked goes in with ha_storage__add_stock"
     " (ha_storage__undo_add_stock with its stock_id takes it back), and"
     " ha_storage__find_stock with expiring_within_days answers what expires soon."
-    " Before consuming or adding, say back in one short sentence the exact"
-    " product name, amount and location you found, and wait for a yes."
+    " Consuming and adding need the user's yes: call without confirmed, say the"
+    " read-back it returns in one short sentence (exact product, amount,"
+    " location), and after a yes call again with confirmed=true."
 )
+
+# These act only after the user said yes to a read-back (confirm.py).
+CONFIRM = ('consume_stock', 'add_stock')
 
 # Everything else changes something, and must not do it twice on a replay.
 READ_ONLY = ('find_stock',)
 
 
 class OnceTool(ActionTool):
-    """An action that changes something: a replayed call gets the first result."""
+    """An action that changes something: a replayed call gets the first result,
+    and a gated one acts only after the user's yes (confirm.py)."""
+
+    def __init__(self, hass, domain, action):
+        super().__init__(hass, domain, action)
+        self._gated = action in CONFIRM
+        if self._gated:
+            self.description = f"{self.description or ''} {confirm.DESCRIPTION}".strip()
+            self.parameters = self.parameters.extend(
+                {vol.Optional("confirmed", description=confirm.FIELD): bool}
+            )
 
     async def async_call(self, hass, tool_input, llm_context):
-        key = f"{self.name} {json.dumps(tool_input.tool_args, sort_keys=True, default=str)}"
+        confirmed = bool(tool_input.tool_args.pop("confirmed", False))
+        args = json.dumps(tool_input.tool_args, sort_keys=True, default=str)
+
+        key = f"{self.name} {args}"
+        if self._gated and (
+            ask := confirm.check(
+                key, confirmed, confirm.summarize(self._action, tool_input.tool_args)
+            )
+        ):
+            return ToolResult(data=ask)
         return await once(
             key, lambda: ActionTool.async_call(self, hass, tool_input, llm_context)
         )
