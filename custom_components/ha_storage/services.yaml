@@ -137,10 +137,10 @@ undo_add_stock:
   name: Undo add stock
   description: >-
     Take stock added in the last hour back out, as if it was never bought: the
-    lot and its purchase record are removed. Use it when the user says an
-    add_stock was wrong, misheard or to undo it; to fix the product or amount,
-    undo and then add the right one. Refused once some of it was used.
-    Shopping-list rows the purchase ticked off are not put back.
+    lot and its purchase record are removed and the shopping-list rows it ticked
+    off are put back. Use it when the user says an add_stock was wrong, misheard
+    or to undo it; to fix the product or amount, undo and then add the right
+    one. Refused once some of it was used.
   fields:
     stock_id:
       name: Stock ID

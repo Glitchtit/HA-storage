@@ -13,6 +13,7 @@ from models import (
     StockAddResult,
     StockConsume,
     StockUndoConsume,
+    StockUndoAdd,
     StockCorrectPurchase,
     StockEntry,
     StockEntryUpdate,
@@ -318,6 +319,44 @@ def undo_consume(body: StockUndoConsume):
         "restored": event["amount"],
         "was_spoiled": event["event_type"] == "spoil",
     }
+
+
+@router.post("/stock/{stock_id}/undo-add", status_code=200)
+def undo_add(stock_id: int, body: StockUndoAdd):
+    """Take a lot added in the last `within_minutes` back out as if it was never
+    bought: the lot and its purchase row go, and the shopping rows the purchase
+    took are put back (`restored_rows`). Refused once some of it was used."""
+    conn = _get_db()
+    lot = conn.execute(
+        "SELECT s.*, p.name AS product_name FROM stock s JOIN products p ON p.id = s.product_id WHERE s.id = ?",
+        (stock_id,),
+    ).fetchone()
+    if not lot:
+        raise HTTPException(404, f"Stock entry {stock_id} not found")
+    bought = conn.execute(
+        "SELECT *, created_at >= datetime('now', ?) AS recent FROM stock_history"
+        " WHERE stock_id = ? AND event_type = 'purchase' ORDER BY id DESC LIMIT 1",
+        (f"-{body.within_minutes} minutes", stock_id),
+    ).fetchone()
+    if not bought or not bought["recent"]:
+        raise HTTPException(400, f"Stock entry {stock_id} was not added in the last {body.within_minutes} minutes")
+    if lot["amount"] < bought["amount"] - EPS:
+        raise HTTPException(409, f"Some of stock entry {stock_id} was already used")
+    try:
+        restored = restore_cleared(conn, stock_id, bought["amount"])
+        conn.execute("DELETE FROM stock WHERE id = ?", (stock_id,))
+        conn.execute("DELETE FROM stock_history WHERE id = ?", (bought["id"],))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    log.info("Undid the add of %.1f to product %d (lot %d).", lot["amount"], lot["product_id"], stock_id)
+    try:
+        sync_auto_shopping(conn)
+    except Exception as exc:  # noqa: BLE001 — the undo is saved; a list side effect never fails it
+        conn.rollback()
+        log.warning("Minimum-stock sync after undoing lot %d failed: %s", stock_id, exc)
+    return {"removed": lot["product_name"], "amount": lot["amount"], "restored_rows": restored}
 
 
 @router.post("/stock/correct-purchase", status_code=200)

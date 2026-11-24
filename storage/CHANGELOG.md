@@ -1,3 +1,8 @@
+## 0.31.1
+
+- Undoing a voice add now puts back the shopping-list rows the purchase ticked off, the same way swiping away a mis-scan in Stock does. The new `POST /api/stock/{stock_id}/undo-add` removes the lot, its purchase record and restores the list rows in one step; it is refused once some of the lot was used or if it was added more than an hour ago (`within_minutes`)
+- Integration 0.6.16: `ha_storage.undo_add_stock` uses that endpoint and reports `put_back_on_shopping_list`. It needs add-on 0.31.1: update the add-on first
+
 ## 0.31.0
 
 - A consume can be undone: `POST /api/stock/consume/undo` puts the latest consume (or spoil) of the last hour back exactly as it was, lots and best-before dates included, and removes it from the history. Consumes from before this version cannot be undone
