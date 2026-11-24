@@ -358,6 +358,41 @@ class TestStock:
         assert r.json()["restored"] == 4 and r.json()["was_spoiled"] is True
         assert sum(e["amount"] for e in client.get(f"/api/stock/product/{pid}").json()) == 9
 
+    def test_undo_add_puts_the_shopping_row_back(self):
+        pid, kpl, loc = self._make_product_with_location()
+        row = client.post("/api/shopping-list", json={"product_id": pid, "amount": 2}).json()
+        on_list = lambda: [(r["id"], r["amount"]) for r in client.get("/api/shopping-list").json()
+                           if r["product_id"] == pid]
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 2}).json()
+        assert on_list() == []
+        r = client.post(f"/api/stock/{lot['id']}/undo-add", json={})
+        assert r.status_code == 200
+        assert r.json()["removed"].startswith("Stock_") and r.json()["amount"] == 2
+        assert [x["id"] for x in r.json()["restored_rows"]] == [row["id"]]
+        assert on_list() == [(row["id"], 2)]
+        assert client.get(f"/api/stock/product/{pid}").json() == []
+        assert client.get(f"/api/history?product_id={pid}&event_type=purchase").json() == []
+        # Done once: the lot is gone now.
+        assert client.post(f"/api/stock/{lot['id']}/undo-add", json={}).status_code == 404
+
+    def test_undo_add_refuses_a_used_lot(self):
+        pid, kpl, loc = self._make_product_with_location()
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 2}).json()
+        client.post("/api/stock/consume", json={"product_id": pid, "amount": 1})
+        assert client.post(f"/api/stock/{lot['id']}/undo-add", json={}).status_code == 409
+        assert sum(e["amount"] for e in client.get(f"/api/stock/product/{pid}").json()) == 1
+
+    def test_undo_add_refuses_an_old_purchase(self):
+        from main import get_connection
+        pid, kpl, loc = self._make_product_with_location()
+        lot = client.post("/api/stock/add", json={"product_id": pid, "amount": 2}).json()
+        conn = get_connection()
+        conn.execute("UPDATE stock_history SET created_at = datetime('now', '-2 hours') WHERE stock_id = ?",
+                     (lot["id"],))
+        conn.commit()
+        assert client.post(f"/api/stock/{lot['id']}/undo-add", json={}).status_code == 400
+        assert client.post(f"/api/stock/{lot['id']}/undo-add", json={"within_minutes": 180}).status_code == 200
+
     def test_correct_purchase_reduces_purchase_event(self):
         # Over-scan: one purchase event with amount 2.
         pid, kpl, loc = self._make_product_with_location()

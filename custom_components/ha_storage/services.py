@@ -240,40 +240,30 @@ def async_register_services(hass: HomeAssistant) -> None:
         return result
 
     async def handle_undo_add_stock(call: ServiceCall) -> dict:
-        """Take a lot added in the last hour back out, purchase record included.
-
-        Shopping-list rows the purchase ticked off are not put back.
-        """
+        """Take a lot added in the last hour back out, purchase record included,
+        and put back the shopping-list rows the purchase ticked off."""
         coords = _coordinators(hass)
         if not coords:
             raise HomeAssistantError("Storage is not set up.")
-        coord = coords[0]
-        stock_id = call.data["stock_id"]
-        lot = next((e for e in await _get(coord, "/api/stock/entries") if e.get("id") == stock_id), None)
-        if lot is None:
-            raise ServiceValidationError("That stock is no longer there, so there is nothing to undo.")
-        bought = next(
-            (h for h in await _get(coord, f"/api/history/product/{lot['product_id']}")
-             if h.get("event_type") == "purchase" and h.get("stock_id") == stock_id),
-            None,
-        )
-        when = dt_util.parse_datetime(str((bought or {}).get("created_at") or ""))
-        if bought is None or when is None or dt_util.utcnow() - when.replace(
-            tzinfo=when.tzinfo or dt_util.UTC
-        ) > timedelta(hours=1):
-            raise ServiceValidationError("Only stock added in the last hour can be undone.")
-        if lot["amount"] < bought["amount"]:
-            raise ServiceValidationError(
-                "Some of it was already used, so it cannot be undone; consume the rest instead."
-            )
         try:
-            async with httpx.AsyncClient(verify=get_default_context(), timeout=15) as client:
-                for path in (f"/api/stock/{stock_id}", f"/api/history/{bought['id']}"):
-                    (await client.delete(f"{coord.addon_url}{path}")).raise_for_status()
+            result = await _post(coords[0], f"/api/stock/{call.data['stock_id']}/undo-add", {})
+        except httpx.HTTPStatusError as err:
+            refusal = {
+                404: "That stock is no longer there, so there is nothing to undo.",
+                400: "Only stock added in the last hour can be undone.",
+                409: "Some of it was already used, so it cannot be undone; consume the rest instead.",
+            }.get(err.response.status_code)
+            if refusal is None:
+                raise HomeAssistantError(f"Storage did not undo the add: {err}") from err
+            raise ServiceValidationError(refusal) from err
         except (httpx.HTTPError, OSError) as err:
             raise HomeAssistantError(f"Storage did not undo the add: {err}") from err
-        await coord.async_request_refresh()
-        return {"removed": lot.get("product_name"), "amount": lot["amount"]}
+        await coords[0].async_request_refresh()
+        return {
+            "removed": result.get("removed"),
+            "amount": result.get("amount"),
+            "put_back_on_shopping_list": bool(result.get("restored_rows")),
+        }
 
     async def handle_find_stock(call: ServiceCall) -> dict:
         coords = _coordinators(hass)

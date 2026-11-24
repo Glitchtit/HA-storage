@@ -199,28 +199,18 @@ async def test_a_vague_name_adds_nothing_and_lists_the_products(add_stock):
 
 @pytest.fixture
 def undo_add(monkeypatch):
-    """undo_add_stock with lot 5 (2 of Valio maito) bought `minutes_ago`."""
-    from datetime import datetime, timedelta, timezone
+    """undo_add_stock against an add-on that answers `status` for lot 5 (2 of Valio maito)."""
+    state = {"status": 200, "restored_rows": [{"id": 4, "product_id": 7, "amount": 2}], "posts": []}
 
-    state = {"minutes_ago": 5, "left": 2, "deleted": []}
-
-    async def fake_get(coord, path):
-        if path == "/api/stock/entries":
-            return [{"id": 5, "product_id": 7, "product_name": "Valio maito 1l", "amount": state["left"]}]
-        bought = datetime.now(timezone.utc) - timedelta(minutes=state["minutes_ago"])
-        return [{"id": 99, "event_type": "purchase", "stock_id": 5, "amount": 2,
-                 "created_at": bought.strftime("%Y-%m-%d %H:%M:%S")}]
-
-    class _DeleteClient(_Client):
-        async def delete(self, url):
-            state["deleted"].append(url.removeprefix("http://storage:8100"))
-            return _Response(None, 204)
+    async def fake_post(coord, path, payload):
+        state["posts"].append(path)
+        _Response(None, state["status"]).raise_for_status()
+        return {"removed": "Valio maito 1l", "amount": 2, "restored_rows": state["restored_rows"]}
 
     async def _refresh():
         return None
 
-    monkeypatch.setattr(services_mod, "_get", fake_get)
-    monkeypatch.setattr(services_mod.httpx, "AsyncClient", _DeleteClient)
+    monkeypatch.setattr(services_mod, "_post", fake_post)
     monkeypatch.setattr(
         services_mod, "_coordinators",
         lambda hass: [SimpleNamespace(addon_url="http://storage:8100", async_request_refresh=_refresh)],
@@ -230,17 +220,20 @@ def undo_add(monkeypatch):
     return hass.services.handlers[services_mod.SERVICE_UNDO_ADD_STOCK], state
 
 
-async def test_undo_add_removes_the_lot_and_its_purchase(undo_add):
+async def test_undo_add_removes_the_lot_and_puts_the_list_back(undo_add):
     handler, state = undo_add
     result = await handler(SimpleNamespace(data={"stock_id": 5}))
-    assert state["deleted"] == ["/api/stock/5", "/api/history/99"]
-    assert result == {"removed": "Valio maito 1l", "amount": 2}
+    assert state["posts"] == ["/api/stock/5/undo-add"]
+    assert result == {"removed": "Valio maito 1l", "amount": 2, "put_back_on_shopping_list": True}
+    state["restored_rows"] = []
+    assert (await handler(SimpleNamespace(data={"stock_id": 5})))["put_back_on_shopping_list"] is False
 
 
-@pytest.mark.parametrize(("minutes_ago", "left", "reason"), [(90, 2, "last hour"), (5, 1, "already used")])
-async def test_undo_add_refuses_old_or_used_stock(undo_add, minutes_ago, left, reason):
+@pytest.mark.parametrize(
+    ("status", "reason"), [(404, "no longer there"), (400, "last hour"), (409, "already used")]
+)
+async def test_undo_add_refuses_gone_old_or_used_stock(undo_add, status, reason):
     handler, state = undo_add
-    state["minutes_ago"], state["left"] = minutes_ago, left
+    state["status"] = status
     with pytest.raises(ServiceValidationError, match=reason):
         await handler(SimpleNamespace(data={"stock_id": 5}))
-    assert state["deleted"] == []

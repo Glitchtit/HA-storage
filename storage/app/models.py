@@ -241,6 +241,9 @@ class StockUndoConsume(BaseModel):
     product_id: int | None = None  # only undo a consume of this product
     within_minutes: int = Field(60, gt=0, le=1440)
 
+class StockUndoAdd(BaseModel):
+    within_minutes: int = Field(60, gt=0, le=1440)
+
 class StockCorrectPurchase(BaseModel):
     product_id: int
     amount: float = 1
